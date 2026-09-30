@@ -4,7 +4,7 @@ Phase 3 is a SEPARATE installation. It never touches the Phase 2 installation
 (`...\falls_ml_handoff_0.4.0_mailsafe\falls_ml_handoff`), its `.venv`, or its output folder. Do not resume or change Phase 2 from this package; this
 package refuses to run Phase 2 in production by design.
 
-All commands are CMD. Replace nothing except, if different on your PC, the four data paths (input, explore, EDA, reports, D-00 folders).
+All commands are CMD. Replace nothing except, if different on your PC, the data paths (input CSV and the explore, EDA, reports, D-00, Phase 2 and Phase 3 folders).
 
 ## 1. Install (once, about 10-20 minutes)
 
