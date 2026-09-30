@@ -1,0 +1,134 @@
+# Phase 3 analysis settings (planning/PHASE3_DESIGN.md, planning/PHASE3_TIME_CONTRACT_AUDIT.md): the corrected END-OF-INDEX-DAY time contract,
+# feature eligibility verified on the extract, and the conditional FULL extended modelling experiment. Frozen (with the recovery rules,
+# the unchanged Phase 2 feature catalogue and the result-relevant code constants) into configs/meuhedet/PHASE3_FINAL_EXPERIMENT_CONFIG.json before
+# any Phase 3 result existed and before any Phase 2 VALIDATION result was returned. No row-level data, no outcome value, no TEST result and no
+# Phase 2 result were used to write it. Modelling values are those of the reviewed Phase 2 freeze (reviews/ASTRA_FINAL_RESOLUTION.md) unless a
+# line says otherwise.
+phase3:
+  name: meuhedet_phase3_recovery_modelling
+  version: 1.0.0
+  features: configs/meuhedet/phase2_features.yaml        # the unchanged 93-feature Phase 2 catalogue (same engineering, same domains)
+  recovery: configs/meuhedet/phase3_recovery.yaml
+  time_contract: configs/meuhedet/phase3_time_contract.yaml   # prediction at the END of Index_Date; verified by V1-V6 before anything is fitted
+  d00_config: configs/meuhedet/d00_sensitivity.yaml
+  outcome_note: "Fall_Next_180D_Ind - EXPLORATORY 180-DAY OUTCOME, NOT EFALLS REPRODUCTION"
+  seed: 20261001
+  threads: {blas: auto, xgboost: auto, max_auto: 4}
+
+  population:
+    primary: FULL_LABELED        # every eligible, labelled patient on the index date, INCLUDING the 4,168 rows D00_CLEAN removed for index-day records
+                                 # (history under the corrected contract): no row removed because of a record date
+    bridge: D00_CLEAN            # the Phase 1-2 reference cohort: historical reference only, reported as a restriction of the SAME predictions
+    extra_rows_split:            # FULL_LABELED rows outside D00_CLEAN have no reference partition: pre-declared, outcome-blind keyed hash of the research id
+      salt: "falls_ml-phase3-extra-rows-v1"
+      train: 0.60
+      validation: 0.20           # the remaining 20% are TEST-assigned and dropped in memory with the reference TEST rows (never read)
+
+  eligibility:
+    min_observed_train_rows: 100
+
+  standards:                     # which feature classes each analysis may use (falls_ml.phase3.recovery)
+    PRIMARY_FULL: [SAFE_VERIFIED, SAFE_VERIFIED_BOUNDED, SAFE_ATTESTED]     # the full, scientifically defensible clinical feature space
+    SENSITIVITY_VERIFIED_ONLY: [SAFE_VERIFIED, SAFE_VERIFIED_BOUNDED]       # row-verified EVENT timing only (removes attested sources); LASSO
+    SENSITIVITY_LOW_AVAILABILITY_RISK: [SAFE_VERIFIED, SAFE_VERIFIED_BOUNDED, SAFE_ATTESTED]   # + only features whose declared information-availability risk
+                                                                            # is LOW / MEDIUM (time contract 'availability'); HIGH / UNKNOWN removed; LASSO
+    EXPLORATORY_UNRESOLVED: [SAFE_VERIFIED, SAFE_VERIFIED_BOUNDED, SAFE_ATTESTED, UNRESOLVED]   # never UNSAFE / forbidden; never selected
+
+  feasibility:                   # scientific GO / NO-GO before any model is fitted (S05), pre-declared
+    priority_domains: [COGNITION, FRAILTY, FUNCTION_MOBILITY, NURSE_FALL_RISK, HOME_ENVIRONMENT, MEDICATION, UTILISATION, SOCIAL_SUPPORT]
+    min_domain_known_informative_train_rows: 200
+    min_domain_known_informative_train_events: 20
+    rule: "GO when the time contract passes its hard checks (V1, V2) and at least one priority domain holds a NEWLY eligible non-indicator feature (not eligible under the Phase 2 rule, eligible under PRIMARY_FULL) meeting both adequacy minima; otherwise NO_GO (Outcome B: DWH remediation, no model is fitted)"
+
+  screening:
+    redundancy_abs_spearman: 0.90
+    item_unanswered_min_share: 0.0
+    sparse_min_events: 20
+    min_cell: 10
+
+  cv:
+    outer_folds: 5
+    inner_folds_linear: 10
+    inner_folds_xgb: 5
+
+  lasso:
+    n_lambda: 100
+    lambda_min_ratio: 1.0e-3
+    selection: min
+    tol: 1.0e-7
+    max_iter: 10000
+  enet:
+    l1_ratios: [0.1, 0.5, 0.9]
+    n_lambda: 100
+    max_sets: 2
+
+  xgb:
+    fixed:
+      objective: "binary:logistic"
+      eval_metric: logloss
+      booster: gbtree
+      tree_method: hist
+      device: cpu
+      grow_policy: depthwise
+      max_bin: 256
+      learning_rate: 0.05
+      subsample: 0.8
+      sampling_method: uniform
+      colsample_bytree: 0.8
+      colsample_bylevel: 1.0
+      colsample_bynode: 1.0
+      gamma: 0.0
+      reg_alpha: 0.0
+      max_delta_step: 0.0
+      scale_pos_weight: 1.0
+      base_score: auto
+    n_estimators_max: 3000
+    early_stopping_rounds: 100
+    stage0: {max_depth: 3, min_child_weight: 10.0, reg_lambda: 5.0, sets: [P3_BASE, P3_ALL_RECOVERED, P3_ALL_NO_FALL_RECENCY]}   # the last = pre-declared proxy ablation
+    stage1:
+      set: P3_ALL_RECOVERED
+      n_trials: 15
+      n_startup_trials: 6
+      space:
+        max_depth: {type: int, low: 1, high: 3}
+        min_child_weight: {type: float, low: 5.0, high: 30.0, log: true}
+        reg_lambda: {type: float, low: 1.0, high: 30.0, log: true}
+    stage2: {enabled: false, n_trials: 0}
+    max_trials_per_study: 25
+    optuna: {sampler: TPE, multivariate: true, direction: minimize, objective: inner_cv_mean_logloss, pruner: none}
+
+  selection:                     # TRAIN outer-OOF, ADVERSE bound (conservative); frozen before VALIDATION is read
+    discovery_reference: LASSO:P3_BASE
+    principal_capacity: 0.10
+    min_delta_ap: 0.010
+    min_delta_capture_principal_pp: 1.0
+    max_logloss_ratio: 1.01
+    calibration_slope_range: [0.80, 1.25]
+    max_abs_citl: 0.20
+    simplicity_margin_ap: 0.005
+    max_challengers: 3
+  validation_confirmation:       # the REUSED VALIDATION partition (not independent): one-shot descriptive check of the frozen selection
+    min_delta_ap: 0.005
+    min_delta_capture_principal_pp: 0.0
+    calibration_slope_range: [0.70, 1.40]
+    max_abs_citl: 0.30
+    max_logloss_ratio: 1.01
+
+  stability: {n_replicates: 25, max_sets: 2, max_failure_fraction: 0.10}
+  ablation: {individual_top_n: 15}
+  explain: {shap_sample_rows: 12000, permutation_repeats: 5, interaction_pairs: 5}
+
+  metrics:
+    capacities: [0.01, 0.03, 0.05, 0.10, 0.20]
+    calibration_groups: 10
+    bootstrap_n: 2000
+    subgroup_min_events: 10
+
+  gates:
+    single_feature_univariate_auroc: 0.80
+    max_delta_auroc: 0.05
+    max_ap_ratio: 1.5
+    calibration_slope_range: [0.6, 1.5]
+    max_abs_citl: 0.5
+    max_single_feature_share: 0.5
+    max_fit_failure_fraction: 0.10

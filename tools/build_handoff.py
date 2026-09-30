@@ -49,7 +49,7 @@ TOP_FILES = ("README.md", "WINDOWS_HANDOFF.md", "VERSION", "pyproject.toml", "re
              "setup_windows.cmd", "verify_installation.cmd", "run_demo.cmd", "run_full_demo.cmd",
              "prepare_offline_package.cmd", "clean_demo_outputs.cmd",
              ".gitattributes")  # keeps LF text / CRLF .cmd line endings if the folder is later put under git on Windows
-TREES = ("src", "configs", "docs", "tests", "tools", "scripts")
+TREES = ("src", "configs", "docs", "tests", "tools", "scripts", "planning", "reviews")
 DATA_FILES = ("data/README.md", "data/example_schema.csv", "data/example_header_only.csv")
 FIXTURES = ("data/fixtures/synthetic_v1", "data/fixtures/synthetic_enhanced_v1", "data/fixtures/synthetic_reduced_v1")
 HANDOFF_SCRIPTS = ("common", "check_python", "setup_steps", "verify", "smoke", "demo", "clean_outputs", "prepare_offline",
@@ -75,7 +75,7 @@ HANDOFF_START = ("1. Copy this folder to the work computer.\n2. Open CMD in this
 EXCLUDED_DIRS = frozenset({
     ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".ipynb_checkpoints", ".tox", ".git", ".hg",
     ".svn", ".idea", ".vscode", "htmlcov", "build", "dist", "reports", "logs", "demo_outputs", "setup_logs", "offline_packages",
-    "00_working", "outputs", "presentation", "scratch", "scratchpad", "tmp",
+    "00_working", "outputs", "presentation", "scratch", "scratchpad", "tmp", "briefs",
 })
 EXCLUDED_DIR_GLOBS = ("runs*", "baselines*", "*.egg-info", "*.dist-info")
 EXCLUDED_FILE_GLOBS = ("*.pyc", "*.pyo", ".DS_Store", "Thumbs.db", "desktop.ini", "*.swp", "*~", "*.tmp", "*.bak", "*.orig",
@@ -84,7 +84,7 @@ EXCLUDED_FILE_GLOBS = ("*.pyc", "*.pyo", ".DS_Store", "Thumbs.db", "desktop.ini"
 GENERATED_MARKERS = (".falls_ml_generated", "SYNTHETIC_DATA_NOT_SCIENTIFIC_RESULTS.txt")
 
 CRLF_SUFFIXES = frozenset({".cmd", ".bat"})
-TEXT_SUFFIXES = frozenset({".py", ".yaml", ".yml", ".md", ".csv", ".json", ".toml", ".lock", ".txt", ".sh", ".cfg", ".ini", ".typed", ""})
+TEXT_SUFFIXES = frozenset({".py", ".yaml", ".yml", ".md", ".csv", ".json", ".toml", ".lock", ".txt", ".sh", ".cfg", ".ini", ".typed", ".sha256", ""})
 BINARY_SUFFIXES = frozenset({".parquet"})
 ALLOWED_SUFFIXES = CRLF_SUFFIXES | TEXT_SUFFIXES | BINARY_SUFFIXES
 DATA_SUFFIXES = frozenset({".parquet", ".csv", ".tsv", ".json", ".jsonl", ".feather", ".arrow", ".pkl", ".pickle", ".joblib", ".npy",
@@ -96,6 +96,9 @@ DATA_FILE_ALLOWLIST = {
     "data/example_header_only.csv": "header row only; the build checks it has exactly one line",
     "tools/source_table_s3_2.csv": "published aggregate coefficients (Archer et al. 2024 Table S3.2, CC BY 4.0); no individual data",
     "tools/source_table_s3_1_binary_predictors.json": "published predictor list (Table S3.1 + eFI2 rules); no individual data",
+    "configs/meuhedet/FINAL_EXPERIMENT_CONFIG.json": "the frozen Phase 2 scientific configuration (settings only; no data)",
+    "configs/meuhedet/PHASE3_FINAL_EXPERIMENT_CONFIG.json": "the frozen Phase 3 scientific configuration (settings only; no data)",
+    "planning/01_COLUMN_REGISTRY_DESIGN.csv": "design-time column registry written from the DDL / S2T (one row per VIEW column, no data rows)",
     "docs/meuhedet/tables/efalls_meuhedet_mapping.csv": "eFalls -> wide-table column mapping table generated from configs/meuhedet/*.yaml by "
                                                         "tools/generate_meuhedet_docs.py; one row per eFalls predictor, no data rows",
     "docs/meuhedet/tables/wide_v1_column_inventory.csv": "column inventory (role/type/NULL meaning) generated from the wide-table contract by "
@@ -138,7 +141,9 @@ CREDENTIAL_RULES = {
 }
 _COMPILED = {name: (kind, re.compile(rx)) for kind, rules in (("path", PATH_RULES), ("credential", CREDENTIAL_RULES)) for name, rx in rules.items()}
 #: documented false positives: (relative path, rule) -> justification. Keep empty unless a hit is provably harmless.
-SCAN_ALLOWLIST: dict[tuple[str, str], str] = {}
+SCAN_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("reviews/AGY_ENGINEERING_REVIEW.md", "windows_user_profile"): "an illustrative placeholder user-profile path quoted by the reviewer; not a real user",
+}
 
 
 class BuildError(Exception):

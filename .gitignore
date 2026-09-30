@@ -15,3 +15,6 @@ setup_logs/
 offline_packages/
 .claude/
 .DS_Store
+.p3work*/
+.venv
+.p3work*

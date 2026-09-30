@@ -1,0 +1,593 @@
+{
+  "schema": "falls_ml.phase3.final_experiment_config/1",
+  "name": "meuhedet_phase3_final_experiment_config",
+  "status": "FROZEN for the real-data Phase 3 run before any Phase 3 result and before any Phase 2 VALIDATION result was returned; any change needs a new freeze",
+  "phase3_version": "1.0.0",
+  "falls_ml_version": "0.9.0",
+  "sources": {
+    "analysis_settings": {
+      "path": "configs/meuhedet/phase3.yaml",
+      "version": "1.0.0",
+      "sha256": "123c09222a9c914662d24b05b90f9a018d25b43aee5f07b7d61b03c4cbf5dc8b"
+    },
+    "recovery_rules": {
+      "path": "configs/meuhedet/phase3_recovery.yaml",
+      "version": "1.0.0",
+      "sha256": "4566c08fb8f147fa3bbaef4a2866430ce9079cf179148e7b417f57acf468efcc"
+    },
+    "time_contract": {
+      "path": "configs/meuhedet/phase3_time_contract.yaml",
+      "sha256": "eb78a3d5bc478d39175bacc96c18c29fdb447869ba2189755385f276175acfb7"
+    },
+    "feature_catalogue_unchanged_from_phase2": {
+      "path": "configs/meuhedet/phase2_features.yaml",
+      "version": "1.1.0",
+      "sha256": "f87f29448bd2605d2822c4cb951292282a522295b313f417cfa6965a192c1139"
+    },
+    "d00_config": {
+      "path": "configs/meuhedet/d00_sensitivity.yaml",
+      "version": "1.0.0",
+      "sha256": "108302d8215057ea8706df20d5da30a43725674e5d6465bc6998a1a92d183171"
+    },
+    "contract_sha256": "1fa9f18d7758fc523280b6d06aa79e1b4267e129d8bec2125d5899c5ee068c7a",
+    "data_dictionary_sha256": "71abc55379a09712165d5fa81499f4e57d107c79e6e2afc69c15ef7950e85953",
+    "efalls_mapping_sha256": "3ceb6e86d7dbe59095df0c5e1bcb0b250682c53f100e6c6fc72c63800fb76824"
+  },
+  "outcome": {
+    "label": "Fall_Next_180D_Ind",
+    "note": "Fall_Next_180D_Ind - EXPLORATORY 180-DAY OUTCOME, NOT EFALLS REPRODUCTION",
+    "prediction_time": "END_OF_INDEX_DAY",
+    "predictor_record_rule": "source_event_date <= Index_Date",
+    "outcome_window": "Index_Date + 1 day .. Label_End_180D"
+  },
+  "time_contract": {
+    "name": "meuhedet_phase3_time_contract",
+    "version": "1.0.0",
+    "index_date": "2025-01-01",
+    "prediction_time": "END_OF_INDEX_DAY",
+    "predictor_record_rule": "source_event_date <= Index_Date",
+    "outcome_window": "Index_Date + 1 day .. Label_End_180D (= Index_Date + 180 days); events ON Index_Date are NOT outcome events",
+    "attestation": {
+      "source": "the DWH developer who built V_Falls_Prediction_Wide_1 (verbal explanation reported by the project lead, 2026-09-30)",
+      "statements": [
+        "Index_Date = 2025-01-01",
+        "clinical predictors include information available through the END of 2025-01-01",
+        "the 180-day fall outcome EXCLUDES falls on 2025-01-01; the outcome window starts on 2025-01-02",
+        "the extraction does not include clinical events dated after Index_Date"
+      ],
+      "status": "PROVISIONAL until the checks below pass on the real extract; to be confirmed in writing by the DWH team (open question Q-P3-01)"
+    },
+    "checks": {
+      "V1_label_excludes_index_day": {
+        "severity": "HARD",
+        "text": "no positive 180-day label has its first event on or before Index_Date (Next_Fall_Date_180D > Index_Date, Days_To_Next_Fall_180D >= 1)"
+      },
+      "V2_window_end": {
+        "severity": "HARD",
+        "text": "Label_End_180D - Index_Date = 180 days on every labelled row"
+      },
+      "V3_no_post_index_records": {
+        "severity": "ATTESTATION",
+        "text": "no record date of a predictor source is after Index_Date; if violated, the rows are UNKNOWN (bounded) and the attestation for sources WITHOUT a row-level date is withdrawn (they fall back to UNRESOLVED / exploratory)"
+      },
+      "V4_days_since_consistency": {
+        "severity": "WARN",
+        "text": "Days_Since_* = Index_Date - its date, >= 0, wherever both exist"
+      },
+      "V5_index_day_fall_vs_label": {
+        "severity": "INFO",
+        "text": "cross-tabulation Fall_On_Index_Date_Ind x label (an index-day fall is predictor-time history, not an outcome)"
+      },
+      "V7_proxy_episode_audit": {
+        "severity": "INVESTIGATION",
+        "text": "TRAIN only: Last_Fall_Date / Days_Since_Last_Fall / Index_Date / Next_Fall_Date_180D - consistency, gap between the last and the next fall, early-event concentration among recent fallers (see proxy_audit)"
+      },
+      "V8_availability_indicators": {
+        "severity": "INFO",
+        "text": "data-quality signals of delayed availability: Unsettled_Visit_Counter_Ind, Future_Dated_365D, Fallback_Exposure_365D, External_Care_Hidden_By_Billing_Lag_365D (aggregate)"
+      },
+      "V9_cohort_reconciliation": {
+        "severity": "HARD",
+        "text": "FULL_LABELED = D00_CLEAN + the D-00 rows, and the D-00 rows = the rows the reference build removed (n_rows_timing_violation)"
+      },
+      "V6_boundary_episode": {
+        "severity": "INVESTIGATION",
+        "text": "TRAIN only: recorded events on day +1 among patients with an index-day fall / diagnosis / visit record vs others (one episode crossing midnight could be counted twice)",
+        "min_events": 10,
+        "max_rate_ratio": 5.0
+      }
+    },
+    "availability": {
+      "general_assumption": "A-AVAIL-1: a record dated on or before Index_Date was present in the operational system by the end of Index_Date (no late entry); not verifiable from the extract (no entry timestamps)",
+      "sources": {
+        "MEMBER_MASTER": {
+          "risk": "LOW",
+          "assumption": "static member attributes (age, sex, membership)"
+        },
+        "FALL_EVENTS": {
+          "risk": "MEDIUM",
+          "assumption": "fall / fracture events are dated by the encounter; hospital / ED events may be coded after the encounter (coding lag)",
+          "check": "V7"
+        },
+        "DIAGNOSES": {
+          "risk": "MEDIUM",
+          "assumption": "diagnoses are recorded at the visit; retrospective coding would move information after Index_Date"
+        },
+        "VISITS": {
+          "risk": "LOW",
+          "assumption": "visits are recorded in real time; counters inside the 3-day settlement period can still change (Unsettled_Visit_Counter_Ind, V8)",
+          "check": "V8"
+        },
+        "NURSE_FALLS_RISK_999_52": {
+          "risk": "MEDIUM",
+          "assumption": "nurse forms dated by the assessment; forms completed / signed later would be unavailable at prediction time"
+        },
+        "NURSE_GET_UP_AND_GO_999_79": {
+          "risk": "MEDIUM",
+          "assumption": "as the falls-risk form"
+        },
+        "NURSE_FUNCTION_999_175": {
+          "risk": "MEDIUM",
+          "assumption": "as the falls-risk form"
+        },
+        "NURSE_COGNITION": {
+          "risk": "MEDIUM",
+          "assumption": "as the falls-risk form"
+        },
+        "NURSE_HOME_SAFETY_999_139": {
+          "risk": "MEDIUM",
+          "assumption": "as the falls-risk form"
+        },
+        "NURSE_ASSESSMENT_SUMMARY": {
+          "risk": "MEDIUM",
+          "assumption": "aggregates of the nurse forms above"
+        },
+        "MEFI": {
+          "risk": "MEDIUM",
+          "assumption": "the MEFI group is a periodically computed index; the group valid at Index_Date is assumed to have been computed by then (the batch schedule is undocumented)"
+        },
+        "PRESCRIPTIONS": {
+          "risk": "LOW",
+          "assumption": "prescriptions written / purchased are recorded by the EHR / pharmacy systems at the transaction"
+        },
+        "LABS": {
+          "risk": "MEDIUM",
+          "assumption": "referrals are recorded at the visit; 'performed' may be imported from laboratory systems with a delay of days"
+        },
+        "MEDICATION_EXPOSURE": {
+          "risk": "MEDIUM",
+          "assumption": "active exposure at Index_Date is derived from dispensings dated on/before Index_Date; assumed exposure windows (Fallback_Exposure_365D) and future-dated prescriptions (Future_Dated_365D) are data-quality signals (V8)",
+          "check": "V8"
+        },
+        "REGISTRIES": {
+          "risk": "HIGH",
+          "assumption": "'active at Index_Date' is evaluated on the registry table; memberships can be created after clinical review with an earlier start date (backdating) - an event dated before Index_Date may have been entered after it"
+        },
+        "COMORBIDITY_SOCIAL": {
+          "risk": "UNKNOWN",
+          "assumption": "the comorbidity group / benefit status: construction date and window undocumented (may be computed at extraction time)"
+        },
+        "EXTERNAL_CARE_INVOICES": {
+          "risk": "LOW",
+          "assumption": "only the visible (already billed at Index_Date) count is used; the billing-lag totals are forbidden"
+        }
+      },
+      "columns": {
+        "Bought_Outside_Meuhedet_365D": {
+          "risk": "HIGH",
+          "assumption": "purchases outside Meuhedet reach the HMO through reimbursement claims submitted later"
+        },
+        "Income_Support": {
+          "risk": "MEDIUM",
+          "assumption": "administrative benefit status as of Index_Date; retroactive updates possible"
+        },
+        "HMO_Seniority_Months": {
+          "risk": "LOW",
+          "assumption": "membership length from the member master"
+        },
+        "External_Care_Count_365D_Visible": {
+          "risk": "LOW",
+          "assumption": "documented as already billed at Index_Date"
+        }
+      },
+      "low_risk_levels": [
+        "LOW",
+        "MEDIUM"
+      ]
+    },
+    "proxy_audit": {
+      "feature": "falls_days_since_last",
+      "recency_features": [
+        "falls_days_since_last",
+        "falls_count_30d",
+        "falls_count_90d"
+      ],
+      "recent_fall_days": 30,
+      "early_event_days": 14,
+      "min_events": 10,
+      "max_early_share_recent": 0.5,
+      "max_early_ratio": 3.0,
+      "max_gap_7d_share": 0.25
+    },
+    "proxy_dominance_preinvestigated": [
+      "falls_days_since_last"
+    ],
+    "excluded_date_sources": {
+      "EXTERNAL_CARE_INVOICES": "billing lag: totals include records billed after Index_Date (forbidden)",
+      "HOSPITALISATIONS": "as-of semantics unconfirmed (timing unknown)"
+    },
+    "documented_as_of_columns": {
+      "External_Care_Count_365D_Visible": "external-care records already billed at Index_Date (as-of correct, data dictionary DOCUMENTED)"
+    },
+    "attested_evidence_kinds": [
+      "NO_RECORD_DATE",
+      "SUFFICIENT_ONLY_RECORD_DATE",
+      "STATIC_ATTRIBUTE_MEANING_UNDOCUMENTED",
+      "NOT_BOUNDED_BY_RECORD_DATE"
+    ],
+    "reclassifiable_not_used": {
+      "Fall_On_Index_Date_Ind": "an index-day fall is predictor-time history under this contract; its information is already carried by Days_Since_Last_Fall = 0 (fall recency features); a dedicated feature needs a contract change reviewed first"
+    }
+  },
+  "standards": {
+    "PRIMARY_FULL": [
+      "SAFE_VERIFIED",
+      "SAFE_VERIFIED_BOUNDED",
+      "SAFE_ATTESTED"
+    ],
+    "SENSITIVITY_VERIFIED_ONLY": [
+      "SAFE_VERIFIED",
+      "SAFE_VERIFIED_BOUNDED"
+    ],
+    "SENSITIVITY_LOW_AVAILABILITY_RISK": [
+      "SAFE_VERIFIED",
+      "SAFE_VERIFIED_BOUNDED",
+      "SAFE_ATTESTED"
+    ],
+    "EXPLORATORY_UNRESOLVED": [
+      "SAFE_VERIFIED",
+      "SAFE_VERIFIED_BOUNDED",
+      "SAFE_ATTESTED",
+      "UNRESOLVED"
+    ]
+  },
+  "population": {
+    "primary": "FULL_LABELED",
+    "bridge": "D00_CLEAN",
+    "extra_rows_split": {
+      "salt": "falls_ml-phase3-extra-rows-v1",
+      "train": 0.6,
+      "validation": 0.2
+    }
+  },
+  "partitions": {
+    "TRAIN": "every recovery gate, screening, tuning, selection, stability, ablation; the primary internal estimate (outer OOF)",
+    "VALIDATION": "REUSED: sealed until SELECTION_FROZEN.json; one-shot descriptive check; never selects, tunes or recalibrates",
+    "TEST": "dropped in memory right after the reference split hash check (and TEST-assigned D-00 rows likewise); never read"
+  },
+  "recovery": {
+    "rules": {
+      "phase3_recovery": {
+        "name": "meuhedet_phase3_recovery",
+        "version": "1.0.0",
+        "prediction_time": "END_OF_INDEX_DAY",
+        "predictor_record_rule": "source_event_date <= Index_Date",
+        "data_dictionary": "configs/meuhedet/wide_v1_data_dictionary.yaml",
+        "d00_config": "configs/meuhedet/d00_sensitivity.yaml"
+      },
+      "source_semantics": {
+        "FALL_EVENTS": {
+          "semantics": "EVENT_AGGREGATES",
+          "text": "fall/fracture event counts in sliding windows, a since-2022 cumulative flag/count and the latest event date"
+        },
+        "DIAGNOSES": {
+          "semantics": "EVENT_AGGREGATES",
+          "text": "diagnosis counts in sliding windows, a since-2022 cumulative 719.7 flag and the latest diagnosis date"
+        },
+        "VISITS": {
+          "semantics": "EVENT_AGGREGATES",
+          "text": "visit counts in sliding windows and the latest visit date"
+        },
+        "NURSE_FALLS_RISK_999_52": {
+          "semantics": "LATEST_RECORD_SNAPSHOT",
+          "text": "items of the latest falls-risk form and its date (earlier forms are overwritten in the extract)"
+        },
+        "NURSE_GET_UP_AND_GO_999_79": {
+          "semantics": "LATEST_RECORD_SNAPSHOT",
+          "text": "items of the latest get-up-and-go form and its date"
+        },
+        "NURSE_FUNCTION_999_175": {
+          "semantics": "LATEST_RECORD_SNAPSHOT",
+          "text": "scores of the latest function / mobility / senses form and its date"
+        },
+        "NURSE_COGNITION": {
+          "semantics": "LATEST_RECORD_SNAPSHOT",
+          "text": "latest Mini-Cog score and its date (MMSE empty per S2T)"
+        },
+        "NURSE_HOME_SAFETY_999_139": {
+          "semantics": "LATEST_RECORD_SNAPSHOT",
+          "text": "answers of the latest home-safety questionnaire and its date"
+        },
+        "NURSE_ASSESSMENT_SUMMARY": {
+          "semantics": "EVENT_AGGREGATES",
+          "text": "nurse-assessment counts in 365 days and the latest assessment date (all forms)"
+        },
+        "MEFI": {
+          "semantics": "STATUS_WITH_START_DATE",
+          "text": "current MEFI group and the start date of that group (a same-group reassessment does not move the date)"
+        },
+        "EXTERNAL_CARE_INVOICES": {
+          "semantics": "EVENT_AGGREGATES_BILLING_LAG",
+          "text": "invoice-based counts; billing lag means records can appear after the index day"
+        },
+        "HOSPITALISATIONS": {
+          "semantics": "EVENT_AGGREGATES_BILLING_LAG",
+          "text": "invoice-based hospitalisation aggregates (as-of semantics unconfirmed)"
+        },
+        "REGISTRIES": {
+          "semantics": "STATUS_WITH_FIRST_ENTRY_DATE",
+          "text": "registry flags active at the index date; only the first entry date of any registry exists (not recoverable row by row)"
+        },
+        "PRESCRIPTIONS": {
+          "semantics": "WINDOW_AGGREGATES_NO_DATE",
+          "text": "prescription counts in 365 days, no record date (not recoverable)"
+        },
+        "LABS": {
+          "semantics": "WINDOW_AGGREGATES_NO_DATE",
+          "text": "laboratory counts in 365 days, no record date (not recoverable)"
+        },
+        "MEDICATION_EXPOSURE": {
+          "semantics": "STATUS_NO_DATE",
+          "text": "active-exposure substance counts at the index date, no dispensing date (not recoverable)"
+        },
+        "COMORBIDITY_SOCIAL": {
+          "semantics": "STATUS_NO_DATE",
+          "text": "comorbidity index / benefit status, no record date (not recoverable)"
+        }
+      },
+      "not_bounded_by_record_date": {
+        "Days_Since_MEFI_Assessment": "MEFI_From_Date is the start of the CURRENT GROUP; a same-group reassessment on/after the index day changes this value without moving the date",
+        "MEFI_Assessment_Count": "a reassessment on/after the index day can increase the count without changing the group start date (MEFI_From_Date)"
+      },
+      "absence_indicators": {
+        "Assessment_Not_Performed_Ind": 1,
+        "Frailty_Not_Assessed_Ind": 1
+      },
+      "pre_index_upper_bound_columns": {
+        "Prior_Fall_Since_Study_Start_Ind": "fall/fracture since 2022-01-01 (cumulative flag)",
+        "Prior_Fall_Count_Since_Study_Start": "fall/fracture events since 2022-01-01 (cumulative count)",
+        "Gait_Disorder_Since_Study_Start_Ind": "ICD-9 719.7 since 2022-01-01 (cumulative flag)"
+      },
+      "gates": {
+        "max_unknown_share_population": 0.01,
+        "max_unknown_share_informative": 0.1,
+        "min_known_informative_train": 100
+      },
+      "remediation": {
+        "COMPLETE_RECORD_DATE": "compute every window / latest-record value with Event_Date <= Index_Date and NEVER include a record dated after Index_Date; keep the latest record ON OR BEFORE Index_Date per member and form (ROW_NUMBER() OVER (PARTITION BY member, form ORDER BY record_date DESC) WHERE record_date <= Index_Date)",
+        "SUFFICIENT_ONLY_RECORD_DATE": "add the start date of EACH registry membership (Registry_<X>_Start_Date) so that 'active at Index_Date' can be verified row by row",
+        "NO_RECORD_DATE": "expose the latest contributing record date (dispensing / prescription / laboratory / index computation date) so that availability at Index_Date can be verified row by row instead of attested",
+        "NOT_BOUNDED": "expose the date of the latest assessment behind the value (e.g. MEFI_Last_Assessment_Date) and compute counts with Assessment_Date <= Index_Date",
+        "POST_INDEX": "never a predictor; no correction makes post-index information available at the prediction time"
+      }
+    },
+    "row_recoverable_evidence_kind": "COMPLETE_RECORD_DATE with a DOCUMENTED record date",
+    "classes": {
+      "SAFE_VERIFIED": "row-level record dates (or documented static attribute): available at prediction time on every analysed row",
+      "SAFE_VERIFIED_BOUNDED": "row-level record dates; a few rows carry a post-index record: they stay in the population and are evaluated with bounds",
+      "SAFE_ATTESTED": "no row-level record date: eligible on the DWH statement 'no event after Index_Date' confirmed by check V3 (not row-verified)",
+      "NOT_RECOVERABLE_FUTURE_RECORDS": "too many rows with post-index records (gates G2 / G3): DWH correction needed",
+      "UNRESOLVED": "timing cannot be supported (unknown contract timing, a post-index date source, or the attestation withdrawn): exploratory only",
+      "NOT_RECOVERABLE_FORBIDDEN": "post-index / label / forbidden information: never a predictor",
+      "INELIGIBLE_DATA": "fewer than the minimum KNOWN observed TRAIN rows, or constant: not analysable"
+    },
+    "known_unknown_rule": "KNOWN    the value was available at prediction time: a documented static attribute; or the source's record date is ON OR BEFORE Index_Date;\n             or the source has no record and no value was recorded\n    UNKNOWN  a record of the source is dated AFTER Index_Date (genuine future information, if the extract holds any), a value was recorded\n             without its record date, or a cell could not be read (e.g. '00:00.0')\nPer feature (classes):\n    SAFE_VERIFIED           every input has a row-level record date (or is a documented static attribute) and every analysed row is KNOWN\n    SAFE_VERIFIED_BOUNDED   as above with a few UNKNOWN rows (within the gates): those rows stay in the population and are evaluated with bounds\n    SAFE_ATTESTED           an input has no row-level date (medications, prescriptions, laboratories, registries, comorbidity / social status,\n                            undocumented static meanings, values the date does not bound): eligible because the DWH states that no event after\n                            Index_Date enters the extract AND check V3 found no post-index record in any dated source; withdrawn otherwise\n    NOT_RECOVERABLE_FUTURE_RECORDS  too many rows carry post-index records (gates G2 / G3)\n    UNRESOLVED              timing cannot be supported (unknown contract timing, a documented post-index date source, or the attestation withdrawn)\n    NOT_RECOVERABLE_FORBIDDEN       post-index / label / forbidden information: never a predictor\n    INELIGIBLE_DATA         fewer than the minimum KNOWN observed TRAIN rows, or constant"
+  },
+  "bounds": {
+    "method": "partial identification over the observed pre-index states of the fitting rows, cumulative upper bounds applied",
+    "linear": "exact min / max (per-source additive contributions)",
+    "xgboost": "sound outer bound (interval propagation through every tree)",
+    "max_profiles_per_source": 20000,
+    "fit_rows": "rows whose every scope feature is KNOWN",
+    "evaluation_rows": "every row",
+    "adverse": "events lowest, non-events highest possible risk",
+    "favourable": "the reverse",
+    "comparison": "adverse difference = new adverse - reference favourable"
+  },
+  "feasibility": {
+    "priority_domains": [
+      "COGNITION",
+      "FRAILTY",
+      "FUNCTION_MOBILITY",
+      "NURSE_FALL_RISK",
+      "HOME_ENVIRONMENT",
+      "MEDICATION",
+      "UTILISATION",
+      "SOCIAL_SUPPORT"
+    ],
+    "min_domain_known_informative_train_rows": 200,
+    "min_domain_known_informative_train_events": 20,
+    "rule": "GO when the time contract passes its hard checks (V1, V2) and at least one priority domain holds a NEWLY eligible non-indicator feature (not eligible under the Phase 2 rule, eligible under PRIMARY_FULL) meeting both adequacy minima; otherwise NO_GO (Outcome B: DWH remediation, no model is fitted)"
+  },
+  "selection": {
+    "discovery_reference": "LASSO:P3_BASE",
+    "principal_capacity": 0.1,
+    "min_delta_ap": 0.01,
+    "min_delta_capture_principal_pp": 1.0,
+    "max_logloss_ratio": 1.01,
+    "calibration_slope_range": [
+      0.8,
+      1.25
+    ],
+    "max_abs_citl": 0.2,
+    "simplicity_margin_ap": 0.005,
+    "max_challengers": 3,
+    "candidate_kinds": [
+      "main",
+      "domain_add",
+      "waterfall"
+    ],
+    "reference_config": "LASSO:P3_BASE",
+    "outcomes": [
+      "INCREMENTAL_MODEL_SELECTED",
+      "INCONCLUSIVE_OVERWRITTEN_HISTORY",
+      "NO_INCREMENTAL_MODEL_SELECTED"
+    ],
+    "decision_bound": "ADVERSE"
+  },
+  "validation_confirmation": {
+    "min_delta_ap": 0.005,
+    "min_delta_capture_principal_pp": 0.0,
+    "calibration_slope_range": [
+      0.7,
+      1.4
+    ],
+    "max_abs_citl": 0.3,
+    "max_logloss_ratio": 1.01
+  },
+  "models": {
+    "cv": {
+      "outer_folds": 5,
+      "inner_folds_linear": 10,
+      "inner_folds_xgb": 5
+    },
+    "lasso": {
+      "n_lambda": 100,
+      "lambda_min_ratio": 0.001,
+      "selection": "min",
+      "tol": 1e-07,
+      "max_iter": 10000
+    },
+    "enet": {
+      "l1_ratios": [
+        0.1,
+        0.5,
+        0.9
+      ],
+      "n_lambda": 100,
+      "max_sets": 2
+    },
+    "xgb": {
+      "fixed": {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "booster": "gbtree",
+        "tree_method": "hist",
+        "device": "cpu",
+        "grow_policy": "depthwise",
+        "max_bin": 256,
+        "learning_rate": 0.05,
+        "subsample": 0.8,
+        "sampling_method": "uniform",
+        "colsample_bytree": 0.8,
+        "colsample_bylevel": 1.0,
+        "colsample_bynode": 1.0,
+        "gamma": 0.0,
+        "reg_alpha": 0.0,
+        "max_delta_step": 0.0,
+        "scale_pos_weight": 1.0,
+        "base_score": "auto"
+      },
+      "n_estimators_max": 3000,
+      "early_stopping_rounds": 100,
+      "stage0": {
+        "max_depth": 3,
+        "min_child_weight": 10.0,
+        "reg_lambda": 5.0,
+        "sets": [
+          "P3_BASE",
+          "P3_ALL_RECOVERED",
+          "P3_ALL_NO_FALL_RECENCY"
+        ]
+      },
+      "stage1": {
+        "set": "P3_ALL_RECOVERED",
+        "n_trials": 15,
+        "n_startup_trials": 6,
+        "space": {
+          "max_depth": {
+            "type": "int",
+            "low": 1,
+            "high": 3
+          },
+          "min_child_weight": {
+            "type": "float",
+            "low": 5.0,
+            "high": 30.0,
+            "log": true
+          },
+          "reg_lambda": {
+            "type": "float",
+            "low": 1.0,
+            "high": 30.0,
+            "log": true
+          }
+        }
+      },
+      "stage2": {
+        "enabled": false,
+        "n_trials": 0
+      },
+      "max_trials_per_study": 25,
+      "optuna": {
+        "sampler": "TPE",
+        "multivariate": true,
+        "direction": "minimize",
+        "objective": "inner_cv_mean_logloss",
+        "pruner": "none"
+      }
+    }
+  },
+  "stability": {
+    "n_replicates": 25,
+    "max_sets": 2,
+    "max_failure_fraction": 0.1
+  },
+  "ablation": {
+    "individual_top_n": 15
+  },
+  "explain": {
+    "shap_sample_rows": 12000,
+    "permutation_repeats": 5,
+    "interaction_pairs": 5
+  },
+  "metrics": {
+    "capacities": [
+      0.01,
+      0.03,
+      0.05,
+      0.1,
+      0.2
+    ],
+    "calibration_groups": 10,
+    "bootstrap_n": 2000,
+    "subgroup_min_events": 10
+  },
+  "gates": {
+    "single_feature_univariate_auroc": 0.8,
+    "max_delta_auroc": 0.05,
+    "max_ap_ratio": 1.5,
+    "calibration_slope_range": [
+      0.6,
+      1.5
+    ],
+    "max_abs_citl": 0.5,
+    "max_single_feature_share": 0.5,
+    "max_fit_failure_fraction": 0.1
+  },
+  "screening": {
+    "redundancy_abs_spearman": 0.9,
+    "item_unanswered_min_share": 0.0,
+    "sparse_min_events": 20,
+    "min_cell": 10
+  },
+  "eligibility": {
+    "min_observed_train_rows": 100
+  },
+  "seed": 20261001,
+  "threads": {
+    "blas": "auto",
+    "xgboost": "auto",
+    "max_auto": 4
+  }
+}

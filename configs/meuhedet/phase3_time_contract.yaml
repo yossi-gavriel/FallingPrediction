@@ -1,0 +1,94 @@
+# Phase 3 TIME CONTRACT (planning/PHASE3_TIME_CONTRACT_AUDIT.md). Replaces, for Phase 3 ONLY, the start-of-index-day assumption of Phases 1-2
+# (configs/meuhedet/wide_v1_efalls_mapping.yaml cohort.prediction_time = START_OF_INDEX_DAY, predictor_record_rule "source_event_date < Index_Date",
+# which stay unchanged for the historical runs). Written from the DWH developer's explanation (reported by the project lead on 2026-09-30) and the
+# repository evidence; no row-level data and no outcome value were used. Every statement below is VERIFIED on the real extract by the read-only
+# checks of `falls_ml.phase3.timecontract` in the preflight and in stage S02; a contradicted statement is a HARD stop (V1, V2) or removes the
+# attestation (V3), never silently ignored.
+phase3_time_contract:
+  name: meuhedet_phase3_time_contract
+  version: 1.0.0
+  index_date: "2025-01-01"
+  prediction_time: END_OF_INDEX_DAY                 # = the start of Index_Date + 1 day
+  predictor_record_rule: "source_event_date <= Index_Date"
+  outcome_window: "Index_Date + 1 day .. Label_End_180D (= Index_Date + 180 days); events ON Index_Date are NOT outcome events"
+  attestation:
+    source: "the DWH developer who built V_Falls_Prediction_Wide_1 (verbal explanation reported by the project lead, 2026-09-30)"
+    statements:
+      - "Index_Date = 2025-01-01"
+      - "clinical predictors include information available through the END of 2025-01-01"
+      - "the 180-day fall outcome EXCLUDES falls on 2025-01-01; the outcome window starts on 2025-01-02"
+      - "the extraction does not include clinical events dated after Index_Date"
+    status: "PROVISIONAL until the checks below pass on the real extract; to be confirmed in writing by the DWH team (open question Q-P3-01)"
+
+  checks:
+    V1_label_excludes_index_day: {severity: HARD, text: "no positive 180-day label has its first event on or before Index_Date (Next_Fall_Date_180D > Index_Date, Days_To_Next_Fall_180D >= 1)"}
+    V2_window_end: {severity: HARD, text: "Label_End_180D - Index_Date = 180 days on every labelled row"}
+    V3_no_post_index_records: {severity: ATTESTATION, text: "no record date of a predictor source is after Index_Date; if violated, the rows are UNKNOWN (bounded) and the attestation for sources WITHOUT a row-level date is withdrawn (they fall back to UNRESOLVED / exploratory)"}
+    V4_days_since_consistency: {severity: WARN, text: "Days_Since_* = Index_Date - its date, >= 0, wherever both exist"}
+    V5_index_day_fall_vs_label: {severity: INFO, text: "cross-tabulation Fall_On_Index_Date_Ind x label (an index-day fall is predictor-time history, not an outcome)"}
+    V7_proxy_episode_audit: {severity: INVESTIGATION, text: "TRAIN only: Last_Fall_Date / Days_Since_Last_Fall / Index_Date / Next_Fall_Date_180D - consistency, gap between the last and the next fall, early-event concentration among recent fallers (see proxy_audit)"}
+    V8_availability_indicators: {severity: INFO, text: "data-quality signals of delayed availability: Unsettled_Visit_Counter_Ind, Future_Dated_365D, Fallback_Exposure_365D, External_Care_Hidden_By_Billing_Lag_365D (aggregate)"}
+    V9_cohort_reconciliation: {severity: HARD, text: "FULL_LABELED = D00_CLEAN + the D-00 rows, and the D-00 rows = the rows the reference build removed (n_rows_timing_violation)"}
+    V6_boundary_episode: {severity: INVESTIGATION, text: "TRAIN only: recorded events on day +1 among patients with an index-day fall / diagnosis / visit record vs others (one episode crossing midnight could be counted twice)",
+                          min_events: 10, max_rate_ratio: 5.0}
+
+  # ---------------------------------------------------------------------------------------------------------------------------------------------------
+  # INFORMATION AVAILABILITY (distinct from EVENT TIMING). The DWH statement and V3 concern EVENT dates. A record dated on/before Index_Date may still
+  # have been unavailable at the end of Index_Date (late documentation, backdated registry entries, billing / claims lag, a derived score computed at
+  # extraction time). The extract holds no entry / load timestamps, so availability is never verified here: it is an explicit, documented assumption
+  # per source, with a pre-declared risk. Risk HIGH / UNKNOWN sources leave the pre-declared LOW_RISK sensitivity; a gain that depends on them is
+  # reported as NOT ESTABLISHED until the DWH confirms availability (open question Q-P3-02).
+  availability:
+    general_assumption: "A-AVAIL-1: a record dated on or before Index_Date was present in the operational system by the end of Index_Date (no late entry); not verifiable from the extract (no entry timestamps)"
+    sources:
+      MEMBER_MASTER: {risk: LOW, assumption: "static member attributes (age, sex, membership)"}
+      FALL_EVENTS: {risk: MEDIUM, assumption: "fall / fracture events are dated by the encounter; hospital / ED events may be coded after the encounter (coding lag)", check: V7}
+      DIAGNOSES: {risk: MEDIUM, assumption: "diagnoses are recorded at the visit; retrospective coding would move information after Index_Date"}
+      VISITS: {risk: LOW, assumption: "visits are recorded in real time; counters inside the 3-day settlement period can still change (Unsettled_Visit_Counter_Ind, V8)", check: V8}
+      NURSE_FALLS_RISK_999_52: {risk: MEDIUM, assumption: "nurse forms dated by the assessment; forms completed / signed later would be unavailable at prediction time"}
+      NURSE_GET_UP_AND_GO_999_79: {risk: MEDIUM, assumption: "as the falls-risk form"}
+      NURSE_FUNCTION_999_175: {risk: MEDIUM, assumption: "as the falls-risk form"}
+      NURSE_COGNITION: {risk: MEDIUM, assumption: "as the falls-risk form"}
+      NURSE_HOME_SAFETY_999_139: {risk: MEDIUM, assumption: "as the falls-risk form"}
+      NURSE_ASSESSMENT_SUMMARY: {risk: MEDIUM, assumption: "aggregates of the nurse forms above"}
+      MEFI: {risk: MEDIUM, assumption: "the MEFI group is a periodically computed index; the group valid at Index_Date is assumed to have been computed by then (the batch schedule is undocumented)"}
+      PRESCRIPTIONS: {risk: LOW, assumption: "prescriptions written / purchased are recorded by the EHR / pharmacy systems at the transaction"}
+      LABS: {risk: MEDIUM, assumption: "referrals are recorded at the visit; 'performed' may be imported from laboratory systems with a delay of days"}
+      MEDICATION_EXPOSURE: {risk: MEDIUM, assumption: "active exposure at Index_Date is derived from dispensings dated on/before Index_Date; assumed exposure windows (Fallback_Exposure_365D) and future-dated prescriptions (Future_Dated_365D) are data-quality signals (V8)", check: V8}
+      REGISTRIES: {risk: HIGH, assumption: "'active at Index_Date' is evaluated on the registry table; memberships can be created after clinical review with an earlier start date (backdating) - an event dated before Index_Date may have been entered after it"}
+      COMORBIDITY_SOCIAL: {risk: UNKNOWN, assumption: "the comorbidity group / benefit status: construction date and window undocumented (may be computed at extraction time)"}
+      EXTERNAL_CARE_INVOICES: {risk: LOW, assumption: "only the visible (already billed at Index_Date) count is used; the billing-lag totals are forbidden"}
+    columns:                                     # column-level overrides of the source risk
+      Bought_Outside_Meuhedet_365D: {risk: HIGH, assumption: "purchases outside Meuhedet reach the HMO through reimbursement claims submitted later"}
+      Income_Support: {risk: MEDIUM, assumption: "administrative benefit status as of Index_Date; retroactive updates possible"}
+      HMO_Seniority_Months: {risk: LOW, assumption: "membership length from the member master"}
+      External_Care_Count_365D_Visible: {risk: LOW, assumption: "documented as already billed at Index_Date"}
+    low_risk_levels: [LOW, MEDIUM]                # the LOW_RISK sensitivity keeps these; HIGH / UNKNOWN leave it
+
+  # ---------------------------------------------------------------------------------------------------------------------------------------------------
+  # PROXY / EPISODE AUDIT (Phase 2 stopped at PROXY_DOMINANCE: falls_days_since_last held 89% of the XGBoost permutation AP loss). A strong recency effect
+  # can be genuine (recent fallers fall again) or an artefact: one injury episode recorded on several days could appear as the "last fall" (history) and
+  # as the "next fall" (outcome). V7 checks the relationship Last_Fall_Date / Days_Since_Last_Fall / Index_Date / Next_Fall_Date_180D on TRAIN (aggregate);
+  # the pre-declared ablation P3_ALL_NO_FALL_RECENCY (LASSO + XGBoost) measures how much of the result depends on fall recency, on identical patients.
+  proxy_audit:
+    feature: falls_days_since_last
+    recency_features: [falls_days_since_last, falls_count_30d, falls_count_90d]
+    recent_fall_days: 30              # patients whose last fall is <= 30 days before Index_Date
+    early_event_days: 14              # events within the first 14 days of the outcome window
+    min_events: 10
+    max_early_share_recent: 0.50      # investigation if > 50% of the recent fallers' events fall within the first 14 days ...
+    max_early_ratio: 3.0              # ... and that share is > 3x the share among the other patients
+    max_gap_7d_share: 0.25            # investigation if > 25% of the positives with a prior fall have their next event <= 7 days after the last fall
+  proxy_dominance_preinvestigated: [falls_days_since_last]   # the PROXY_DOMINANCE gate is informed by V7 for this feature (stops only if V7 flagged it)
+
+  # sources whose record dates are, by documentation, NOT bounded by Index_Date (post-index knowledge or unknown as-of semantics): never used for V3,
+  # never a predictor through their dates
+  excluded_date_sources: {EXTERNAL_CARE_INVOICES: "billing lag: totals include records billed after Index_Date (forbidden)", HOSPITALISATIONS: "as-of semantics unconfirmed (timing unknown)"}
+  # columns of such sources that ARE documented as-of Index_Date (attested, no row-level date)
+  documented_as_of_columns:
+    External_Care_Count_365D_Visible: "external-care records already billed at Index_Date (as-of correct, data dictionary DOCUMENTED)"
+  # evidence kinds eligible through the attestation (no row-level date): the DWH statement 'no clinical events after Index_Date' is what makes them usable
+  attested_evidence_kinds: [NO_RECORD_DATE, SUFFICIENT_ONLY_RECORD_DATE, STATIC_ATTRIBUTE_MEANING_UNDOCUMENTED, NOT_BOUNDED_BY_RECORD_DATE]
+  # columns that were FORBIDDEN only because the old contract put the index day into the outcome window: reported, not used in this freeze
+  reclassifiable_not_used:
+    Fall_On_Index_Date_Ind: "an index-day fall is predictor-time history under this contract; its information is already carried by Days_Since_Last_Fall = 0 (fall recency features); a dedicated feature needs a contract change reviewed first"

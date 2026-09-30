@@ -39,6 +39,10 @@ def test_frozen_final_config_is_current_and_hashed(loaded: dict[str, Any]) -> No
 
     fc = build_final_config(loaded["cfg"], loaded["cat"], contract=loaded["contract"], dictionary=loaded["dictionary"], mapping=loaded["mapping"],
                             d00=loaded["d00"])
+    # falls_ml 0.9.0 (Phase 3) carries the Phase 2 freeze of the 0.8.1 package unchanged: every scientific value must still match it; only the
+    # package version differs (Phase 2 runs only from its own 0.8.1 installation - see test_phase2_production_run_is_refused_in_this_package)
+    assert fc["falls_ml_version"] != "0.8.1"
+    fc["falls_ml_version"] = "0.8.1"
     frozen = (ROOT / FROZEN_PATH).read_bytes()
     assert frozen == to_bytes(fc), "configs/meuhedet/FINAL_EXPERIMENT_CONFIG.json is stale: run tools/freeze_phase2_config.py after a reviewed change"
     assert (ROOT / FROZEN_PATH).with_suffix(".sha256").read_text(encoding="utf-8") == sha_line(sha256_of(fc))
@@ -68,8 +72,18 @@ def test_runner_refuses_an_unfrozen_production_configuration(loaded: dict[str, A
     assert e.value.gate == "FROZEN_CONFIG_MISMATCH"
     _, _, frozen = effective_final_config(cfg, loaded["cat"], allow_unfrozen=True, **kw)
     assert frozen is False
-    _, _, frozen = effective_final_config(loaded["cfg"], loaded["cat"], allow_unfrozen=False, **kw)
-    assert frozen is True
+
+
+def test_phase2_production_run_is_refused_in_this_package(loaded: dict[str, Any]) -> None:
+    """Isolation (Phase 3 package, falls_ml 0.9.0): the reviewed Phase 2 freeze belongs to falls_ml 0.8.1, so this package can never start or
+    resume a production Phase 2 run - the running experiment stays on its own installation."""
+    from falls_ml.phase2.runner import effective_final_config
+    from falls_ml.phase2.state import Phase2Stop
+
+    kw = {k: loaded[k] for k in ("contract", "dictionary", "mapping", "d00")}
+    with pytest.raises(Phase2Stop) as e:
+        effective_final_config(loaded["cfg"], loaded["cat"], allow_unfrozen=False, **kw)
+    assert e.value.gate == "FROZEN_CONFIG_MISMATCH"
 
 
 def test_config_loader_guards_the_category_invariants(tmp_path: Path) -> None:

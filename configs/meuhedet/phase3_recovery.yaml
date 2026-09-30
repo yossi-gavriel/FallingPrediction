@@ -1,0 +1,82 @@
+# Phase 3 feature-eligibility rules for V_Falls_Prediction_Wide_1 under the CORRECTED time contract (configs/meuhedet/phase3_time_contract.yaml;
+# planning/PHASE3_TIME_CONTRACT_AUDIT.md). Written from the DDL / S2T / data dictionary, the Phase 1-2 D-00 decisions and the DWH developer's
+# explanation only: no row-level data, no outcome value and no Phase 2 result were used. Frozen with the Phase 3 settings.
+#
+# WHAT CHANGES (Phase 1-2 -> Phase 3)
+#   Phases 1-2 assumed prediction at the START of Index_Date (records dated ON the index day were future information) and removed / excluded them.
+#   The DWH developer explained that the extract is built for prediction at the END of Index_Date: predictors include records through Index_Date and
+#   the outcome starts on Index_Date + 1 day. Phase 3 adopts that contract ONLY after the read-only checks V1-V6 confirm it on the real extract:
+#     - a record dated ON OR BEFORE Index_Date is history at prediction time (KNOWN);
+#     - a record dated AFTER Index_Date is genuine future information: that row's value is UNKNOWN (never imputed, never re-coded, the patient is
+#       never removed; fitting excludes the row, evaluation keeps it with adverse / favourable bounds);
+#     - a source WITHOUT a row-level record date is eligible only on the DWH statement 'no clinical event after Index_Date', confirmed by V3 (no post-index
+#       record in any dated source): class SAFE_ATTESTED, reported separately from row-verified features and removed by the verified-only sensitivity.
+phase3_recovery:
+  name: meuhedet_phase3_recovery
+  version: 1.0.0
+  prediction_time: END_OF_INDEX_DAY
+  predictor_record_rule: "source_event_date <= Index_Date"
+  data_dictionary: configs/meuhedet/wide_v1_data_dictionary.yaml
+  d00_config: configs/meuhedet/d00_sensitivity.yaml
+
+# Row-level recovery is possible ONLY for sources whose D-00 evidence kind (configs/meuhedet/d00_sensitivity.yaml) is COMPLETE_RECORD_DATE and whose
+# record-date column has a DOCUMENTED meaning. The historical semantics below are declarations from the S2T / dictionary (reported, SME to confirm);
+# they never widen what is recoverable.
+source_semantics:
+  FALL_EVENTS: {semantics: EVENT_AGGREGATES, text: "fall/fracture event counts in sliding windows, a since-2022 cumulative flag/count and the latest event date"}
+  DIAGNOSES: {semantics: EVENT_AGGREGATES, text: "diagnosis counts in sliding windows, a since-2022 cumulative 719.7 flag and the latest diagnosis date"}
+  VISITS: {semantics: EVENT_AGGREGATES, text: "visit counts in sliding windows and the latest visit date"}
+  NURSE_FALLS_RISK_999_52: {semantics: LATEST_RECORD_SNAPSHOT, text: "items of the latest falls-risk form and its date (earlier forms are overwritten in the extract)"}
+  NURSE_GET_UP_AND_GO_999_79: {semantics: LATEST_RECORD_SNAPSHOT, text: "items of the latest get-up-and-go form and its date"}
+  NURSE_FUNCTION_999_175: {semantics: LATEST_RECORD_SNAPSHOT, text: "scores of the latest function / mobility / senses form and its date"}
+  NURSE_COGNITION: {semantics: LATEST_RECORD_SNAPSHOT, text: "latest Mini-Cog score and its date (MMSE empty per S2T)"}
+  NURSE_HOME_SAFETY_999_139: {semantics: LATEST_RECORD_SNAPSHOT, text: "answers of the latest home-safety questionnaire and its date"}
+  NURSE_ASSESSMENT_SUMMARY: {semantics: EVENT_AGGREGATES, text: "nurse-assessment counts in 365 days and the latest assessment date (all forms)"}
+  MEFI: {semantics: STATUS_WITH_START_DATE, text: "current MEFI group and the start date of that group (a same-group reassessment does not move the date)"}
+  EXTERNAL_CARE_INVOICES: {semantics: EVENT_AGGREGATES_BILLING_LAG, text: "invoice-based counts; billing lag means records can appear after the index day"}
+  HOSPITALISATIONS: {semantics: EVENT_AGGREGATES_BILLING_LAG, text: "invoice-based hospitalisation aggregates (as-of semantics unconfirmed)"}
+  REGISTRIES: {semantics: STATUS_WITH_FIRST_ENTRY_DATE, text: "registry flags active at the index date; only the first entry date of any registry exists (not recoverable row by row)"}
+  PRESCRIPTIONS: {semantics: WINDOW_AGGREGATES_NO_DATE, text: "prescription counts in 365 days, no record date (not recoverable)"}
+  LABS: {semantics: WINDOW_AGGREGATES_NO_DATE, text: "laboratory counts in 365 days, no record date (not recoverable)"}
+  MEDICATION_EXPOSURE: {semantics: STATUS_NO_DATE, text: "active-exposure substance counts at the index date, no dispensing date (not recoverable)"}
+  COMORBIDITY_SOCIAL: {semantics: STATUS_NO_DATE, text: "comorbidity index / benefit status, no record date (not recoverable)"}
+
+# Columns of a dated source whose value can change WITHOUT moving the source's record date: the date does not bound them row by row, so they are
+# never row-verified; they are eligible only through the attestation (SAFE_ATTESTED) and leave the verified-only sensitivity.
+not_bounded_by_record_date:
+  Days_Since_MEFI_Assessment: "MEFI_From_Date is the start of the CURRENT GROUP; a same-group reassessment on/after the index day changes this value without moving the date"
+  MEFI_Assessment_Count: "a reassessment on/after the index day can increase the count without changing the group start date (MEFI_From_Date)"
+
+# Explicit absence indicators: the declared value means "no record", so it is consistent with a missing record date (not a recorded value
+# without a date). Any other value without a date is UNKNOWN.
+absence_indicators:
+  Assessment_Not_Performed_Ind: 1
+  Frailty_Not_Assessed_Ind: 1
+
+# Cumulative "since 2022-01-01" columns (documented meaning): the pre-index value can never exceed the observed value (records are only ever
+# added), so for an UNKNOWN row the possible pre-index states are restricted to values <= the observed value. An observed 0 is therefore
+# EXACT. Sliding windows (30/90/180/365 days) are NOT declared: their start moves with the index day.
+pre_index_upper_bound_columns:
+  Prior_Fall_Since_Study_Start_Ind: "fall/fracture since 2022-01-01 (cumulative flag)"
+  Prior_Fall_Count_Since_Study_Start: "fall/fracture events since 2022-01-01 (cumulative count)"
+  Gait_Disorder_Since_Study_Start_Ind: "ICD-9 719.7 since 2022-01-01 (cumulative flag)"
+
+# Label-blind recoverability gates, per feature, on TRAIN + VALIDATION rows (record dates and values only - never an outcome):
+#   G1 row-recoverable source (COMPLETE_RECORD_DATE, DOCUMENTED record date) and not in not_bounded_by_record_date
+#   G2 UNKNOWN rows <= max_unknown_share_population of the analysis population
+#   G3 UNKNOWN rows <= max_unknown_share_informative of the rows that carry information for the feature (known recorded + unknown)
+#   G4 at least min_known_informative_train KNOWN recorded TRAIN rows and not constant (the Phase 2 data rule)
+# Rationale: the adverse / favourable bounds widen with the UNKNOWN share; above these shares the bounds cannot support any conclusion, so the
+# feature is reported as NOT_RECOVERABLE_TOO_MANY_OVERWRITTEN and listed for the DWH correction instead of being fitted.
+gates:
+  max_unknown_share_population: 0.01
+  max_unknown_share_informative: 0.10
+  min_known_informative_train: 100
+
+# DWH remediation templates (printed per source in DWH_REMEDIATION.md; the SQL is illustrative - the DWH team owns the implementation)
+remediation:
+  COMPLETE_RECORD_DATE: "compute every window / latest-record value with Event_Date <= Index_Date and NEVER include a record dated after Index_Date; keep the latest record ON OR BEFORE Index_Date per member and form (ROW_NUMBER() OVER (PARTITION BY member, form ORDER BY record_date DESC) WHERE record_date <= Index_Date)"
+  SUFFICIENT_ONLY_RECORD_DATE: "add the start date of EACH registry membership (Registry_<X>_Start_Date) so that 'active at Index_Date' can be verified row by row"
+  NO_RECORD_DATE: "expose the latest contributing record date (dispensing / prescription / laboratory / index computation date) so that availability at Index_Date can be verified row by row instead of attested"
+  NOT_BOUNDED: "expose the date of the latest assessment behind the value (e.g. MEFI_Last_Assessment_Date) and compute counts with Assessment_Date <= Index_Date"
+  POST_INDEX: "never a predictor; no correction makes post-index information available at the prediction time"

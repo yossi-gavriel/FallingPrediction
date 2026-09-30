@@ -448,6 +448,61 @@ def _cmd_meuhedet_phase2(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_meuhedet_phase3_status(a: argparse.Namespace) -> int:
+    from falls_ml.phase3.status import phase3_status
+
+    return phase3_status(a.out)
+
+
+def _cmd_meuhedet_phase3(a: argparse.Namespace) -> int:
+    """Phase 3: row-level historical recovery -> scientific GO / NO-GO -> (GO) extended modelling with bounds -> reports -> share."""
+    from falls_ml.errors import FallsMLError
+    from falls_ml.phase2.state import STOP_HARD, Phase2Stop
+
+    if a.preflight:
+        from falls_ml.phase3.preflight import run_preflight
+
+        if a.resume or a.accept_gate or a.accept_code_change:
+            print("--preflight checks a NEW run; it cannot be combined with --resume / --accept-gate / --accept-code-change", file=sys.stderr)
+            return 2
+        return run_preflight(a.input, a.reference, out_dir=a.out, protect=a.protect or [], id_pepper_file=a.id_pepper_file, phase2_out=a.phase2_out,
+                             config_path=a.config, allow_synced_folder=a.allow_synced_folder, allow_unfrozen_config=a.allow_unfrozen_config)
+    from falls_ml.phase3.runner import run_phase3
+
+    gates: dict[str, str] = {}
+    for g in a.accept_gate or []:
+        if not a.reason or not a.resume:
+            print("--accept-gate needs --reason \"<why>\" and is only valid with --resume (it is recorded)", file=sys.stderr)
+            return 2
+        gates[g] = a.reason
+    if a.accept_code_change and not a.resume:
+        print("--accept-code-change is only valid with --resume", file=sys.stderr)
+        return 2
+    try:
+        res = run_phase3(a.input, a.reference, out_dir=a.out, protect=a.protect or [], id_pepper_file=a.id_pepper_file, phase2_out=a.phase2_out,
+                         resume=a.resume, accept_gates=gates, accept_code_change=a.accept_code_change, allow_synced_folder=a.allow_synced_folder,
+                         config_path=a.config, allow_unfrozen_config=a.allow_unfrozen_config)
+    except Phase2Stop as exc:
+        kind = "INVESTIGATION STOP" if exc.kind != STOP_HARD else "STOPPED"
+        print(f"{kind} [{exc.gate}] - {exc.message}", file=sys.stderr)
+        for d in exc.details:
+            print(f"  - {d}", file=sys.stderr)
+        if exc.kind != STOP_HARD:
+            print(f"  Review {Path(a.out) / ('INVESTIGATION_' + exc.gate + '.md')}; to continue with a recorded justification add: "
+                  f"--resume --accept-gate {exc.gate} --reason \"...\"", file=sys.stderr)
+        elif (Path(a.out) / "PHASE3_PLAN.json").is_file():
+            print("  Completed work is kept. After fixing the cause, run the same command with --resume (nothing completed is recomputed).", file=sys.stderr)
+        print("  Do not share the output folder until the run completes (share\\ appears only after the privacy scan passes).", file=sys.stderr)
+        return 2
+    except FallsMLError as exc:
+        print(f"STOPPED - {type(exc).__name__}: " + str(exc).replace("\n", "\n  "), file=sys.stderr)
+        print("  Completed work is kept; fix the cause and run the same command with --resume.", file=sys.stderr)
+        return 2
+    print(json.dumps({"status": res["status"], "decision": res.get("decision"), "out_dir": res["out"], "SEND_BACK_ONLY": str(Path(res["out"]) / "share"),
+                      "attempt": res["attempt"], "plan_sha256": res["plan_sha256"]}, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _cmd_meuhedet_eda(a: argparse.Namespace) -> int:
     """Full, aggregate EDA of the wide extract: data dictionary, profiles, missingness, data quality, timing / leakage audit, cohort funnel,
     split diagnostic and TRAIN-only supervised EDA -> REAL_DATA_EDA_REPORT.html, REAL_DATA_EDA_SUMMARY.md, DATA_QUALITY_REPORT.md, eda/*.csv."""
@@ -768,6 +823,33 @@ def build_parser() -> argparse.ArgumentParser:
                                                       "never writes, moves or locks anything")
     p.add_argument("--out", required=True, help="the Phase 2 output folder")
     p.set_defaults(func=_cmd_meuhedet_phase2_status)
+
+    p = sub.add_parser("meuhedet-phase3", help="Phase 3: row-level historical recovery of predictors Phase 2 had to exclude, a pre-declared scientific "
+                                               "GO / NO-GO, and (GO only) the extended LASSO / elastic net / XGBoost experiment evaluated with bounds for "
+                                               "overwritten history; NO-GO writes the DWH remediation requirements (crash-safe, --resume)")
+    p.add_argument("--input", required=True, help="the SAME extract file the reference run used (verified by sha256)")
+    p.add_argument("--reference", required=True, help="the completed meuhedet-explore results folder (read-only, hashed at every stage)")
+    p.add_argument("--out", required=True, help="NEW local folder, separate from every Phase 2 folder (not OneDrive); only <out>\\share is for review")
+    p.add_argument("--protect", action="append", help="another earlier, FINISHED result folder that must stay byte-identical (EDA, reports, D-00); "
+                                                      "never the running Phase 2 folder")
+    p.add_argument("--phase2-out", help="optional: the Phase 2 output folder, only to record whether it opened VALIDATION (two small files read; "
+                                        "never written, never hashed)")
+    p.add_argument("--id-pepper-file", help="the reference's pepper (default: <reference>\\id_pepper.txt or <input>.id_pepper.txt); never created")
+    p.add_argument("--config", default="configs/meuhedet/phase3.yaml", help="Phase 3 analysis settings (frozen into the plan)")
+    p.add_argument("--resume", action="store_true", help="continue an interrupted run in the SAME --out from the first incomplete item")
+    p.add_argument("--accept-gate", action="append", help="continue past this investigation stop (needs --reason and --resume; recorded)")
+    p.add_argument("--reason", help="why the investigation stop was judged acceptable (recorded)")
+    p.add_argument("--accept-code-change", help="resume although the falls_ml code changed (reason recorded; completed items are never recomputed)")
+    p.add_argument("--allow-synced-folder", action="store_true", help="allow --out inside OneDrive / a synced folder (not recommended; recorded)")
+    p.add_argument("--preflight", action="store_true", help="check everything for a NEW run without fitting any model or writing to --out; prints the "
+                                                            "scientific GO / NO-GO forecast and last line SAFE TO START FULL RUN or NOT SAFE TO START FULL RUN")
+    p.add_argument("--allow-unfrozen-config", action="store_true", help="development / tests only: allow a configuration that differs from "
+                                                                        "configs/meuhedet/PHASE3_FINAL_EXPERIMENT_CONFIG.json (flagged in every output)")
+    p.set_defaults(func=_cmd_meuhedet_phase3)
+
+    p = sub.add_parser("meuhedet-phase3-status", help="READ-ONLY progress of a Phase 3 run; never writes, moves or locks anything")
+    p.add_argument("--out", required=True, help="the Phase 3 output folder")
+    p.set_defaults(func=_cmd_meuhedet_phase3_status)
 
     p = sub.add_parser("freeze-baseline", help="freeze a completed run as a named immutable baseline (e.g. EFALLS_BASELINE_MEUHEDET_V1)")
     p.add_argument("--run", required=True, help="completed run directory (RUN_COMPLETE.json present)")
