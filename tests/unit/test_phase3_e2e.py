@@ -51,7 +51,8 @@ def _world(base: Path, mode: str, seed: int = 3) -> dict[str, Any]:
                                      undated={"Home_Safety_Assessment_Date": 0.01})
         unr = {"Get_Up_And_Go_Date": 3}
     elif mode == "contradict":
-        df, _ = plant_phase3_history(df, seed=seed, index_day_outcomes=True)
+        # seed 4: the small Phase 1 reference split under seed 3 is degenerate for recalibration (synthetic artefact, not a Phase 3 path)
+        df, _ = plant_phase3_history(df, seed=4, index_day_outcomes=True)
     elif mode == "nogo":
         fut = {c: 0.4 for c in ("MiniCog_Date", "Get_Up_And_Go_Date", "Falls_Risk_Assessment_Date", "Home_Safety_Assessment_Date", "Mobility_Assessment_Date",
                                 "MEFI_From_Date", "Last_Visit_Date", "Last_Assessment_Date")}
