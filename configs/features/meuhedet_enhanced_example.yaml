@@ -1,0 +1,68 @@
+# ILLUSTRATIVE PLACEHOLDER EXTENSION — NOT VALIDATED MEUHEDET DEFINITIONS.
+# These three features only exercise the extension/ablation machinery (spec §11, D-22 L3b additions) on the
+# SYNTHETIC fixture. Names, ranges and groups are placeholders chosen by software engineering; none has a source
+# table, code list or clinical approval. Any real Meuhedet predictor needs a mapping entry, clinical validation
+# and a differently named experiment before use (spec §11 mapping states).
+feature_set:
+  name: meuhedet_enhanced_example
+  version: 0.0.1
+  layer: L3b_meuhedet_predictor
+  status: ILLUSTRATIVE_PLACEHOLDER
+  clinically_validated: false
+features:
+- name: mini_cog_score
+  concept: 'PLACEHOLDER: most recent Mini-Cog screening score before index (0-5; lower = worse)'
+  role: predictor
+  dtype: float_nullable
+  layer: L3b_meuhedet_predictor
+  exact_efalls_baseline: false
+  clinically_validated: false
+  group: cognition
+  valid_range:
+    min: 0
+    max: 5
+  missing_rule: missing_category
+  reference_level: null
+  time_window:
+    type: complete_history
+    note: placeholder; timing must follow D-00 (record_date and available_date before index)
+  meuhedet_source:
+    mapping_status: TO_BE_MAPPED
+    source_class: assessment
+    clinically_validated: false
+- name: nurse_fall_risk_high
+  concept: 'PLACEHOLDER: nursing fall-risk assessment rated high before index'
+  role: predictor
+  dtype: binary
+  layer: L3b_meuhedet_predictor
+  exact_efalls_baseline: false
+  clinically_validated: false
+  group: nurse_assessment
+  missing_rule: absent_is_zero
+  reference_level: null
+  time_window:
+    window:
+      type: lookback_years
+      years: 1
+    note: placeholder window
+  meuhedet_source:
+    mapping_status: TO_BE_MAPPED
+    source_class: assessment
+    clinically_validated: false
+- name: uses_walking_aid
+  concept: 'PLACEHOLDER: walking aid recorded before index'
+  role: predictor
+  dtype: binary
+  layer: L3b_meuhedet_predictor
+  exact_efalls_baseline: false
+  clinically_validated: false
+  group: mobility
+  missing_rule: absent_is_zero
+  reference_level: null
+  time_window:
+    window:
+      type: complete_history
+  meuhedet_source:
+    mapping_status: TO_BE_MAPPED
+    source_class: assessment
+    clinically_validated: false

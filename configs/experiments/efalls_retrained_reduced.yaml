@@ -1,0 +1,179 @@
+# Meuhedet experiment template (spec v0.2). Dataset path is supplied at run time; dates follow the D-19 proposal and require sign-off.
+# REDUCED eFalls predictor set – NOT a full eFalls reproduction: use only when the data-availability audit shows that
+# some of the 78 eFalls candidates cannot be extracted; otherwise run efalls_retrained_lasso.yaml.
+experiment:
+  name: efalls_retrained_reduced
+  kind: efalls_retrained_reduced
+  description: 'Local retraining on a REDUCED eFalls predictor set (NOT a full eFalls
+    reproduction): published learning process (FP selection + LASSO logistic, 10-fold
+    CV lambda-min) fitted on the eFalls candidate predictors available in the data.'
+  layers:
+  - L1_published
+  - L2_assumption
+  - L3a_meuhedet_mapping
+dataset:
+  feature_spec: configs/features/efalls_v1.yaml
+  path: null
+  require_scientific_use: true
+model:
+  name: lasso_logistic_cv
+  params:
+    n_lambda: 100
+    selection: min
+preprocessing:
+  representation: efalls_fp_all_levels
+  # Declared AVAILABLE eFalls candidate predictors (66 of 78), listed explicitly (no "all except" syntax).
+  # ILLUSTRATIVE ONLY: every Meuhedet mapping in configs/mappings/meuhedet_v0.yaml is still TO_BE_MAPPED, so nobody yet
+  # knows which predictors a Meuhedet extraction can provide. The 12 predictors left out below are an example of
+  # what a first primary-care/claims extraction may plausibly lack; this list MUST be replaced by the result of the
+  # data-availability audit before any real run. Mandatory eFalls predictors (age_years, sex, polypharmacy_count_120d,
+  # falls, fracture, fragility_fracture, dementia) are kept available in this example.
+  # Illustrative unavailable predictors (NOT in the list):
+  #   bmi_value
+  #   smoking_status
+  #   alcohol_category
+  #   environment_problems
+  #   housebound
+  #   meal_preparation_problems
+  #   medication_management
+  #   problems_managing_finances
+  #   requirement_for_care
+  #   shopping_problems
+  #   social_vulnerability
+  #   washing_and_bathing
+  features:
+  - age_years
+  - sex
+  - polypharmacy_count_120d
+  - abdominal_pain
+  - activity_limitation
+  - anaemia_and_haematinic_deficiency
+  - anxiety
+  - asthma
+  - atrial_fibrillation
+  - back_pain
+  - bone_disease
+  - cancer
+  - chronic_kidney_disease
+  - cognitive_impairment
+  - copd
+  - dementia
+  - depression
+  - diabetes_mellitus
+  - dizziness
+  - dressing_and_grooming_problems
+  - dyspnoea
+  - faecal_incontinence
+  - falls
+  - fatigue
+  - foot_problems
+  - fracture
+  - fragility_fracture
+  - general_mental_health
+  - headache
+  - hearing_impairment
+  - heart_failure
+  - heart_valve_disease
+  - hypertension
+  - hypotension_or_syncope
+  - inflammatory_arthritis
+  - inflammatory_bowel_disease
+  - ischaemic_heart_disease
+  - liver_problems
+  - memory_concerns
+  - mobility_problems
+  - mono_or_hemiparesis
+  - motor_neurone_disease
+  - musculoskeletal_problems
+  - osteoarthritis
+  - osteoporosis
+  - palliative_care
+  - parkinsonism_and_tremor
+  - peptic_ulcer_disease
+  - peripheral_neuropathy
+  - peripheral_vascular_disease
+  - respiratory_disease
+  - seizures
+  - self_harm
+  - severe_mental_illness
+  - skin_ulcer
+  - sleep_problems
+  - stress
+  - stroke
+  - thyroid_problems
+  - toileting_problems
+  - transient_ischaemic_attack
+  - urinary_incontinence
+  - urinary_system_disease
+  - visual_impairment
+  - weakness
+  - weight_loss
+  fractional_polynomial:
+    mode: select
+    max_degree: 2
+    alpha: 0.05
+    max_cycles: 5
+    variables:
+    - age_years
+    - polypharmacy_count_120d
+validation:
+  strategy: temporal
+  seed: 42
+  cv_folds: 10
+  patients_disjoint: false
+  temporal:
+    train_end: '2018-12-31'
+    validation_end: '2019-12-31'
+    embargo_outcome_windows: true
+  limitation_note: ''
+calibration:
+  enabled: true
+  method: logistic_intercept_slope
+evaluation:
+  thresholds:
+  - 0.1
+  - 0.15
+  - 0.2
+  - 0.25
+  decision_curve_thresholds:
+  - 0.01
+  - 0.5
+  - 0.01
+  calibration_groups: 20
+  # bmi_category is not a subgroup here: bmi_value is unavailable in this (illustrative) reduced predictor set.
+  subgroups:
+  - sex
+  - age_band
+  bootstrap:
+    n: 1000
+    seed: 20240314
+    cluster_column: research_id
+  permutation_importance_repeats: 10
+analysis:
+  stability:
+    enabled: true
+    n_bootstrap: 200
+    selection_threshold: 0.8
+    sign_stability_threshold: 0.9
+  optimism:
+    enabled: true
+    n_bootstrap: 25
+  iecv:
+    enabled: false
+    cluster_column: deprivation_group
+reporting:
+  enabled: true
+  top_n_features: 10
+  eligibility:
+    min_auroc: 0.7
+    calibration_slope_range:
+    - 0.8
+    - 1.2
+    max_abs_citl: 0.2
+  risk_categories:
+    approved: false
+    cutpoints: []
+    labels: []
+    approval_reference: ''
+output:
+  runs_dir: runs

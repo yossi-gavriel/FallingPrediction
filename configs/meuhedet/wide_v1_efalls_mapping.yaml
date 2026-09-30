@@ -1,0 +1,432 @@
+# Meuhedet wide table -> eFalls canonical feature mapping manifest (Phase 1; spec §11, D-00, D-03, D-08, D-22).
+# Denominator: every predictor with exact_efalls_baseline: true in the feature spec below (78 in efalls_v1 1.0.0) -
+# the count is DERIVED from the spec at load time and never hard-coded here.
+# STATUS: PROPOSED by the ML orchestrator from the S2T/DDL only; NOT clinically validated; to be reviewed feature by feature
+# with the PI before any reportable run (spec §11 mapping states). No row-level data were used to write this file.
+#
+# Mapping quality (mapping_quality):
+#   EXACT           same concept, same operational definition, same window and representation (none possible: eFalls uses UK
+#                   primary-care code groups that Meuhedet does not carry)
+#   HIGH_CONFIDENCE same clinical concept; comparable population-wide operationalisation (e.g. a disease registry); differences
+#                   unlikely to change the meaning of the predictor
+#   APPROXIMATE     same construct but a materially different operationalisation (window, unit, ascertainment, subset)
+#   UNAVAILABLE     no population-wide pre-index source in the wide table (assessment-conditional nurse fields do NOT qualify:
+#                   NULL there means "not assessed", which the eFalls absent_is_zero rule cannot represent)
+# Inclusion rule (include_in_baseline): AVAILABLE/APPROXIMATE mappings whose source is population-wide, pre-index or at-index,
+# and whose Meuhedet construct is not already used by another eFalls predictor (no double counting).
+# Transformation ops implemented by falls_ml.data.meuhedet_wide:
+#   copy_numeric   numeric copy (NULL forbidden unless missing_rule says otherwise)
+#   recode         categorical code -> level; unknown codes fail the build
+#   any_positive   1 if any source column > 0 else 0; NULL is an error unless null_is_absent: true (explicit absent_is_zero)
+#   count          integer count; NULL -> 0 only when absent_indicator == 1 (explicit absent_is_zero, counted), otherwise error
+mapping:
+  name: meuhedet_wide_efalls
+  version: 1.0.1
+  layer: L3a_meuhedet_mapping
+  feature_spec: configs/features/efalls_v1.yaml
+  contract: configs/meuhedet/wide_v1_columns.yaml
+  status: PROPOSED - pending feature-by-feature review with the PI (not clinically validated; spec B-01/B-02)
+  clinically_validated: false
+  validated_by: null
+  validation_date: null
+identity:
+  research_id: Customer_Full_ID
+  index_date: Index_Date
+cohort:
+  filters:
+    Is_Eligible_Cohort: 1          # the only cohort filter (S2T); the index date is chosen per build (--index-date)
+  index_date_column: Index_Date
+  required_constant:
+    Definition_Version: V1.0
+    Leakage_Check_Ind: 0           # any 1 is a VIEW bug
+  # D-00: prediction happens at the START of the index day, so a predictor may use source records dated strictly before it
+  # (source_event_date < Index_Date; a record created on the index day is unavailable). The wide table has no per-row
+  # record-date bound, so the adapter derives predictor_max_record_date = max of the "last record" dates of the event sources
+  # behind the BASELINE predictors - each included feature that reads an event source declares it as record_date_column
+  # (falls -> Last_Fall_Date; mobility_problems diagnosis -> Last_Dx_Date; registries carry no last-record date) and the list
+  # below must equal exactly those columns. NaT-safe; rows with none get index_date - 1 day. Any date on/after the index date
+  # is a timing violation: the build FAILS (index_day_records: fail) unless it is set to drop_rows (rows removed and counted in
+  # the build report - never silent). The D-00 diagnostic (falls_ml.data.meuhedet_timing) classifies the cause and traces the
+  # affected predictors per feature set. Phase 2 must extend this list with the assessment dates of every nurse/MEFI predictor.
+  # Timing scopes (adapter timing_scope): 'cohort' (default; every build of the STRICT / EXTENDED comparison applies the guard columns
+  # below so both share one cohort) or 'built_predictors' (SAFE-ALL-ROWS sensitivity: the guard is the record_date_column and
+  # same_day_evidence_column of the predictors actually built, so rows whose only index-day record belongs to a source no built
+  # predictor reads are kept and counted as cohort_guard_rows_retained). Neither scope weakens the rule: a row is excluded exactly
+  # when the file proves that a built predictor's source holds a record dated on/after the index day.
+  prediction_time: START_OF_INDEX_DAY
+  predictor_record_rule: "source_event_date < Index_Date"
+  predictor_max_record_date:
+    columns: [Last_Fall_Date, Last_Dx_Date]
+    fallback: index_date_minus_1_day
+  index_day_records: fail
+  # Rows are never balanced, re-weighted or otherwise filtered (natural Meuhedet distribution).
+outcome:
+  # Meuhedet 180-day EXPLORATORY outcome - NOT the eFalls outcome (ED attendance or hospital admission with fall/fracture
+  # within 12 months). Used only to verify the engineering; see efalls_outcome_blockers.
+  canonical_name: fall_next_180d
+  feature_spec: configs/features/efalls_v1__outcome_fall_next_180d_exploratory.yaml   # generated: efalls_v1 predictors + this outcome
+  label_column: Fall_Next_180D_Ind
+  event_date_column: Next_Fall_Date_180D
+  window_end_column: Label_End_180D
+  label_reason_column: Label_Reason_180D
+  window_days_including_index: 181    # index day + 180 following days (Label_End_180D = Index_Date + 180 days); checked on the data
+  censored_rows: drop_and_count       # Fall_Next_180D_Ind NULL (= censored per S2T) cannot be trained on; counted by Label_Reason_180D
+  deaths: "as labelled by the VIEW (audit cross-tabulates Label_Reason_180D x Is_Deceased_Ind; eFalls keeps deaths as non-events, D-18)"
+  efalls_outcome_blockers:
+    - "No 365-day label: Fall_Next_365D_Ind / Label_End_365D / Has_Full_Followup_365D / Is_Censored_365D do not exist in V1.0"
+    - "Event definition not restricted to ED attendance or hospital admission (S2T: fall/fracture events from Meuhedet sources; M-08 encounter classification unknown)"
+    - "Fall/fracture code list of Definition_Version V1.0 not documented against the eFalls list (WHO ICD-10 W00-W19 + fracture codes; ICD-9-CM candidates in spec §11 M-02); the legacy Meuhedet list contains 719.7 (difficulty walking), E987 (undetermined intent) and 929.3 (late effect)"
+    - "Label maturity / claims lag for ED and admission sources unknown (Max_Invoice_Lag_365D is reported by the audit)"
+metadata:
+  death_date: Death_Censor_Date
+  followup_end_date: Followup_End_Date
+open_questions:
+  Q-M-01: "Registry_Heart_Disease_Ind: which diagnoses populate the heart-disease registry (IHD only? heart failure? valve disease? AF?)"
+  Q-M-02: "Siudi_Status: code values and meaning (nursing-care benefit levels?) - decides the requirement_for_care mapping"
+  Q-M-03: "Registry_SMI_Level: level definitions (1-4) and inclusion criteria (psychotic disorders only?)"
+  Q-M-04: "Registry_Blood_Pressure_Ind: confirm it is the hypertension registry (diagnosis-based), not a measurement flag"
+  Q-M-05: "Gender_Code: confirm 2 = female (audit cross-tab with Gender_Desc)"
+  Q-M-06: "Prior_Fall_*: the fall/fracture event list behind 'נפילות ושברים' and whether index-day events are included in the counts"
+  Q-M-07: "Distinct_Active_Substance_Count: exposure window definition ('active exposure' at index) and drug/non-drug exclusions"
+  Q-M-08: "Population_Record_To_Date: confirm 2999-12-31 is the open-ended SCD sentinel (contract sentinels) and that no other date column uses a sentinel"
+  Q-M-10: "D-00 timing: on the first real ~60k extract 4,168 rows carried Last_Dx_Date = Index_Date and 22 rows Last_Fall_Date = Index_Date.
+           The timing diagnostic (audit/timing_diagnostic.md) classifies the cause; if every offset is 0 days the VIEW's predictor windows use
+           Event_Date <= Index_Date and must use Event_Date < Index_Date (start-of-index-day prediction). Confirm the VIEW predicate with the DWH developer"
+  Q-M-11: "First_Registry_Date: confirm it is the earliest start date among the member's registry entries (all registries of the wide table).
+           The SAFE-ALL-ROWS sensitivity uses it as sufficient-only same-day evidence for the registry-backed predictors: a row whose first
+           registry entry is dated on/after the index day has every registry flag created on/after the index day and is excluded (counted);
+           a later entry on the index day in a member with an older registry is undetectable from the wide table (stated limitation)"
+  Q-M-09: "Followup_End_Date: confirm 2999-12-31 = open follow-up with no known end (OPEN_FOLLOWUP_NO_KNOWN_END), i.e. the same meaning as NULL, and
+           that Is_Censored_180D / Has_Full_Followup_180D stay the authoritative censoring flags; the audit lists every date column holding the
+           sentinel (datatype_audit.date_range) - none of the others is declared until its business meaning is confirmed"
+features:
+  # ---------------- non-binary eFalls terms ----------------
+  age_years:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Age_At_Index]
+    op: copy_numeric
+    raw_dtype: int
+    canonical_dtype: continuous
+    model_dtype: float64
+    missing_rule: forbid
+    transformation: "completed years at index copied as float (eFalls: decimal age; D-06)"
+    lookback_window: at_index
+    allowed_values: "65-120"
+    include_in_baseline: true
+    notes: "integer completed years lose < 1 year of precision vs decimal age; Birth_Date_Suspect_Ind = 1 rows (default birth date, 10.5%) stay in the primary cohort and are reported; sensitivity excludes them"
+  sex:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Gender_Code]
+    op: recode
+    codes: {1: male, 2: female}
+    raw_dtype: smallint
+    canonical_dtype: categorical
+    model_dtype: onehot_categorical
+    missing_rule: forbid
+    transformation: "1 -> male, 2 -> female; any other code fails the build; Gender_Desc consistency checked"
+    lookback_window: at_index
+    allowed_values: [1, 2]
+    include_in_baseline: true
+    notes: "Q-M-05"
+  polypharmacy_count_120d:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Distinct_Active_Substance_Count]
+    op: count
+    absent_indicator: Medication_Missing_Ind
+    raw_dtype: int (nullable)
+    canonical_dtype: count
+    model_dtype: float64 (fractional polynomial, D-13)
+    missing_rule: absent_is_zero
+    transformation: "count copied; NULL with Medication_Missing_Ind = 1 -> 0 (eFalls: no prescription recorded = 0), counted; NULL otherwise fails"
+    lookback_window: "active exposure at index (Meuhedet) vs 120 days before index (eFalls)"
+    allowed_values: ">= 0"
+    include_in_baseline: true
+    notes: "unit differs: distinct active substances (ATC) vs distinct BNF paragraphs (D-03, M-04); Polypharmacy_5Plus_Ind is NOT used (eFalls models the continuous count); Q-M-07"
+  bmi_value:
+    mapping_status: UNAVAILABLE
+    mapping_quality: UNAVAILABLE
+    source_columns: []
+    include_in_baseline: false
+    notes: "no height/weight/BMI in the wide table (M-06); Malnutrition_Grade is a different construct"
+  smoking_status:
+    mapping_status: UNAVAILABLE
+    mapping_quality: UNAVAILABLE
+    source_columns: []
+    include_in_baseline: false
+    notes: "no lifestyle fields (M-07)"
+  alcohol_category:
+    mapping_status: UNAVAILABLE
+    mapping_quality: UNAVAILABLE
+    source_columns: []
+    include_in_baseline: false
+    notes: "no lifestyle fields (M-07)"
+  # ---------------- binary eFalls candidates with a population-wide Meuhedet source ----------------
+  falls:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Prior_Fall_Since_Study_Start_Ind]
+    record_date_column: Last_Fall_Date      # event source behind this predictor (D-00 guard; timing diagnostic tracing)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Prior_Fall_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "1 if any fall/fracture event since 2022-01-01 else 0"
+    lookback_window: "since study start 2022-01-01 (3.0 years at index 2025-01-01) vs eFalls 5 years"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "MANDATORY predictor kept as APPROXIMATE: Meuhedet events are falls AND fractures (event list V1.0, Q-M-06), the window is shorter than 5 years and depends on the index date; Prior_Fall_Missing_Ind = 1 rows (no fall data at all) are counted"
+  dementia:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Dementia_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "dementia registry (diagnosis-based); MANDATORY predictor"
+  copd:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_COPD_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: ""
+  asthma:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Asthma_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history (age >= 18 rule irrelevant at 65+)"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: ""
+  diabetes_mellitus:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Diabetes_T1_Ind, Registry_Diabetes_T2_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "1 if type-1 OR type-2 diabetes registry"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "eFalls diabetes mellitus = any diabetes"
+  liver_problems:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Liver_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "liver-disease registry"
+  chronic_kidney_disease:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Registry_Chronic_Renal_Failure_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "eFalls CKD = code OR eGFR < 60 / abnormal ACR; the measurement rule is not applied, so prevalence will be lower than SAIL (23.8%); Registry_Kidneys_Ind is not merged in (unknown scope)"
+  hypertension:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Blood_Pressure_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "hypertension registry; the eFalls >= 3 elevated readings rule is not applied; Q-M-04"
+  housebound:
+    mapping_status: AVAILABLE
+    mapping_quality: HIGH_CONFIDENCE
+    source_columns: [Registry_Home_Confined_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "home-confined members registry"
+  severe_mental_illness:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Registry_SMI_Level]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: true
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int (nullable)
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "1 if Registry_SMI_Level >= 1; NULL (not in registry) -> 0 explicitly, counted"
+    lookback_window: "registry active at index vs eFalls complete history"
+    allowed_values: [0, 1, 2, 3, 4]
+    include_in_baseline: true
+    notes: "severity levels and inclusion criteria unconfirmed (Q-M-03)"
+  self_harm:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Registry_Suicide_Attempt_Ind]
+    same_day_evidence_column: First_Registry_Date   # registry source: sufficient-only same-day evidence (Q-M-11; SAFE-ALL-ROWS timing scope)
+    op: any_positive
+    null_is_absent: false
+    absent_indicator: Registry_Missing_Ind
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "registry flag copied"
+    lookback_window: "registry (lifetime) vs eFalls 5 years"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "suicide attempts are a subset of self-harm; low support expected (SAIL 0.2%)"
+  mobility_problems:
+    mapping_status: AVAILABLE
+    mapping_quality: APPROXIMATE
+    source_columns: [Gait_Disorder_Since_Study_Start_Ind]
+    record_date_column: Last_Dx_Date        # diagnosis source behind this predictor (D-00 guard; timing diagnostic tracing)
+    op: any_positive
+    null_is_absent: false
+    raw_dtype: int
+    canonical_dtype: binary
+    model_dtype: int8_binary
+    missing_rule: absent_is_zero
+    transformation: "diagnosis flag copied"
+    lookback_window: "since study start 2022-01-01 (3.0 years at index 2025-01-01) vs eFalls complete history"
+    allowed_values: [0, 1]
+    include_in_baseline: true
+    notes: "single ICD-9 code 719.7 (difficulty in walking) vs the eFalls mobility/transfer code group; nurse Mobility_Score / Uses_Walking_Aid_Ind are Phase-2 candidates (assessment-conditional)"
+  # ---------------- eFalls candidates UNAVAILABLE for the baseline ----------------
+  # (a) assessment-conditional nurse fields exist (Phase-2 candidates; NULL = not assessed, so absent_is_zero is invalid)
+  cognitive_impairment: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Cognitive_Impairment_Nurse_Ind, MiniCog_Score], notes: "nurse-assessed only; no population-wide code source"}
+  memory_concerns: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [MiniCog_Score], notes: "no coded memory-concern source"}
+  visual_impairment: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Vision_Impairment_Nurse_Ind, Vision_Score, Missing_Sensory_Aids_Ind], notes: "nurse-assessed only"}
+  hearing_impairment: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Hearing_Score, Missing_Sensory_Aids_Ind], notes: "nurse-assessed only"}
+  weakness: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Muscle_Weakness_Ind], notes: "nurse-assessed only"}
+  dizziness: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Instability_Dizziness_Ind], notes: "nurse-assessed only"}
+  hypotension_or_syncope: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Orthostatic_Hypotension_Ind, Orthostatic_BP_Measured_Ind], notes: "nurse-assessed only; no BP readings"}
+  activity_limitation: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [ADL_Worst_Domain_Score, Transfer_Dependency_Score], notes: "nurse ADL scores only (no Barthel)"}
+  dressing_and_grooming_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [ADL_Worst_Domain_Score], notes: "ADL domains are not exposed separately"}
+  washing_and_bathing: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [ADL_Worst_Domain_Score], notes: "ADL domains are not exposed separately"}
+  toileting_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [ADL_Worst_Domain_Score], notes: "ADL domains are not exposed separately"}
+  meal_preparation_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no IADL source"}
+  shopping_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no IADL source"}
+  problems_managing_finances: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no IADL source"}
+  medication_management: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [On_Medications_Nurse_Ind, Prescription_Fill_Ratio_365D], notes: "no 'unable to manage medications' source (adherence ratio is a different construct)"}
+  requirement_for_care: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Siudi_Status, No_Primary_Caregiver_Ind], notes: "Siudi_Status (nursing-care benefit) is a plausible population-wide source once its codes are known (Q-M-02); switch to APPROXIMATE after the audit"}
+  environment_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Unsafe_Environment_Ind, Home_Safety_Risk_Count], notes: "nurse-assessed only"}
+  social_vulnerability: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [No_Primary_Caregiver_Ind, Income_Support], notes: "widowed/bereavement/loneliness codes not available; Income_Support is socio-economic, not the eFalls construct"}
+  # (b) no source at all (diagnosis counts are aggregate; no condition-level codes in the wide table)
+  urinary_system_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Registry_Kidneys_Ind], notes: "Registry_Kidneys_Ind covers only the renal part and would double count chronic_kidney_disease"}
+  ischaemic_heart_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Registry_Heart_Disease_Ind], notes: "Q-M-01: one heart-disease registry cannot be assigned to a single eFalls cardiac concept"}
+  heart_failure: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Registry_Heart_Disease_Ind], notes: "Q-M-01"}
+  heart_valve_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Registry_Heart_Disease_Ind], notes: "Q-M-01"}
+  atrial_fibrillation: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Registry_Heart_Disease_Ind], notes: "Q-M-01"}
+  fracture: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Prior_Fall_Count_365D], notes: "MANDATORY eFalls predictor: fractures are merged into the fall/fracture event counts and cannot be separated (Q-M-06)"}
+  fragility_fracture: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "MANDATORY eFalls predictor: no fracture-site/fragility information"}
+  abdominal_pain: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  anaemia_and_haematinic_deficiency: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source; no Hb"}
+  anxiety: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  back_pain: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  bone_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  cancer: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no cancer registry in the wide table"}
+  depression: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source (SMI registry is a different construct)"}
+  dyspnoea: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  faecal_incontinence: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  fatigue: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  foot_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  general_mental_health: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  headache: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  inflammatory_arthritis: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  inflammatory_bowel_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  mono_or_hemiparesis: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  motor_neurone_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  musculoskeletal_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  osteoarthritis: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  osteoporosis: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source; no DEXA"}
+  palliative_care: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  parkinsonism_and_tremor: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  peptic_ulcer_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  peripheral_neuropathy: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  peripheral_vascular_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source; no ABPI"}
+  respiratory_disease: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source (asthma/COPD registries are the split concepts)"}
+  seizures: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  skin_ulcer: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  sleep_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  stress: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  stroke: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  thyroid_problems: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source; no TSH"}
+  transient_ischaemic_attack: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  urinary_incontinence: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, notes: "no condition-level source"}
+  weight_loss: {mapping_status: UNAVAILABLE, mapping_quality: UNAVAILABLE, source_columns: [], include_in_baseline: false, phase2_candidate: [Malnutrition_Grade], notes: "Malnutrition_Grade is a related but different construct"}

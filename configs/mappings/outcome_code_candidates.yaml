@@ -1,0 +1,128 @@
+# OUTCOME CODE CANDIDATE LIST (spec §11 M-02, D-09) — UNVALIDATED.
+# Every entry below is an UNVALIDATED CANDIDATE mapping of the eFalls WHO ICD-10 outcome list to ICD-9-CM.
+# None has clinical sign-off; no reportable scientific run may rely on this file until each entry is
+# clinically validated (mapping states, spec §11). Edit only via reviewed change (spec §16).
+#
+# Semantics used by falls_ml.dataeng.derive (D-09):
+#   - codes are normalised by removing '.' and upper-casing; each listed code or range expands to
+#     prefixes that match the code and all of its sub-codes (e.g. '820-821' matches 820.x and 821.x);
+#   - the LONGEST matching prefix decides the status (e.g. E886.9 REVIEW overrides E880-E886 CANDIDATE);
+#   - only status CANDIDATE counts towards the outcome; REVIEW and EXCLUDE codes are tabulated in the
+#     pre-modelling audit but never counted;
+#   - ICD-9-CM codes are matched only on records declared code_system ICD-9-CM, so undotted E88x never
+#     collides with ICD-10 E88.x and E880-E887 never collide with ICD-9 880-887 (open wounds) (M-02).
+code_list:
+  name: outcome_code_candidates
+  version: 0.1.0
+  code_system: ICD-9-CM
+  status: UNVALIDATED_CANDIDATE
+  clinically_validated: false
+  validated_by: null
+  validation_date: null
+  specification: docs/EFALLS_REPRODUCTION_SPEC.md §11 (M-02), §9.9 (D-09)
+icd9cm:
+# ---------------------------------------------------------------- CANDIDATE (counted; unvalidated)
+- codes: E880-E886
+  efalls_code: W00-W19
+  kind: fall
+  status: CANDIDATE
+  note: accidental falls, all sub-codes (E886.9 is REVIEW, below)
+- codes: E888
+  efalls_code: W00-W19
+  kind: fall
+  status: CANDIDATE
+  note: other and unspecified fall, all sub-codes
+- codes: 805.2-805.3
+  efalls_code: S22
+  kind: fracture
+  status: CANDIDATE
+- codes: 807.0-807.4
+  efalls_code: S22
+  kind: fracture
+  status: CANDIDATE
+- codes: 809.0-809.1
+  efalls_code: S22
+  kind: fracture
+  status: CANDIDATE
+- codes: 805.4-805.7
+  efalls_code: S32
+  kind: fracture
+  status: CANDIDATE
+- codes: '808'
+  efalls_code: S32
+  kind: fracture
+  status: CANDIDATE
+- codes: 810-812
+  efalls_code: S42
+  kind: fracture
+  status: CANDIDATE
+- codes: '813'
+  efalls_code: S52
+  kind: fracture
+  status: CANDIDATE
+- codes: 820-821
+  efalls_code: S72
+  kind: fracture
+  status: CANDIDATE
+- codes: 822-824
+  efalls_code: S82
+  kind: fracture
+  status: CANDIDATE
+- codes: 805.8-805.9
+  efalls_code: T08
+  kind: fracture
+  status: CANDIDATE
+- codes: '827'
+  efalls_code: T12
+  kind: fracture
+  status: CANDIDATE
+- codes: '829'
+  efalls_code: T14.2
+  kind: fracture
+  status: CANDIDATE
+# ---------------------------------------------------------------- REVIEW (not counted until clinical review)
+- codes: '733.1'
+  efalls_code: M80
+  kind: fracture
+  status: REVIEW
+  note: 733.1x counts only with a co-coded 733.0x (733.1 alone is any pathological fracture)
+- codes: '806'
+  efalls_code: S22/S32/T08
+  kind: fracture
+  status: REVIEW
+  note: fracture with spinal cord injury
+- codes: '818'
+  efalls_code: T10
+  kind: fracture
+  status: REVIEW
+  note: GEM maps 818.x to wrist/hand S62.90
+- codes: E886.9
+  efalls_code: W00-W19
+  kind: fall
+  status: REVIEW
+# ---------------------------------------------------------------- EXCLUDE (never counted)
+- codes: E887
+  efalls_code: none
+  kind: other
+  status: EXCLUDE
+  note: fracture, cause unspecified (WHO analogue X59.0 is not in eFalls)
+- codes: E957
+  efalls_code: none
+  kind: other
+  status: EXCLUDE
+  note: intent code (self-inflicted fall)
+- codes: E968.1
+  efalls_code: none
+  kind: other
+  status: EXCLUDE
+  note: intent code (assault, pushing from a high place)
+- codes: E987
+  efalls_code: none
+  kind: other
+  status: EXCLUDE
+  note: intent code (undetermined intent)
+- codes: E929.3
+  efalls_code: none
+  kind: other
+  status: EXCLUDE
+  note: late effect of accidental fall

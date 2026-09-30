@@ -1,0 +1,117 @@
+# Meuhedet Phase 1 - "Meuhedet 180-day exploratory - NOT eFalls reproduction".
+# Reduced eFalls-compatible predictor set (the include_in_baseline features of configs/meuhedet/wide_v1_efalls_mapping.yaml)
+# with the published learning process (FP selection + LASSO logistic, 10-fold CV lambda-min) on the wide table's 180-day label.
+# The dataset is written by `falls_ml meuhedet-build` (one index date, Is_Eligible_Cohort = 1); pass its directory with --dataset.
+# preprocessing.features MUST equal the mapping manifest's baseline list (tests/unit/test_meuhedet_wide.py enforces it).
+experiment:
+  name: meuhedet_180d_exploratory_efalls_reduced
+  kind: efalls_retrained_reduced
+  description: 'Meuhedet 180-day EXPLORATORY run - NOT an eFalls reproduction: outcome = any fall/fracture event within 180 days
+    (Fall_Next_180D_Ind, not the eFalls 12-month ED/admission outcome); predictors = the reduced eFalls-compatible subset
+    mappable from V_Falls_Prediction_Wide_1 (15 of 78; falls APPROXIMATE, fracture and fragility_fracture unavailable);
+    published learning process (FP2 selection + LASSO logistic, 10-fold CV lambda-min).'
+  layers:
+  - L1_published
+  - L2_assumption
+  - L3a_meuhedet_mapping
+dataset:
+  feature_spec: configs/features/efalls_v1__outcome_fall_next_180d_exploratory.yaml
+  path: null
+  require_scientific_use: true
+model:
+  name: lasso_logistic_cv
+  params:
+    n_lambda: 100
+    selection: min
+preprocessing:
+  representation: efalls_fp_all_levels
+  # = configs/meuhedet/wide_v1_efalls_mapping.yaml include_in_baseline (spec order)
+  features:
+  - age_years
+  - sex
+  - polypharmacy_count_120d
+  - asthma
+  - chronic_kidney_disease
+  - copd
+  - dementia
+  - diabetes_mellitus
+  - falls
+  - housebound
+  - hypertension
+  - liver_problems
+  - mobility_problems
+  - self_harm
+  - severe_mental_illness
+  fractional_polynomial:
+    mode: select
+    max_degree: 2
+    alpha: 0.05
+    max_cycles: 5
+    variables:
+    - age_years
+    - polypharmacy_count_120d
+validation:
+  # One index date => no temporal split is possible; every patient appears once, so a patient-grouped random split is exact.
+  strategy: patient_grouped_random
+  seed: 42
+  cv_folds: 10
+  patients_disjoint: true
+  patient_grouped_random:
+    validation_fraction: 0.2
+    test_fraction: 0.2
+    stratify_outcome: true
+  limitation_note: 'Single index-date cohort (one snapshot per patient): a temporal validation design (D-19) is not possible; the
+    patient-grouped random split is the cleanest valid design for this first run. Temporal validation across snapshots is a later
+    step and must prevent patient overlap between partitions.'
+  # Set from the audit (Max_Invoice_Lag_365D upper quantiles) before a reportable run; 0 assumes labels are complete at the freeze date.
+  outcome_lag_days: 0
+calibration:
+  enabled: true
+  method: logistic_intercept_slope
+evaluation:
+  thresholds:
+  - 0.05
+  - 0.1
+  - 0.15
+  - 0.2
+  decision_curve_thresholds:
+  - 0.01
+  - 0.5
+  - 0.01
+  calibration_groups: 20
+  subgroups:
+  - sex
+  - age_band
+  bootstrap:
+    n: 1000
+    seed: 20240314
+    cluster_column: research_id
+  permutation_importance_repeats: 10
+analysis:
+  stability:
+    enabled: true
+    n_bootstrap: 200
+    selection_threshold: 0.8
+    sign_stability_threshold: 0.9
+  optimism:
+    enabled: true
+    n_bootstrap: 25
+  iecv:
+    enabled: false
+    cluster_column: deprivation_group
+reporting:
+  enabled: true
+  top_n_features: 15
+  eligibility:
+    min_auroc: 0.7
+    calibration_slope_range:
+    - 0.8
+    - 1.2
+    max_abs_citl: 0.2
+  risk_categories:
+    approved: false
+    cutpoints: []
+    labels: []
+    approval_reference: ''
+output:
+  runs_dir: runs

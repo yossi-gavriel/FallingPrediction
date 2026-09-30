@@ -1,0 +1,83 @@
+# Template used by `falls_ml meuhedet-explore` for the two exploratory runs (STRICT = HIGH_CONFIDENCE mappings only,
+# EXTENDED = HIGH_CONFIDENCE + APPROXIMATE). The command fills experiment.name/description, preprocessing.features and the
+# fractional-polynomial variables from configs/meuhedet/wide_v1_efalls_mapping.yaml at run time and writes the concrete configs
+# next to the results. Kind efalls_retrained_reduced = published learning process on a declared eFalls subset; the outcome is the
+# Meuhedet 180-day EXPLORATORY label (NOT eFalls reproduction). require_scientific_use is false on purpose: this is an exploratory
+# run on unvalidated mappings; the report says so.
+experiment:
+  name: MEUHEDET_EFALLS_EXPLORATORY_TEMPLATE
+  kind: efalls_retrained_reduced
+  description: 'filled by meuhedet-explore'
+  layers:
+  - L1_published
+  - L2_assumption
+  - L3a_meuhedet_mapping
+dataset:
+  feature_spec: configs/features/efalls_v1__outcome_fall_next_180d_exploratory.yaml
+  path: null
+  require_scientific_use: false
+model:
+  name: lasso_logistic_cv
+  params:
+    n_lambda: 100
+    selection: min
+preprocessing:
+  representation: efalls_fp_all_levels
+  features: [age_years]           # replaced per feature set
+  fractional_polynomial:
+    mode: select
+    max_degree: 2
+    alpha: 0.05
+    max_cycles: 5
+    variables: [age_years]          # replaced per feature set: every FP-transformed eFalls predictor (spec) in the set
+validation:
+  strategy: patient_grouped_random
+  seed: 42
+  cv_folds: 10
+  patients_disjoint: true
+  patient_grouped_random:
+    validation_fraction: 0.2
+    test_fraction: 0.2
+    stratify_outcome: true
+  limitation_note: 'Single index-date cohort (one row per patient): no temporal validation design is possible; patient-grouped
+    random split, stratified by outcome, seed 42; the STRICT and EXTENDED runs share identical test rows (verified by hash).'
+  outcome_lag_days: 0
+calibration:
+  enabled: true
+  method: logistic_intercept_slope
+evaluation:
+  thresholds: [0.05, 0.1, 0.15, 0.2]
+  decision_curve_thresholds: [0.01, 0.5, 0.01]
+  calibration_groups: 20
+  subgroups: [sex, age_band]
+  bootstrap:
+    n: 1000                      # --fast: 200
+    seed: 20240314
+    cluster_column: research_id
+  permutation_importance_repeats: 10   # --fast: 5
+analysis:
+  stability:
+    enabled: true
+    n_bootstrap: 200             # --fast: 50
+    selection_threshold: 0.8
+    sign_stability_threshold: 0.9
+  optimism:
+    enabled: true
+    n_bootstrap: 25              # --fast: 10
+  iecv:
+    enabled: false
+    cluster_column: deprivation_group
+reporting:
+  enabled: true
+  top_n_features: 15
+  eligibility:
+    min_auroc: 0.7
+    calibration_slope_range: [0.8, 1.2]
+    max_abs_citl: 0.2
+  risk_categories:
+    approved: false
+    cutpoints: []
+    labels: []
+    approval_reference: ''
+output:
+  runs_dir: runs

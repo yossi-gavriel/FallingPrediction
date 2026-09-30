@@ -1,0 +1,358 @@
+OpenAI Codex v0.153.4
+--------
+workdir: /private/tmp/claude-501/-Users-yosefhaimgavriel-dev-Falling-prediction/47c74cd1-360e-461f-870a-c8e0dae93f48/scratchpad/astra_ws
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: high
+reasoning summaries: none
+session id: 01a0e9de-f2b0-7e73-ac23-d3916dfdf361
+--------
+user
+Answer from the briefing text only. Do not run any commands or read any files; there is nothing to inspect.
+
+# Briefing for a senior clinical-prediction methodologist: Phase 2 of an elderly-falls prediction model (Meuhedet, Israel)
+
+You are asked for a critical methodological review of a proposed analysis plan. You have no data and no code. Please answer the
+8 questions at the end concisely (numbered answers, concrete recommendations, explicit "change X to Y" where you disagree). Please do
+not repeat the brief back. Aim for at most ~1,800 words.
+
+## 1. Scientific question
+
+Which additional predictors available in the HMO's research data warehouse add genuine, incremental predictive value for a fall within
+180 days in adults aged ≥ 65, beyond an existing 15-predictor model? Does a different model family (elastic net, XGBoost) outperform
+the LASSO logistic model meaningfully? The output is a recommendation of ONE feature set + model to advance to a new temporal holdout. This
+phase is not the final performance claim.
+
+## 2. Cohort, outcome, current baseline
+
+- One wide snapshot table: one row per member at Index_Date 2025-01-01, 221 columns (aggregates of source systems up to the index date).
+- Modelling cohort: 60,851 members (age ≥ 65), 1,282 events (2.11%), outcome = any recorded fall/fracture event in the index day + 180
+  days (exploratory label; deaths are non-events as labelled by the warehouse; censored rows excluded).
+- Existing split (made once, before this phase): patient-grouped random, outcome-stratified, 60/20/20 → TRAIN ≈ 36.5k rows / ≈ 769
+  events, VALIDATION ≈ 12.2k / ≈ 256 events, TEST ≈ 12.2k / ≈ 256 events.
+- **The TEST partition has been looked at repeatedly in earlier work. It will not be loaded in Phase 2 at all.** A genuinely new claim will
+  require a new holdout, preferably temporal (a later snapshot with a complete 180-day label).
+- Baseline "EXTENDED-15": age (fractional polynomial), sex, polypharmacy count (FP), prior fall/fracture since 2022 (binary), gait
+  disorder diagnosis, and 10 disease-registry flags (dementia, COPD, asthma, diabetes, liver, CKD, hypertension, housebound, severe
+  mental illness, suicide attempt). LASSO logistic, 10-fold grouped CV, λ_min, then unpenalised refit on the selected columns (the eFalls
+  method); logistic recalibration (intercept + slope) fitted on VALIDATION.
+- Baseline TEST performance: AUROC ≈ 0.814, PR-AUC ≈ 0.197, Brier ≈ 0.018. Top 10% of predicted risk captures ≈ 55% of falls.
+  Ablations: prior falls carry much of the gain over demographics; removing gait disorder alone changes AUROC very little.
+
+## 3. Prediction-time rule and leakage facts (non-negotiable)
+
+- Prediction happens at the start of the index day: a predictor may use only source records dated strictly before Index_Date.
+- The warehouse view was found to aggregate some sources with Event_Date ≤ Index_Date (4,168 rows had a diagnosis dated on the index day,
+  22 a fall). Those rows were removed to form the current cohort. The source cannot be fixed now.
+- Each source has one of: a complete record-date column (last fall, last diagnosis, last visit, each nurse form's assessment date, MEFI
+  frailty assessment date); a first-entry date only (registries: proves an index-day entry but cannot exclude one); or no record date
+  (medications, labs, Charlson group, benefit statuses). A feature is SAFE if its record date is proven < Index_Date on every row,
+  UNSAFE if proven ≥ Index_Date on any row, UNRESOLVED otherwise. **The current baseline already contains UNRESOLVED features** (registry
+  flags; polypharmacy).
+- Twelve columns are forbidden: billing-lag external-care counts, hospitalisations without an as-of date, "new registry" counters, an
+  index-day-fall flag, fairness-audit fields.
+
+## 4. Candidate information (≈ 90 raw value columns + ≈ 60–90 engineered features)
+
+- **Nurse fall-risk assessment forms** (≈ 23 items: dizziness, fear of falling, balance/shuffling/hesitant gait, walking aid, muscle
+  weakness, orthostatic hypotension, vision, sensory aids, "no primary caregiver", nurse-reported prior falls, overall risk score). These are
+  **assessment-conditional**: NULL = not assessed (probably the majority), 0 = assessed negative. The decision to assess is clinical
+  (selection by suspicion).
+- **Function/mobility (nurse)**: ADL worst-domain score, transfer dependency, mobility score, vision and hearing scores; Get-Up-And-Go
+  date only (no score).
+- **Cognition**: Mini-Cog score and date, nurse "cognitive impairment" item (MMSE empty).
+- **Home safety questionnaire**: unsafe environment, footwear, bed/chair height, risk count, fall at home, vitamin D, slow rising.
+- **MEFI frailty** (HMO frailty index): group 1–4, assessed flag, days since assessment, previous group, worsened flag, not-assessed flag.
+- **Prior falls, finer**: counts in 30/90/180/365 days and since 2022; days since last fall.
+- **Utilisation**: visit counts 30/90/180/365 d, days since last visit; diagnosis counts; distinct/chronic diagnoses; lab referrals/performed;
+  prescriptions written/purchased/fill ratio; external care already billed at index; HMO seniority.
+- **Medication**: polypharmacy ≥ 5 / ≥ 10, narcotic drug count, prescribed-not-collected, bought outside the HMO, total DDD. No drug
+  classes (fall-risk-increasing drug groups cannot be built), no dispensing dates.
+- **Additional comorbidity/social**: heart-disease, kidney, transplant and stoma registries, registry counts and durations, Charlson group,
+  malnutrition grade, income support; Siudi (nursing-care benefit) status and a "customer risk code" have undocumented codes.
+
+## 5. Proposed design (my draft; please critique)
+
+**Partitions.** TRAIN for everything data-driven: screening, engineering parameters, all model fitting and all hyper-parameter tuning
+(grouped K-fold CV inside TRAIN). VALIDATION only for comparing a **pre-declared, logged list** of promoted configurations (≈ 30–40
+model × feature-set combinations). TEST never loaded. I would also report TRAIN out-of-fold (grouped 10-fold) estimates as a second,
+lower-variance view to damp the winner's curse on a 256-event validation set.
+
+**Feature funnel.**
+1. Registry of all 221 columns with an explicit disposition (SAFE/UNSAFE/UNRESOLVED; eFalls-mappable vs native; metadata; forbidden).
+2. Engineering from eligible columns: recency, window counts, latest score, abnormal flags (e.g. Mini-Cog < 3), assessed indicators.
+   "Not measured ≠ negative": binaries become three states (positive / negative / not assessed); one "form assessed" indicator per form.
+3. TRAIN-only screening: N observed, missingness, distribution, outcome rate, prevalence ratio, SMD, univariate AUROC, correlation,
+   sparse/separation flags. **No feature is removed for weak univariate association**; removal only for quality (constant, near-empty) or
+   redundancy (|Spearman| ≥ 0.9 → keep one representative by a pre-declared rule).
+4. Feature sets: BASELINE_15; EFALLS_MAPPABLE_ALL; MEUHEDET_NATIVE_SAFE; ALL_REVIEWED_SAFE; BASELINE_15 + one domain at a time
+   (cognition, frailty, medication, function/mobility, utilisation, home/environment, social/support, additional comorbidity); and a
+   cumulative waterfall in a **pre-declared order** (BASELINE_15 → +cognition → +medication → +frailty → +function → +other native →
+   ALL_SAFE → best linear → best XGBoost).
+5. Models: LASSO (existing pipeline) per set; elastic net with l1_ratio ∈ {0.1, 0.5, 0.9} on ≤ 2 promoted sets (λ by CV in TRAIN,
+   l1_ratio chosen by TRAIN CV deviance); XGBoost: stage 0 defaults + early stopping; stage 1 = 12–15 Optuna TPE trials (max_depth,
+   min_child_weight, learning_rate, subsample, colsample_bytree, gamma, reg_alpha, reg_lambda; estimator ceiling 5,000 with early
+   stopping), objective = mean grouped 5-fold CV PR-AUC inside TRAIN; stage 2 ≤ 8 local trials only if stage 1 beats the best linear
+   model's CV PR-AUC by a pre-declared margin. No class weighting (to keep probabilities interpretable). Then refit on all TRAIN with the
+   CV-averaged number of trees and score VALIDATION once.
+6. Finalists: 25-replicate bootstrap selection stability (LASSO); individual ablation only for the top 10–15 new features; XGBoost
+   permutation importance and TreeSHAP only for the promoted model; a consensus table (univariate, LASSO selection/stability, elastic
+   net, SHAP rank, permutation, incremental validation gain, ablation effect).
+
+**Metrics on VALIDATION (no recalibration on validation; raw TRAIN-fitted probabilities).** Primary: PR-AUC (average precision). Secondary:
+AUROC. Probability quality: Brier, calibration intercept and slope, calibration plot. Operational: at capacity 1/3/5/10/20% of the
+population → N flagged, TP, FP, FN, TN, sensitivity, PPV, NPV, lift, false alerts. Management framing: "if we can intervene on X% of the
+population, how many falls do we capture?". Paired patient-cluster bootstrap (2,000 reps) for every Δ vs BASELINE_15.
+
+**Stop gates.** Leakage; unresolved timing for a feature about to be used; split overlap; input hash change; implausible gains (e.g. a
+single new feature with TRAIN univariate AUROC ≥ 0.80, or validation AUROC gain > 0.05 over BASELINE_15, or PR-AUC ratio > 1.5); implausible
+calibration (validation slope outside 0.6–1.5 or |intercept| > 0.5); a proxy feature dominating importance; > 10% model-fitting failures.
+
+**Compute.** CPU only; LASSO CV fit ≈ 5–40 s per set here (≈ 2 min worst case on the target PC); the whole plan ≈ one night.
+
+## 6. Open methodological decisions (my current leaning in brackets)
+
+a. Validation partition only (≈ 256 events) vs adding TRAIN out-of-fold estimates [report both; decide on validation, require OOF
+   agreement in direction].
+b. PR-AUC as primary [yes, with paired CIs], or a proper scoring rule (log loss) as primary with PR-AUC secondary?
+c. Nurse, MEFI, assessment-conditional data: use three-state encoding and "assessed" indicators [yes], accepting that the model partly
+   learns the care process? Should "assessed" indicators be excluded from a "clinical content only" sensitivity set?
+d. Features that are UNRESOLVED (no record date; the same evidence level as baseline registries/polypharmacy) [admit under a clearly
+   labelled SAFE_OR_UNRESOLVED standard, plus a SAFE-only sensitivity set].
+e. A new source proven UNSAFE on some rows (e.g. a nurse assessment dated on the index day): exclude the feature everywhere, or
+   pre-declare ONE Phase 2 cohort that removes the proven rows for every source used (and refit BASELINE_15 on it)? [exclude the feature
+   if > 1% of rows are affected; otherwise the single fixed cohort].
+f. LASSO: keep the baseline's post-selection unpenalised refit for the expanded sets, or use penalised λ_min predictions? [keep the
+   baseline method for BASELINE_15 reproducibility, report penalised as a sensitivity].
+g. Decision rule for "genuine incremental value" of a domain/feature with ≈ 256 validation events [ΔPR-AUC 95% CI lower bound > 0, or
+   ΔPR-AUC ≥ +0.01 with bootstrap P(Δ > 0) ≥ 0.90 and a TRAIN-OOF Δ in the same direction?].
+h. Ordering sensitivity of the cumulative waterfall [report the one-domain-at-a-time and leave-one-domain-out tables next to it].
+
+## 7. Questions (please answer each)
+
+1. Is the discovery/validation design statistically sound? What is the single most important change?
+2. Is PR-AUC a reasonable primary discovery metric at ≈ 2.1% prevalence and ≈ 256 validation events? If not, what should be primary?
+3. How should AUROC, calibration (intercept/slope), Brier and capacity-based capture be used alongside it (decision hierarchy)?
+4. What minimal XGBoost tuning is appropriate here (search space ranges, trials, early-stopping design, class weighting, monotone
+   constraints?), and how to compare it fairly with the LASSO/elastic-net family?
+5. What are the biggest leakage and selection-bias risks in this specific setting (nurse assessments, utilisation, fall/fracture counts,
+   care-process signals), and what concrete guard would you add?
+6. How should incremental feature value be tested (domain increments, individual ablation, paired bootstrap, decision rule for decisions
+   (a)–(h))?
+7. What would be required before claiming temporal or generalisable performance (holdout design, prevalence shift, recalibration,
+   what must be frozen)?
+8. Which parts of the proposed plan should be changed, dropped or added? Please rank the top 5 changes by impact on validity.
+
+codex
+I’ll keep this to the briefing and focus on the changes that most affect a credible advancement decision.
+codex
+1. **The design is suitable for discovery, but its validation results will remain selection-dependent.** The single most important statistical change is: **change 30–40 validation comparisons to TRAIN-based selection followed by one comparison of a small, frozen shortlist**, ideally baseline plus 2–3 challengers.
+
+   Use nested, grouped CV within TRAIN: outer folds estimate performance; inner folds perform tuning, feature selection, fractional-polynomial selection, imputation, scaling, and any data-dependent redundancy filtering. Ordinary OOF predictions are optimistic if the same folds selected the configuration being evaluated.
+
+   Report outer-OOF and validation results, but do not claim that their agreement removes the winner’s curse or that OOF necessarily has lower variance. VALIDATION has already supported baseline recalibration; treat it as a reused development resource. Refit the baseline under the same evaluation protocol as challengers, with no validation-fitted recalibration. Keeping TEST closed is appropriate.
+
+2. **Average precision is a reasonable primary discovery metric for this capacity-oriented task.** Low prevalence does not invalidate it; approximately 256 validation events make small differences uncertain, especially after model selection.
+
+   Change “PR-AUC” to **“average precision, with the implementation fixed”** throughout: trapezoidal PR area and average precision are not interchangeable. Report absolute differences, paired intervals, and evaluation-set prevalence.
+
+   Add log loss as a proper scoring rule and use probability quality as an advancement safeguard. If the intended product instead requires accurate absolute probabilities across many decision thresholds, log loss would be a stronger primary choice. Given the stated capture-at-capacity objective, retaining average precision is defensible.
+
+   Predeclare one principal operational capacity. A gain in overall average precision can coexist with worse capture at the capacity the HMO can actually serve.
+
+3. **Use an explicit decision hierarchy:**
+
+   - **Eligibility:** prediction-time validity, usable coding, and an acceptable endpoint/cohort definition.
+   - **Primary ranking:** average-precision improvement versus the freshly fitted baseline.
+   - **Operational relevance:** capture and PPV at the principal capacity, with paired uncertainty; other capacities are secondary.
+   - **Probability quality:** log loss, Brier, and calibration, assessed against predefined tolerances.
+   - **Supporting discrimination:** AUROC; then prefer the simpler, more reliably available configuration when gains are uncertain.
+
+   Report Brier against a constant-risk reference and the baseline: low prevalence makes a small absolute Brier score insufficient evidence of usefulness.
+
+   Distinguish calibration-in-the-large, estimated with prediction slope fixed at 1, from the intercept in a jointly estimated intercept/slope calibration model. Include uncertainty and a calibration curve with uncertainty or event counts.
+
+   **Change calibration cutoffs from automatic rejection gates to investigation triggers.** Distinguish a calibration shift potentially addressable by a prespecified recalibration procedure from unstable or badly distorted predictions. Capture describes recorded events identified, not falls prevented.
+
+4. **Keep XGBoost deliberately small and strongly regularised.** A reasonable initial CPU search is 15–20 trials:
+
+   | Parameter | Suggested specification |
+   |---|---|
+   | `max_depth` | 1–3 |
+   | `min_child_weight` | 5–30, log-spaced |
+   | `reg_lambda` | 1–30, log-spaced |
+   | `learning_rate` | Fixed at 0.05 |
+   | `subsample` | Fixed at 0.8 |
+   | `colsample_bytree` | Fixed at 0.8 |
+   | `gamma`, `reg_alpha` | Initially 0 |
+   | Trees | Ceiling 3,000–5,000; early stopping after approximately 100 rounds |
+
+   `min_child_weight` measures summed Hessian weight, not a patient or event count. These are starting ranges, not guarantees of adequate regularisation.
+
+   Perform early stopping within inner CV; outer evaluation folds must remain untouched by tuning and stopping. For the final TRAIN fit, freeze a robust summary, such as the median selected tree count, from inner fits.
+
+   No class weighting is a sensible default, but **unweighted fitting does not guarantee calibrated probabilities**. Omit monotone constraints initially unless a feature-specific direction is clinically defensible across its entire range and encoding.
+
+   Compare families using identical eligible feature sets, folds, preprocessing boundaries, and selection rules. A practical choice is inner-CV log loss for tuning all families, followed by outer-OOF average precision for promotion. Tune both elastic-net mixing and penalty parameters inside that structure. Any additional XGBoost search must be part of the prespecified nested procedure. Benchmark runtime before promising overnight completion.
+
+5. **The largest risks are timing uncertainty and selection induced by how this cohort was constructed.**
+
+   - **Undated predictors:** SAFE_OR_UNRESOLVED is an exploratory evidence category, not leakage clearance. Baseline use does not validate the same uncertainty in new features.
+   - **Aggregate provenance:** a date field establishes safety only if it covers every source contribution represented by that aggregate. Audit window boundaries, latest-value selection, and score/version timing.
+   - **Nurse and frailty assessments:** observed values, missingness, and assessment recency can encode clinician suspicion, recent deterioration, and access to care. These may predict legitimately when available before index, but transport poorly when assessment practice changes.
+   - **Utilisation and fall/fracture history:** enforce strict pre-index boundaries, distinguish encounters from distinct episodes, and prevent duplicate coding from inflating counts.
+   - **Cohort exclusions:** removing people because they had index-day diagnoses or falls conditions inclusion on information unavailable at prediction time. This cannot be cured by refitting every model on the same filtered cohort.
+
+   **Add a predictor-level provenance contract:** source, contributing-record dates, lookback, availability delay, missingness meaning, and derivation. Quarantine undocumented codes.
+
+   Death as a non-event is coherent for “recorded fall before death within the horizon,” but changes interpretation and makes mortality patterns relevant. Excluding incompletely followed people can introduce additional selection bias. State these limitations explicitly and resolve them for the next cohort.
+
+6. **Use domain-level comparisons as the main evidence for incremental value; individual-feature results should be explanatory.** Refit and retune each increment or ablation within TRAIN. Distinguish added value over baseline from unique contribution after other domains are present. Correlated predictors can have useful joint information and negligible individual ablation effects.
+
+   For decisions **(a)–(h)**:
+
+   - **(a)** Report nested outer-OOF and validation estimates. Change mandatory directional agreement to a consistency assessment with uncertainty; a near-zero sign reversal alone is not decisive.
+   - **(b)** Retain average precision as primary, with log loss, calibration, and principal-capacity performance as safeguards.
+   - **(c)** Retain assessment status and distinguish unassessed from assessed-negative. Avoid redundant dummy coding with form indicators. A sensitivity analysis removing explicit assessment indicators is useful, but call it that: missingness patterns and tree branches can still reveal assessment. It does not isolate “clinical content.”
+   - **(d)** Change unresolved-feature admission to a separately labelled exploratory track. The model advanced as deployable must have prediction-time availability resolved. A SAFE-only baseline comparator will necessarily differ from EXTENDED-15.
+   - **(e)** **Drop the 1% exclusion threshold.** Prefer reconstructing valid pre-index values; if impossible, mask the affected values and derived indicators where defensible, or exclude the source. Do not routinely remove people based on index-day information. Any masking rule must itself be implementable at prediction time.
+   - **(f)** Change expanded-set LASSO to **penalised predictions as the primary method**. Keep the historical post-selection refit as a benchmark. Unpenalised refitting can amplify selection instability and overfitting.
+   - **(g)** Drop the proposed either/or significance rule. Prespecify a minimum worthwhile gain and operational/calibration tolerances. Advance one challenger when the combined evidence supports a worthwhile improvement; otherwise advance baseline. A +0.01 average-precision threshold requires justification from operational consequences. Label uncertain improvement promising, not established.
+   - **(h)** Retain one-domain additions and leave-one-domain-out comparisons. Treat the waterfall as descriptive and order-dependent; separate feature-set comparisons from model-family comparisons.
+
+   Paired patient bootstrap is appropriate for differences between frozen predictions on the same people. With one row per member, it is an ordinary paired patient bootstrap. Its intervals do **not** account for searching configurations or training uncertainty; the bootstrap fraction above zero is not a posterior probability.
+
+   Limit validation comparisons to the shortlist. Conduct exploratory ablations, permutation analyses, and importance ranking in TRAIN. Twenty-five stability bootstraps provide only a rough diagnostic; do not turn the consensus table into a vote among correlated importance measures or causal evidence.
+
+7. **A new temporal claim requires a later, untouched cohort constructed to match intended deployment**, complete outcome ascertainment, and source extraction that enforces strict pre-index availability without deleting people based on index-day events.
+
+   Freeze before accessing its outcomes:
+
+   - Cohort, index/horizon boundaries, endpoint, death and incomplete-follow-up handling.
+   - Sources, timing rules, feature definitions, missingness processing, and coding.
+   - Model family, hyperparameters, fitting/refitting procedure, and training-data cutoff.
+   - Any recalibration procedure and the independent data used to fit it.
+   - Primary metric, operational capacity, selection rule, and analysis code/version.
+
+   If TRAIN and VALIDATION will be combined for final fitting, prespecify that step before holdout access. A recalibrator cannot be fitted and assessed on the same holdout; use an earlier calibration period or a separate calibration sample.
+
+   Report holdout prevalence and case-mix changes: average precision, PPV, and calibration depend on them. Show original-model performance before any updating. Ensure earlier training labels would actually have been available at the simulated deployment date.
+
+   Repeated members across time may match deployment, but require explicit handling. Temporal validation within Meuhedet supports later-period performance there; broader generalisability requires additional settings or populations.
+
+8. **Top five changes, ranked by impact on validity:**
+
+   1. **Replace SAFE_OR_UNRESOLVED eligibility and outcome-informed row deletion with a deployment-valid timing policy**, retaining unresolved analyses as exploratory.
+   2. **Replace broad validation selection with nested TRAIN selection and a small frozen shortlist**, acknowledging previous validation reuse.
+   3. **Resolve the endpoint and cohort estimand**, especially index-day exclusions, incomplete follow-up, and death.
+   4. **Use penalised predictions for expanded linear models and evaluate all families under one protocol**, including an identically handled baseline.
+   5. **Replace binary significance gates and importance consensus with a prespecified advancement rule** integrating worthwhile average-precision gain, operational capture, calibration, uncertainty, and simplicity.
+
+   Also change “implausible gain,” proxy dominance, and calibration thresholds into documented audit triggers. Keep timing violations, split contamination, and prohibited inputs as hard stops.
+tokens used
+16,268
+1. **The design is suitable for discovery, but its validation results will remain selection-dependent.** The single most important statistical change is: **change 30–40 validation comparisons to TRAIN-based selection followed by one comparison of a small, frozen shortlist**, ideally baseline plus 2–3 challengers.
+
+   Use nested, grouped CV within TRAIN: outer folds estimate performance; inner folds perform tuning, feature selection, fractional-polynomial selection, imputation, scaling, and any data-dependent redundancy filtering. Ordinary OOF predictions are optimistic if the same folds selected the configuration being evaluated.
+
+   Report outer-OOF and validation results, but do not claim that their agreement removes the winner’s curse or that OOF necessarily has lower variance. VALIDATION has already supported baseline recalibration; treat it as a reused development resource. Refit the baseline under the same evaluation protocol as challengers, with no validation-fitted recalibration. Keeping TEST closed is appropriate.
+
+2. **Average precision is a reasonable primary discovery metric for this capacity-oriented task.** Low prevalence does not invalidate it; approximately 256 validation events make small differences uncertain, especially after model selection.
+
+   Change “PR-AUC” to **“average precision, with the implementation fixed”** throughout: trapezoidal PR area and average precision are not interchangeable. Report absolute differences, paired intervals, and evaluation-set prevalence.
+
+   Add log loss as a proper scoring rule and use probability quality as an advancement safeguard. If the intended product instead requires accurate absolute probabilities across many decision thresholds, log loss would be a stronger primary choice. Given the stated capture-at-capacity objective, retaining average precision is defensible.
+
+   Predeclare one principal operational capacity. A gain in overall average precision can coexist with worse capture at the capacity the HMO can actually serve.
+
+3. **Use an explicit decision hierarchy:**
+
+   - **Eligibility:** prediction-time validity, usable coding, and an acceptable endpoint/cohort definition.
+   - **Primary ranking:** average-precision improvement versus the freshly fitted baseline.
+   - **Operational relevance:** capture and PPV at the principal capacity, with paired uncertainty; other capacities are secondary.
+   - **Probability quality:** log loss, Brier, and calibration, assessed against predefined tolerances.
+   - **Supporting discrimination:** AUROC; then prefer the simpler, more reliably available configuration when gains are uncertain.
+
+   Report Brier against a constant-risk reference and the baseline: low prevalence makes a small absolute Brier score insufficient evidence of usefulness.
+
+   Distinguish calibration-in-the-large, estimated with prediction slope fixed at 1, from the intercept in a jointly estimated intercept/slope calibration model. Include uncertainty and a calibration curve with uncertainty or event counts.
+
+   **Change calibration cutoffs from automatic rejection gates to investigation triggers.** Distinguish a calibration shift potentially addressable by a prespecified recalibration procedure from unstable or badly distorted predictions. Capture describes recorded events identified, not falls prevented.
+
+4. **Keep XGBoost deliberately small and strongly regularised.** A reasonable initial CPU search is 15–20 trials:
+
+   | Parameter | Suggested specification |
+   |---|---|
+   | `max_depth` | 1–3 |
+   | `min_child_weight` | 5–30, log-spaced |
+   | `reg_lambda` | 1–30, log-spaced |
+   | `learning_rate` | Fixed at 0.05 |
+   | `subsample` | Fixed at 0.8 |
+   | `colsample_bytree` | Fixed at 0.8 |
+   | `gamma`, `reg_alpha` | Initially 0 |
+   | Trees | Ceiling 3,000–5,000; early stopping after approximately 100 rounds |
+
+   `min_child_weight` measures summed Hessian weight, not a patient or event count. These are starting ranges, not guarantees of adequate regularisation.
+
+   Perform early stopping within inner CV; outer evaluation folds must remain untouched by tuning and stopping. For the final TRAIN fit, freeze a robust summary, such as the median selected tree count, from inner fits.
+
+   No class weighting is a sensible default, but **unweighted fitting does not guarantee calibrated probabilities**. Omit monotone constraints initially unless a feature-specific direction is clinically defensible across its entire range and encoding.
+
+   Compare families using identical eligible feature sets, folds, preprocessing boundaries, and selection rules. A practical choice is inner-CV log loss for tuning all families, followed by outer-OOF average precision for promotion. Tune both elastic-net mixing and penalty parameters inside that structure. Any additional XGBoost search must be part of the prespecified nested procedure. Benchmark runtime before promising overnight completion.
+
+5. **The largest risks are timing uncertainty and selection induced by how this cohort was constructed.**
+
+   - **Undated predictors:** SAFE_OR_UNRESOLVED is an exploratory evidence category, not leakage clearance. Baseline use does not validate the same uncertainty in new features.
+   - **Aggregate provenance:** a date field establishes safety only if it covers every source contribution represented by that aggregate. Audit window boundaries, latest-value selection, and score/version timing.
+   - **Nurse and frailty assessments:** observed values, missingness, and assessment recency can encode clinician suspicion, recent deterioration, and access to care. These may predict legitimately when available before index, but transport poorly when assessment practice changes.
+   - **Utilisation and fall/fracture history:** enforce strict pre-index boundaries, distinguish encounters from distinct episodes, and prevent duplicate coding from inflating counts.
+   - **Cohort exclusions:** removing people because they had index-day diagnoses or falls conditions inclusion on information unavailable at prediction time. This cannot be cured by refitting every model on the same filtered cohort.
+
+   **Add a predictor-level provenance contract:** source, contributing-record dates, lookback, availability delay, missingness meaning, and derivation. Quarantine undocumented codes.
+
+   Death as a non-event is coherent for “recorded fall before death within the horizon,” but changes interpretation and makes mortality patterns relevant. Excluding incompletely followed people can introduce additional selection bias. State these limitations explicitly and resolve them for the next cohort.
+
+6. **Use domain-level comparisons as the main evidence for incremental value; individual-feature results should be explanatory.** Refit and retune each increment or ablation within TRAIN. Distinguish added value over baseline from unique contribution after other domains are present. Correlated predictors can have useful joint information and negligible individual ablation effects.
+
+   For decisions **(a)–(h)**:
+
+   - **(a)** Report nested outer-OOF and validation estimates. Change mandatory directional agreement to a consistency assessment with uncertainty; a near-zero sign reversal alone is not decisive.
+   - **(b)** Retain average precision as primary, with log loss, calibration, and principal-capacity performance as safeguards.
+   - **(c)** Retain assessment status and distinguish unassessed from assessed-negative. Avoid redundant dummy coding with form indicators. A sensitivity analysis removing explicit assessment indicators is useful, but call it that: missingness patterns and tree branches can still reveal assessment. It does not isolate “clinical content.”
+   - **(d)** Change unresolved-feature admission to a separately labelled exploratory track. The model advanced as deployable must have prediction-time availability resolved. A SAFE-only baseline comparator will necessarily differ from EXTENDED-15.
+   - **(e)** **Drop the 1% exclusion threshold.** Prefer reconstructing valid pre-index values; if impossible, mask the affected values and derived indicators where defensible, or exclude the source. Do not routinely remove people based on index-day information. Any masking rule must itself be implementable at prediction time.
+   - **(f)** Change expanded-set LASSO to **penalised predictions as the primary method**. Keep the historical post-selection refit as a benchmark. Unpenalised refitting can amplify selection instability and overfitting.
+   - **(g)** Drop the proposed either/or significance rule. Prespecify a minimum worthwhile gain and operational/calibration tolerances. Advance one challenger when the combined evidence supports a worthwhile improvement; otherwise advance baseline. A +0.01 average-precision threshold requires justification from operational consequences. Label uncertain improvement promising, not established.
+   - **(h)** Retain one-domain additions and leave-one-domain-out comparisons. Treat the waterfall as descriptive and order-dependent; separate feature-set comparisons from model-family comparisons.
+
+   Paired patient bootstrap is appropriate for differences between frozen predictions on the same people. With one row per member, it is an ordinary paired patient bootstrap. Its intervals do **not** account for searching configurations or training uncertainty; the bootstrap fraction above zero is not a posterior probability.
+
+   Limit validation comparisons to the shortlist. Conduct exploratory ablations, permutation analyses, and importance ranking in TRAIN. Twenty-five stability bootstraps provide only a rough diagnostic; do not turn the consensus table into a vote among correlated importance measures or causal evidence.
+
+7. **A new temporal claim requires a later, untouched cohort constructed to match intended deployment**, complete outcome ascertainment, and source extraction that enforces strict pre-index availability without deleting people based on index-day events.
+
+   Freeze before accessing its outcomes:
+
+   - Cohort, index/horizon boundaries, endpoint, death and incomplete-follow-up handling.
+   - Sources, timing rules, feature definitions, missingness processing, and coding.
+   - Model family, hyperparameters, fitting/refitting procedure, and training-data cutoff.
+   - Any recalibration procedure and the independent data used to fit it.
+   - Primary metric, operational capacity, selection rule, and analysis code/version.
+
+   If TRAIN and VALIDATION will be combined for final fitting, prespecify that step before holdout access. A recalibrator cannot be fitted and assessed on the same holdout; use an earlier calibration period or a separate calibration sample.
+
+   Report holdout prevalence and case-mix changes: average precision, PPV, and calibration depend on them. Show original-model performance before any updating. Ensure earlier training labels would actually have been available at the simulated deployment date.
+
+   Repeated members across time may match deployment, but require explicit handling. Temporal validation within Meuhedet supports later-period performance there; broader generalisability requires additional settings or populations.
+
+8. **Top five changes, ranked by impact on validity:**
+
+   1. **Replace SAFE_OR_UNRESOLVED eligibility and outcome-informed row deletion with a deployment-valid timing policy**, retaining unresolved analyses as exploratory.
+   2. **Replace broad validation selection with nested TRAIN selection and a small frozen shortlist**, acknowledging previous validation reuse.
+   3. **Resolve the endpoint and cohort estimand**, especially index-day exclusions, incomplete follow-up, and death.
+   4. **Use penalised predictions for expanded linear models and evaluate all families under one protocol**, including an identically handled baseline.
+   5. **Replace binary significance gates and importance consensus with a prespecified advancement rule** integrating worthwhile average-precision gain, operational capture, calibration, uncertainty, and simplicity.
+
+   Also change “implausible gain,” proxy dominance, and calibration thresholds into documented audit triggers. Keep timing violations, split contamination, and prohibited inputs as hard stops.

@@ -1,0 +1,90 @@
+# SOFTWARE DEMONSTRATION on the deterministic SYNTHETIC fixture (data/fixtures/synthetic_v1). Results are NOT scientific evidence.
+experiment:
+  name: hist_gradient_boosting
+  kind: alternative_model
+  description: 'Secondary experimental algorithm: histogram gradient boosting (scikit-learn;
+    bounded random search on validation).'
+  layers:
+  - L1_published
+  - L2_assumption
+  - L3a_meuhedet_mapping
+  - L4_alternative
+dataset:
+  feature_spec: configs/features/efalls_v1.yaml
+  path: data/fixtures/synthetic_v1
+  require_scientific_use: false
+model:
+  name: hist_gradient_boosting
+  params: {}
+preprocessing:
+  representation: efalls_raw
+validation:
+  strategy: temporal
+  seed: 42
+  cv_folds: 10
+  patients_disjoint: false
+  temporal:
+    train_end: '2018-12-31'
+    validation_end: '2019-12-31'
+    embargo_outcome_windows: true
+  limitation_note: ''
+calibration:
+  enabled: true
+  method: logistic_intercept_slope
+evaluation:
+  thresholds:
+  - 0.1
+  - 0.15
+  - 0.2
+  - 0.25
+  decision_curve_thresholds:
+  - 0.01
+  - 0.5
+  - 0.01
+  calibration_groups: 20
+  subgroups:
+  - sex
+  - bmi_category
+  - age_band
+  bootstrap:
+    n: 200
+    seed: 20240314
+    cluster_column: research_id
+  permutation_importance_repeats: 5
+analysis:
+  stability:
+    enabled: false
+    n_bootstrap: 20
+    selection_threshold: 0.8
+    sign_stability_threshold: 0.9
+  optimism:
+    enabled: false
+    n_bootstrap: 25
+  iecv:
+    enabled: false
+    cluster_column: deprivation_group
+reporting:
+  enabled: true
+  top_n_features: 10
+  eligibility:
+    min_auroc: 0.7
+    calibration_slope_range:
+    - 0.8
+    - 1.2
+    max_abs_citl: 0.2
+  risk_categories:
+    approved: false
+    cutpoints: []
+    labels: []
+    approval_reference: ''
+output:
+  runs_dir: runs
+tuning:
+  enabled: true
+  method: random
+  n_iter: 4
+  objective:
+    weights:
+      auroc: 1.0
+      brier: -1.0
+      calibration_slope_abs_error: -0.25

@@ -1,0 +1,307 @@
+# Meuhedet research-wide table V_Falls_Prediction_Wide_1 (V1.0): explicit data dictionary for the EDA layer (falls_ml meuhedet-eda).
+# One entry per contract column (221; the loader refuses a dictionary that misses or adds a column). Types, roles, timing, allowed
+# values, NULL meanings and sentinels are NOT repeated here: they come from the contract (configs/meuhedet/wide_v1_columns.yaml).
+# This file adds what the contract does not declare: the clinical/business DOMAIN, the SOURCE the value is aggregated from, the
+# RECORD-DATE column that bounds that source in time (if the extract has one), and a short human-readable MEANING with its STATUS.
+#
+# STATUS of a meaning (never invented):
+#   DOCUMENTED  stated by the S2T / DDL notes carried in the contract (still to be confirmed with the SME before any reportable use)
+#   NAME_ONLY   a literal reading of the column name; the business definition (source tables, code lists, windows, inclusion rules)
+#               is NOT documented -> NEEDS SME REVIEW
+#   UNKNOWN     the meaning is not known (codes undocumented, S2T says "meaning unknown" or "to confirm") -> UNKNOWN / NEEDS SME REVIEW
+# Written from the DDL/S2T only; no row-level data were used.
+dictionary:
+  name: meuhedet_wide_v1_data_dictionary
+  version: 1.0.0
+  contract: configs/meuhedet/wide_v1_columns.yaml
+  status: PROPOSED - every NAME_ONLY / UNKNOWN meaning needs SME review; DOCUMENTED meanings still need confirmation
+  domains:
+    IDENTIFIERS_TECHNICAL_KEYS: identifiers / technical keys
+    COHORT_ELIGIBILITY: cohort / eligibility
+    DEMOGRAPHICS: demographics
+    FOLLOWUP_CENSORING: follow-up / censoring
+    PRIOR_FALLS: prior falls
+    DIAGNOSES_COMORBIDITY: diagnoses / comorbidity
+    VISITS: visits
+    MEDICATIONS: medications
+    LABS: labs
+    HOSPITAL_EMERGENCY_UTILISATION: hospital / emergency utilisation
+    FUNCTIONAL_STATUS: functional status
+    MOBILITY: mobility
+    COGNITION: cognition
+    VISION_HEARING: vision / hearing
+    NURSING_ASSESSMENTS: nursing assessments
+    HOME_SAFETY: home safety
+    REGISTRIES: registries
+    FRAILTY: frailty
+    SOCIAL_SOCIOECONOMIC: social / socio-economic
+    OUTCOMES: outcomes
+    DATA_QUALITY_PROVENANCE: data-quality / provenance
+  sources:   # source -> description and the record-date column that bounds it (null = no record date in the extract: timing unverifiable)
+    VIEW_TECHNICAL: {text: "VIEW technical keys and versioning", record_date: null}
+    MEMBER_MASTER: {text: "member master data (demographics, membership)", record_date: null}
+    POPULATION_SCD: {text: "population SCD table (membership validity rows)", record_date: null}
+    COHORT_DEFINITION: {text: "cohort / eligibility logic of the VIEW", record_date: null}
+    FOLLOWUP: {text: "follow-up, death and membership-leave sources (post-index)", record_date: null}
+    FALL_EVENTS: {text: "fall / fracture events (Meuhedet event list V1.0, Q-M-06)", record_date: Last_Fall_Date}
+    DIAGNOSES: {text: "diagnosis records", record_date: Last_Dx_Date}
+    VISITS: {text: "visit records", record_date: Last_Visit_Date}
+    PRESCRIPTIONS: {text: "prescriptions written / purchased", record_date: null}
+    LABS: {text: "laboratory referrals / tests performed", record_date: null}
+    NURSE_FALLS_RISK_999_52: {text: "nurse falls-risk assessment form 999.52", record_date: Falls_Risk_Assessment_Date}
+    NURSE_GET_UP_AND_GO_999_79: {text: "nurse get-up-and-go assessment form 999.79", record_date: Get_Up_And_Go_Date}
+    NURSE_FUNCTION_999_175: {text: "nurse function / mobility / senses assessment form 999.175", record_date: Mobility_Assessment_Date}
+    NURSE_COGNITION: {text: "nurse cognitive tests (MMSE, Mini-Cog)", record_date: MiniCog_Date}
+    NURSE_HOME_SAFETY_999_139: {text: "nurse home-safety questionnaire 999.139", record_date: Home_Safety_Assessment_Date}
+    NURSE_ASSESSMENT_SUMMARY: {text: "nurse assessments (all forms): counts and quality", record_date: Last_Assessment_Date}
+    MEDICATION_EXPOSURE: {text: "medication exposure / dispensing (ATC-matched)", record_date: null}
+    EXTERNAL_CARE_INVOICES: {text: "external-care invoices (billing lag)", record_date: Last_Ext_Date}
+    HOSPITALISATIONS: {text: "hospitalisation invoices (billing lag, no as-of variant)", record_date: Last_Hosp_Date}
+    REGISTRIES: {text: "disease registries (membership active at index)", record_date: First_Registry_Date}
+    MEFI: {text: "MEFI frailty assessments (Meuhedet frailty index)", record_date: MEFI_From_Date}
+    COMORBIDITY_SOCIAL: {text: "comorbidity index and social / benefit status", record_date: null}
+    SOURCE_COVERAGE: {text: "per-source data-availability flags of the VIEW", record_date: null}
+    LABELS: {text: "outcome labels (post-index)", record_date: null}
+columns:
+  # ==== identification ====
+  Customer_Full_ID: {domain: IDENTIFIERS_TECHNICAL_KEYS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "member identifier; used only for de-duplication / grouping, never a predictor, never printed"}
+  Index_Date: {domain: COHORT_ELIGIBILITY, source: VIEW_TECHNICAL, status: DOCUMENTED, meaning: "prediction date of the snapshot (prediction happens at the start of this day)"}
+  Snapshot_Key: {domain: IDENTIFIERS_TECHNICAL_KEYS, source: VIEW_TECHNICAL, status: DOCUMENTED, meaning: "technical row key of the snapshot row; never printed"}
+  Customer_Id_Type_Prefix: {domain: IDENTIFIERS_TECHNICAL_KEYS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "identifier-type digit of the member id (control field)"}
+  Definition_Version: {domain: DATA_QUALITY_PROVENANCE, source: VIEW_TECHNICAL, status: DOCUMENTED, meaning: "version of the VIEW definition that produced the row (expected constant V1.0)"}
+  Observed_History_Days: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "days of history observed before Index_Date (difference from Available_History_Days not documented)"}
+  Has_Full_365D_Lookback: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "1 = a full 365-day look-back window exists before Index_Date"}
+  Has_Full_30D_Label: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "1 = the 30-day label window is complete (post-index knowledge)"}
+  Has_Full_180D_Label: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "1 = the 180-day label window is complete (post-index knowledge)"}
+  # ==== population / eligibility ====
+  Is_Eligible_Cohort: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: DOCUMENTED, meaning: "1 = row belongs to the study cohort (the only cohort filter applied before training)"}
+  Exclusion_Reason: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: DOCUMENTED, meaning: "reason a row is not eligible (NULL = eligible)"}
+  Population_Record_From_Date: {domain: DATA_QUALITY_PROVENANCE, source: POPULATION_SCD, status: DOCUMENTED, meaning: "validity start of the population SCD row"}
+  Population_Record_To_Date: {domain: DATA_QUALITY_PROVENANCE, source: POPULATION_SCD, status: DOCUMENTED, meaning: "validity end of the population SCD row (2999-12-31 = open-ended, Q-M-08)"}
+  Population_Current_Ind: {domain: DATA_QUALITY_PROVENANCE, source: POPULATION_SCD, status: DOCUMENTED, meaning: "1 = current SCD row (exposed by the VIEW, not used)"}
+  Population_Record_Count: {domain: DATA_QUALITY_PROVENANCE, source: POPULATION_SCD, status: NAME_ONLY, meaning: "number of population SCD rows of the member"}
+  Multiple_Valid_Population_Rows_Ind: {domain: DATA_QUALITY_PROVENANCE, source: POPULATION_SCD, status: DOCUMENTED, meaning: "1 = several SCD rows valid at Index_Date (duplicate flag)"}
+  # ==== time windows ====
+  Obs_Window_Start: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "start date of the observation (look-back) window"}
+  Label_End_30D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "last day of the 30-day outcome window"}
+  Label_End_180D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "last day of the 180-day outcome window (Index_Date + 180 days)"}
+  Is_Active_For_Modeling: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "1 = row active for modelling (relation to Is_Eligible_Cohort not documented)"}
+  Index_Date_Status: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "status label of the snapshot / index date (levels not documented)"}
+  # ==== demographics ====
+  Age_At_Index: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "age in completed years at Index_Date"}
+  Age_Group: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "age band derived from Age_At_Index (redundant banding)"}
+  Birth_Date_Suspect_Ind: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "1 = birth date is a default value, so the age is unreliable"}
+  Gender_Code: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "sex code (1 = male per the example row; 2 = female to confirm, Q-M-05)"}
+  Gender_Desc: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "text label of Gender_Code"}
+  # ==== history / follow-up ====
+  Available_History_Days: {domain: COHORT_ELIGIBILITY, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "membership days until Index_Date"}
+  Has_Minimum_History: {domain: COHORT_ELIGIBILITY, source: COHORT_DEFINITION, status: NAME_ONLY, meaning: "1 = the minimum membership history required by the cohort definition exists (threshold not documented)"}
+  HMO_Seniority_Months: {domain: DEMOGRAPHICS, source: MEMBER_MASTER, status: NAME_ONLY, meaning: "months of HMO membership at Index_Date"}
+  Followup_End_Date: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "end of follow-up (NULL or 2999-12-31 = still open, Q-M-09); post-index"}
+  Followup_End_Reason: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "reason follow-up ended (censoring reason; post-index)"}
+  Has_Full_Followup_30D: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: NAME_ONLY, meaning: "1 = followed up for the whole 30 days"}
+  Has_Full_Followup_180D: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: NAME_ONLY, meaning: "1 = followed up for the whole 180 days"}
+  Is_Censored_30D: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: NAME_ONLY, meaning: "1 = censored within the 30-day window"}
+  Is_Censored_180D: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: NAME_ONLY, meaning: "1 = censored within the 180-day window"}
+  Is_Deceased_Ind: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "1 = death after Index_Date (censoring information; post-index)"}
+  Leave_Join_Ind: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: UNKNOWN, meaning: "raw membership leave/join code (code values not documented)"}
+  Death_Identification_Status: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: UNKNOWN, meaning: "status of the death identification (levels not documented)"}
+  Death_Censor_Date: {domain: FOLLOWUP_CENSORING, source: FOLLOWUP, status: DOCUMENTED, meaning: "date of death used for censoring (post-index)"}
+  Death_Date_Gap_Days: {domain: DATA_QUALITY_PROVENANCE, source: FOLLOWUP, status: UNKNOWN, meaning: "gap in days between death-date sources (definition not documented)"}
+  Abroad_Ind: {domain: FOLLOWUP_CENSORING, source: MEMBER_MASTER, status: DOCUMENTED, meaning: "stay abroad flag; its as-of timing is not defined (forbidden until confirmed pre-index)"}
+  # ==== prior falls ====
+  Prior_Fall_Count_30D: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "number of fall AND fracture events in the 30 days before Index_Date"}
+  Prior_Fall_Count_90D: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "number of fall/fracture events in the 90 days before Index_Date"}
+  Prior_Fall_Count_180D: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "number of fall/fracture events in the 180 days before Index_Date"}
+  Prior_Fall_Count_365D: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "number of fall/fracture events in the 365 days before Index_Date"}
+  Prior_Fall_Since_Study_Start_Ind: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "1 = any fall/fracture event since 2022-01-01 (eFalls 'falls', APPROXIMATE)"}
+  Prior_Fall_Count_Since_Study_Start: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "number of fall/fracture events since 2022-01-01 (NULL = no fall data)"}
+  Last_Fall_Date: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "date of the last fall/fracture record the VIEW used (D-00 timing evidence)"}
+  Days_Since_Last_Fall: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "days from the last fall/fracture record to Index_Date (NULL = no prior fall)"}
+  Last_Fall_Confidence: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "date certainty of the last fall (levels not documented)"}
+  Fall_On_Index_Date_Ind: {domain: PRIOR_FALLS, source: FALL_EVENTS, status: DOCUMENTED, meaning: "1 = a fall event on Index_Date itself (lies in the outcome window; forbidden)"}
+  Prior_Fall_Missing_Ind: {domain: DATA_QUALITY_PROVENANCE, source: FALL_EVENTS, status: DOCUMENTED, meaning: "1 = no fall records at all (source absent), distinct from 0 falls"}
+  # ==== diagnoses ====
+  Diagnosis_Count_180D: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: NAME_ONLY, meaning: "number of diagnosis records in the 180 days before Index_Date"}
+  Diagnosis_Count_365D: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: NAME_ONLY, meaning: "number of diagnosis records in the 365 days before Index_Date"}
+  Distinct_Diagnosis_Codes_365D: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: DOCUMENTED, meaning: "number of distinct diagnosis codes in 365 days (morbidity-burden proxy)"}
+  Chronic_Diagnosis_Count_365D: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: NAME_ONLY, meaning: "number of chronic diagnoses in 365 days (chronic code list not documented)"}
+  Gait_Disorder_Since_Study_Start_Ind: {domain: MOBILITY, source: DIAGNOSES, status: DOCUMENTED, meaning: "1 = ICD-9 719.7 difficulty in walking diagnosed since 2022-01-01 (eFalls 'mobility_problems', APPROXIMATE)"}
+  Last_Dx_Date: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: DOCUMENTED, meaning: "date of the last diagnosis record the VIEW used (D-00 timing evidence)"}
+  Days_Since_Last_Diagnosis: {domain: DIAGNOSES_COMORBIDITY, source: DIAGNOSES, status: NAME_ONLY, meaning: "days from the last diagnosis record to Index_Date (NULL = no diagnosis)"}
+  # ==== visits / utilisation ====
+  Visit_Count_30D: {domain: VISITS, source: VISITS, status: NAME_ONLY, meaning: "number of visits in the 30 days before Index_Date (visit types not documented)"}
+  Visit_Count_90D: {domain: VISITS, source: VISITS, status: NAME_ONLY, meaning: "number of visits in the 90 days before Index_Date"}
+  Visit_Count_180D: {domain: VISITS, source: VISITS, status: NAME_ONLY, meaning: "number of visits in the 180 days before Index_Date"}
+  Visit_Count_365D: {domain: VISITS, source: VISITS, status: NAME_ONLY, meaning: "number of visits in the 365 days before Index_Date"}
+  Last_Visit_Date: {domain: VISITS, source: VISITS, status: DOCUMENTED, meaning: "date of the last visit record (D-00 timing evidence)"}
+  Days_Since_Last_Visit: {domain: VISITS, source: VISITS, status: NAME_ONLY, meaning: "days from the last visit to Index_Date (NULL = no visit)"}
+  Rx_Written_365D: {domain: MEDICATIONS, source: PRESCRIPTIONS, status: NAME_ONLY, meaning: "prescriptions written in the 365 days before Index_Date"}
+  Rx_Purchased_365D: {domain: MEDICATIONS, source: PRESCRIPTIONS, status: NAME_ONLY, meaning: "prescriptions purchased in the 365 days before Index_Date"}
+  Prescription_Fill_Ratio_365D: {domain: MEDICATIONS, source: PRESCRIPTIONS, status: NAME_ONLY, meaning: "share of written prescriptions that were purchased (NULL = none written)"}
+  Lab_Referred_365D: {domain: LABS, source: LABS, status: NAME_ONLY, meaning: "laboratory referrals in the 365 days before Index_Date"}
+  Lab_Performed_365D: {domain: LABS, source: LABS, status: NAME_ONLY, meaning: "laboratory tests performed in the 365 days before Index_Date"}
+  Lab_Performed_Ratio_365D: {domain: LABS, source: LABS, status: NAME_ONLY, meaning: "share of referred tests that were performed (NULL = no referral)"}
+  Unsettled_Visit_Counter_Ind: {domain: DATA_QUALITY_PROVENANCE, source: VISITS, status: DOCUMENTED, meaning: "1 = visit counters still inside the 3-day settlement period (train/serve skew diagnostic)"}
+  # ==== nurse assessment 999.52 (falls risk) ====
+  Falls_Risk_Assessment_Score: {domain: NURSING_ASSESSMENTS, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "nurse falls-risk score 1-3 (scale anchors not documented; NULL = not assessed)"}
+  Falls_Risk_Assessment_Date: {domain: NURSING_ASSESSMENTS, source: NURSE_FALLS_RISK_999_52, status: DOCUMENTED, meaning: "date of the falls-risk assessment (D-00 timing evidence)"}
+  Fall_Self_Report_Value: {domain: PRIOR_FALLS, source: NURSE_FALLS_RISK_999_52, status: UNKNOWN, meaning: "self-reported fall answer code (code semantics to confirm)", record_date: Fall_Self_Report_Date}
+  Fall_Self_Report_Date: {domain: PRIOR_FALLS, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "date of the fall self-report answer", record_date: Fall_Self_Report_Date}
+  Fall_Count_Self_Reported: {domain: PRIOR_FALLS, source: NURSE_FALLS_RISK_999_52, status: DOCUMENTED, meaning: "self-reported number of falls (empty in all rows per S2T)"}
+  Fall_Required_Treatment_Ind: {domain: PRIOR_FALLS, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "1 = a reported fall required treatment (NULL = not assessed)"}
+  Instability_Dizziness_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "1 = instability / dizziness recorded by the nurse (NULL = not assessed)"}
+  Fear_Of_Falling_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "1 = fear of falling recorded (NULL = not assessed)"}
+  Confined_To_Chair_Bed_Ind: {domain: MOBILITY, source: NURSE_FALLS_RISK_999_52, status: NAME_ONLY, meaning: "1 = confined to chair or bed (NULL = not assessed)"}
+  # ==== nurse assessment 999.79 (get up and go) ====
+  Balance_Disorder_Ind: {domain: MOBILITY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = balance disorder observed (NULL = not assessed)"}
+  Shuffling_Gait_Ind: {domain: MOBILITY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = shuffling gait observed (NULL = not assessed)"}
+  Hesitant_Gait_Ind: {domain: MOBILITY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = hesitant gait observed (NULL = not assessed)"}
+  Uses_Walking_Aid_Ind: {domain: MOBILITY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = uses a walking aid (NULL = not assessed)"}
+  Prior_Falls_Nurse_Ind: {domain: PRIOR_FALLS, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = prior falls recorded by the nurse (look-back not documented; NULL = not assessed)"}
+  Muscle_Weakness_Ind: {domain: FUNCTIONAL_STATUS, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = muscle weakness observed (NULL = not assessed)"}
+  Cognitive_Impairment_Nurse_Ind: {domain: COGNITION, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = cognitive impairment recorded by the nurse (NULL = not assessed)"}
+  On_Medications_Nurse_Ind: {domain: MEDICATIONS, source: NURSE_GET_UP_AND_GO_999_79, status: UNKNOWN, meaning: "nurse item about medications (which medications / what threshold not documented)"}
+  Unsafe_Environment_Ind: {domain: HOME_SAFETY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = unsafe environment recorded (NULL = not assessed)"}
+  Unsuitable_Footwear_Ind: {domain: HOME_SAFETY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = unsuitable footwear recorded (NULL = not assessed)"}
+  Missing_Sensory_Aids_Ind: {domain: VISION_HEARING, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = missing sensory aids (glasses / hearing aid) recorded (NULL = not assessed)"}
+  Unsuitable_Bed_Chair_Height_Ind: {domain: HOME_SAFETY, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = unsuitable bed/chair height recorded (NULL = not assessed)"}
+  Vision_Impairment_Nurse_Ind: {domain: VISION_HEARING, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = vision impairment recorded by the nurse (NULL = not assessed)"}
+  Orthostatic_Hypotension_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = orthostatic hypotension recorded (measurement protocol not documented; NULL = not assessed)"}
+  Polypharmacy_Nurse_Ind: {domain: MEDICATIONS, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = polypharmacy recorded by the nurse (threshold not documented; NULL = not assessed)"}
+  No_Primary_Caregiver_Ind: {domain: SOCIAL_SOCIOECONOMIC, source: NURSE_GET_UP_AND_GO_999_79, status: NAME_ONLY, meaning: "1 = no primary caregiver recorded (NULL = not assessed)"}
+  Get_Up_And_Go_Date: {domain: NURSING_ASSESSMENTS, source: NURSE_GET_UP_AND_GO_999_79, status: DOCUMENTED, meaning: "date of the get-up-and-go assessment (D-00 timing evidence)"}
+  # ==== nurse assessment 999.175 (function, mobility, senses) ====
+  ADL_Worst_Domain_Score: {domain: FUNCTIONAL_STATUS, source: NURSE_FUNCTION_999_175, status: DOCUMENTED, meaning: "worst activities-of-daily-living domain score, 0 independent .. 4 hoist (NULL = not assessed)"}
+  ADL_Domains_Assessed: {domain: DATA_QUALITY_PROVENANCE, source: NURSE_FUNCTION_999_175, status: DOCUMENTED, meaning: "number of ADL domains measured (assessment completeness)"}
+  Transfer_Dependency_Score: {domain: MOBILITY, source: NURSE_FUNCTION_999_175, status: NAME_ONLY, meaning: "transfer dependency score 0-4 (anchors not documented; NULL = not assessed)"}
+  Mobility_Score: {domain: MOBILITY, source: NURSE_FUNCTION_999_175, status: DOCUMENTED, meaning: "mobility score, 0 walks alone .. 3 confined (NULL = not assessed)"}
+  Vision_Score: {domain: VISION_HEARING, source: NURSE_FUNCTION_999_175, status: DOCUMENTED, meaning: "vision score, 0 normal, 1 limited, 2 blindness (NULL = not assessed)"}
+  Hearing_Score: {domain: VISION_HEARING, source: NURSE_FUNCTION_999_175, status: NAME_ONLY, meaning: "hearing score 0-2 (anchors not documented; NULL = not assessed)"}
+  Mobility_Assessment_Date: {domain: NURSING_ASSESSMENTS, source: NURSE_FUNCTION_999_175, status: DOCUMENTED, meaning: "date of the function/mobility assessment (D-00 timing evidence)"}
+  # ==== nurse assessment - cognition ====
+  MMSE_Score: {domain: COGNITION, source: NURSE_COGNITION, status: DOCUMENTED, meaning: "MMSE score (empty in all rows per S2T)", record_date: MMSE_Date}
+  MMSE_Date: {domain: COGNITION, source: NURSE_COGNITION, status: NAME_ONLY, meaning: "date of the MMSE test", record_date: MMSE_Date}
+  MiniCog_Score: {domain: COGNITION, source: NURSE_COGNITION, status: NAME_ONLY, meaning: "Mini-Cog score 0-5 (NULL = not assessed)"}
+  MiniCog_Date: {domain: COGNITION, source: NURSE_COGNITION, status: DOCUMENTED, meaning: "date of the Mini-Cog test (D-00 timing evidence)"}
+  # ==== nurse assessment 999.139 (home safety) ====
+  Fall_Location_At_Home_Ind: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: NAME_ONLY, meaning: "1 = a fall happened at home (NULL = not asked / no fall)"}
+  Fall_Count_Home_Safety: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: DOCUMENTED, meaning: "number of falls in the home-safety questionnaire (empty in all rows per S2T)"}
+  Orthostatic_BP_Measured_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_HOME_SAFETY_999_139, status: UNKNOWN, meaning: "orthostatic blood-pressure item (whether 1 = measured or 1 = abnormal is not documented)"}
+  Slow_Rising_Ind: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: UNKNOWN, meaning: "slow-rising item (observation or advice given - not documented)"}
+  Vitamin_D_Ind: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: UNKNOWN, meaning: "vitamin D item of the questionnaire (supplement taken / recommended - not documented)"}
+  Home_Safety_Risk_Count: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: NAME_ONLY, meaning: "number of home-safety risks recorded (NULL = not assessed)"}
+  Home_Safety_Questions_Answered: {domain: DATA_QUALITY_PROVENANCE, source: NURSE_HOME_SAFETY_999_139, status: DOCUMENTED, meaning: "number of home-safety questions answered (questionnaire completeness)"}
+  Home_Safety_Assessment_Date: {domain: HOME_SAFETY, source: NURSE_HOME_SAFETY_999_139, status: DOCUMENTED, meaning: "date of the home-safety assessment (D-00 timing evidence)"}
+  # ==== nurse assessment - quality and counts ====
+  Unmapped_Answer_Count: {domain: DATA_QUALITY_PROVENANCE, source: NURSE_ASSESSMENT_SUMMARY, status: NAME_ONLY, meaning: "number of assessment answers that could not be mapped"}
+  Assessment_Count_365D: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: NAME_ONLY, meaning: "number of nurse assessments in the 365 days before Index_Date (NULL = no source data)"}
+  Last_Assessment_Date: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: DOCUMENTED, meaning: "date of the last nurse assessment (D-00 timing evidence)"}
+  Days_Since_Last_Assessment: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: NAME_ONLY, meaning: "days from the last nurse assessment to Index_Date (NULL = never assessed)"}
+  Distinct_Assessment_Dates_365D: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: NAME_ONLY, meaning: "number of distinct nurse-assessment dates in 365 days"}
+  Has_Repeat_Assessment_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: NAME_ONLY, meaning: "1 = more than one assessment (window not documented)"}
+  Assessment_Not_Performed_Ind: {domain: NURSING_ASSESSMENTS, source: NURSE_ASSESSMENT_SUMMARY, status: DOCUMENTED, meaning: "1 = no nurse assessment performed (explicit not-assessed indicator of the nurse block)"}
+  # ==== medication ====
+  Distinct_Active_Substance_Count: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: DOCUMENTED, meaning: "distinct active substances in active exposure at Index_Date (eFalls polypharmacy, APPROXIMATE; window Q-M-07)"}
+  Polypharmacy_5Plus_Ind: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "1 = five or more active substances (NULL = no medication data)"}
+  Polypharmacy_10Plus_Ind: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "1 = ten or more active substances (NULL = no medication data)"}
+  Narcotic_Drug_Count: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "number of narcotic drugs (class definition and window not documented)"}
+  Prescribed_Not_Collected_365D: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "prescriptions not collected in 365 days"}
+  Credited_Prescriptions_365D: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "credited (reversed) prescriptions in 365 days"}
+  Approx_Matched_365D: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: DOCUMENTED, meaning: "records matched to ATC approximately (data quality)"}
+  Bought_Outside_Meuhedet_365D: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "medications bought outside Meuhedet in 365 days"}
+  Atc_Unmatched_365D: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "records without an ATC match (data quality)"}
+  Future_Dated_365D: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: DOCUMENTED, meaning: "future-dated prescriptions (data-quality count)"}
+  Fallback_Exposure_365D: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: DOCUMENTED, meaning: "exposure windows that were assumed (data quality)"}
+  Total_DDD_Amount: {domain: MEDICATIONS, source: MEDICATION_EXPOSURE, status: NAME_ONLY, meaning: "total defined daily doses (window not documented)"}
+  Medication_Missing_Ind: {domain: DATA_QUALITY_PROVENANCE, source: MEDICATION_EXPOSURE, status: DOCUMENTED, meaning: "1 = no medication data for the member (source absent)"}
+  # ==== external care / hospitalisation ====
+  External_Care_Count_30D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "external-care records in 30 days incl. records billed after Index_Date (retrospective; forbidden)"}
+  External_Care_Count_90D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "as the 30-day count, 90 days (forbidden)"}
+  External_Care_Count_180D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "as the 30-day count, 180 days (forbidden)"}
+  External_Care_Count_365D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "visible + hidden-by-billing-lag records in 365 days (retrospective; forbidden)"}
+  External_Care_Count_365D_Visible: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "external-care records already billed at Index_Date (as-of correct)"}
+  External_Care_Hidden_By_Billing_Lag_365D: {domain: DATA_QUALITY_PROVENANCE, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "external-care records billed after Index_Date (train/serve skew diagnostic; post-index)"}
+  Max_Invoice_Lag_365D: {domain: DATA_QUALITY_PROVENANCE, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "largest billing lag in days (post-index knowledge)"}
+  Last_Ext_Date: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "date of the last external-care record (may be billed after Index_Date; forbidden)"}
+  Days_Since_Last_External_Care: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "days since the last external-care record (may include hidden records; forbidden)"}
+  Hospitalization_Count_180D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: DOCUMENTED, meaning: "hospitalisations in 180 days (invoice-based; as-of semantics unconfirmed)"}
+  Hospitalization_Count_365D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: DOCUMENTED, meaning: "hospitalisations in 365 days (invoice-based; as-of semantics unconfirmed)"}
+  Total_Hosp_Days_365D: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: NAME_ONLY, meaning: "total hospital days in 365 days"}
+  Last_Hosp_Length: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: NAME_ONLY, meaning: "length of the last hospitalisation in days (NULL = no hospitalisation)"}
+  Last_Hosp_Date: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: DOCUMENTED, meaning: "date of the last hospitalisation (timing unknown)"}
+  Days_Since_Last_Hospitalization: {domain: HOSPITAL_EMERGENCY_UTILISATION, source: HOSPITALISATIONS, status: NAME_ONLY, meaning: "days since the last hospitalisation (NULL = none)"}
+  Invoice_Src_Rows_365D: {domain: DATA_QUALITY_PROVENANCE, source: EXTERNAL_CARE_INVOICES, status: NAME_ONLY, meaning: "invoice source rows in 365 days (technical count)"}
+  External_Care_Missing_Ind: {domain: DATA_QUALITY_PROVENANCE, source: EXTERNAL_CARE_INVOICES, status: DOCUMENTED, meaning: "1 = no external-care data (source absent)"}
+  # ==== disease registries ====
+  Active_Registry_Count: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "number of registry memberships active at Index_Date"}
+  Distinct_Registry_Type_Count: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "number of distinct registry types active at Index_Date"}
+  Registry_Dementia_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = dementia registry active at Index_Date (eFalls dementia)"}
+  Registry_Home_Confined_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = home-confined members registry active (eFalls housebound)"}
+  Registry_SMI_Level: {domain: REGISTRIES, source: REGISTRIES, status: UNKNOWN, meaning: "severe-mental-illness registry level 0-4 (level definitions unconfirmed, Q-M-03; NULL = not in the registry)"}
+  Registry_Suicide_Attempt_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = suicide-attempt registry (subset of eFalls self_harm)"}
+  Registry_Heart_Disease_Ind: {domain: REGISTRIES, source: REGISTRIES, status: UNKNOWN, meaning: "1 = heart-disease registry (which diagnoses populate it is unknown, Q-M-01)"}
+  Registry_Diabetes_T1_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = type 1 diabetes registry"}
+  Registry_Diabetes_T2_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = type 2 diabetes registry"}
+  Registry_Chronic_Renal_Failure_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = chronic renal failure registry (eFalls CKD without the eGFR/ACR rule)"}
+  Registry_Kidneys_Ind: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "1 = kidney-disease registry (relation to the renal-failure registry not documented)"}
+  Registry_Liver_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = liver-disease registry"}
+  Registry_COPD_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = COPD registry"}
+  Registry_Asthma_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = asthma registry"}
+  Registry_Blood_Pressure_Ind: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = hypertension registry (to confirm it is diagnosis-based, Q-M-04)"}
+  Registry_Transplant_Ind: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "1 = transplant registry"}
+  Registry_Stoma_Ind: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "1 = stoma registry"}
+  Longest_Registry_Duration_Days: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "days in the longest-running active registry (NULL = no registry)"}
+  Registry_Distinct_Status_Values: {domain: DATA_QUALITY_PROVENANCE, source: REGISTRIES, status: UNKNOWN, meaning: "number of distinct registry status values (meaning unknown per S2T)"}
+  Days_Since_First_Registry: {domain: REGISTRIES, source: REGISTRIES, status: NAME_ONLY, meaning: "days since the first registry entry (NULL = no registry)"}
+  Registry_Unknown_Dictionary_Count: {domain: DATA_QUALITY_PROVENANCE, source: REGISTRIES, status: NAME_ONLY, meaning: "registry entries not found in the registry dictionary"}
+  New_Registry_30D: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "new registry entries in 30 days (S2T: unreliable, never a predictor)"}
+  New_Registry_90D: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "new registry entries in 90 days (S2T: unreliable, never a predictor)"}
+  First_Registry_Date: {domain: REGISTRIES, source: REGISTRIES, status: DOCUMENTED, meaning: "earliest registry entry date (same-day evidence for the registry predictors, Q-M-11)"}
+  Registry_Missing_Ind: {domain: DATA_QUALITY_PROVENANCE, source: REGISTRIES, status: DOCUMENTED, meaning: "1 = no registry data for the member (source absent)"}
+  # ==== MEFI frailty ====
+  MEFI_Group_At_Index: {domain: FRAILTY, source: MEFI, status: DOCUMENTED, meaning: "MEFI frailty group 1 low .. 4 high at Index_Date (Meuhedet construct, not eFI; NULL = not assessed)"}
+  MEFI_Group_Desc: {domain: FRAILTY, source: MEFI, status: DOCUMENTED, meaning: "text label of MEFI_Group_At_Index"}
+  MEFI_From_Date: {domain: FRAILTY, source: MEFI, status: DOCUMENTED, meaning: "start date of the current MEFI group (D-00 timing evidence)"}
+  MEFI_Assessed_Ind: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "1 = MEFI assessed (relation to MEFI_Ever_Assessed_Ind not documented)"}
+  Days_In_Current_MEFI_Group: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "days in the current MEFI group at Index_Date"}
+  Days_Since_MEFI_Assessment: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "days since the last MEFI assessment"}
+  MEFI_Assessment_Count: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "number of MEFI assessments (window not documented)"}
+  MEFI_Ever_Assessed_Ind: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "1 = ever assessed with MEFI"}
+  MEFI_Prev_Group: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "previous MEFI group (NULL = no previous assessment)"}
+  MEFI_Worsened_Ind: {domain: FRAILTY, source: MEFI, status: NAME_ONLY, meaning: "1 = MEFI group worse than the previous one (NULL = no previous assessment)"}
+  Frailty_Not_Assessed_Ind: {domain: FRAILTY, source: MEFI, status: DOCUMENTED, meaning: "1 = frailty not assessed (not the same as 'not frail')"}
+  # ==== comorbidity and social ====
+  CCI_Group: {domain: DIAGNOSES_COMORBIDITY, source: COMORBIDITY_SOCIAL, status: NAME_ONLY, meaning: "Charlson comorbidity index group (grouping not documented; NULL = not computed)"}
+  Malnutrition_Grade: {domain: DIAGNOSES_COMORBIDITY, source: COMORBIDITY_SOCIAL, status: UNKNOWN, meaning: "malnutrition grade (code semantics to confirm)"}
+  Siudi_Status: {domain: SOCIAL_SOCIOECONOMIC, source: COMORBIDITY_SOCIAL, status: UNKNOWN, meaning: "nursing-care (siudi) benefit status (code values unknown, Q-M-02)"}
+  Customer_Risk_Code: {domain: SOCIAL_SOCIOECONOMIC, source: COMORBIDITY_SOCIAL, status: UNKNOWN, meaning: "member risk code (code semantics to confirm)"}
+  Income_Support: {domain: SOCIAL_SOCIOECONOMIC, source: COMORBIDITY_SOCIAL, status: DOCUMENTED, meaning: "1 = income-support benefit (socio-economic)"}
+  Audit_Only_Adif_Status: {domain: SOCIAL_SOCIOECONOMIC, source: COMORBIDITY_SOCIAL, status: DOCUMENTED, meaning: "fairness-audit field only; never a predictor (code meaning not documented)"}
+  Audit_Only_Si_Status: {domain: SOCIAL_SOCIOECONOMIC, source: COMORBIDITY_SOCIAL, status: DOCUMENTED, meaning: "fairness-audit field only; never a predictor (code meaning not documented)"}
+  # ==== coverage and quality ====
+  Has_Source_Visits_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = visit source has data for the member"}
+  Has_Source_Diagnosis_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = diagnosis source has data for the member"}
+  Has_Source_Assessment_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = nurse-assessment source has data for the member"}
+  Has_Source_Medication_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = medication source has data for the member"}
+  Has_Source_External_Care_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = external-care source has data for the member"}
+  Has_Source_Registry_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = registry source has data for the member"}
+  Has_Source_Frailty_Ind: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "1 = frailty source has data for the member"}
+  Distinct_Sources_With_Data: {domain: DATA_QUALITY_PROVENANCE, source: SOURCE_COVERAGE, status: NAME_ONLY, meaning: "number of sources with data for the member"}
+  Snapshot_Confidence: {domain: DATA_QUALITY_PROVENANCE, source: VIEW_TECHNICAL, status: DOCUMENTED, meaning: "row confidence HIGH / MEDIUM / LOW (rule not documented; never a predictor)"}
+  Leakage_Check_Ind: {domain: DATA_QUALITY_PROVENANCE, source: VIEW_TECHNICAL, status: DOCUMENTED, meaning: "VIEW self-check; any 1 is a VIEW bug"}
+  # ==== labels ====
+  Fall_Next_30D_Ind: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "1 = fall/fracture event in the 30 days from Index_Date (NULL = censored)"}
+  Next_Fall_Date_30D: {domain: OUTCOMES, source: LABELS, status: NAME_ONLY, meaning: "date of the first event in the 30-day window"}
+  Days_To_Next_Fall_30D: {domain: OUTCOMES, source: LABELS, status: NAME_ONLY, meaning: "days from Index_Date to the first 30-day event"}
+  Next_Fall_Event_ID_30D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "event id of the first 30-day event (traceback; never printed)"}
+  Next_Fall_Confidence_30D: {domain: OUTCOMES, source: LABELS, status: NAME_ONLY, meaning: "confidence of the first 30-day event (levels not documented)"}
+  Label_Reason_30D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "why the 30-day label has its value (POSITIVE / NEGATIVE / CENSORED + suffixes)"}
+  Fall_Next_180D_Ind: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "1 = fall/fracture event within 180 days of Index_Date: the EXPLORATORY outcome (NOT the eFalls outcome; NULL = censored)"}
+  Next_Fall_Date_180D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "date of the first event in the 180-day window"}
+  Days_To_Next_Fall_180D: {domain: OUTCOMES, source: LABELS, status: NAME_ONLY, meaning: "days from Index_Date to the first 180-day event"}
+  Next_Fall_Event_ID_180D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "event id of the first 180-day event (traceback; never printed)"}
+  Next_Fall_Confidence_180D: {domain: OUTCOMES, source: LABELS, status: NAME_ONLY, meaning: "confidence of the first 180-day event (levels not documented)"}
+  Label_Reason_180D: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "why the 180-day label has its value (POSITIVE / NEGATIVE / CENSORED + suffixes)"}
+  Fall_Next_30D_HighConf_Ind: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "30-day label restricted to high-confidence events (sensitivity label)"}
+  Fall_Next_180D_HighConf_Ind: {domain: OUTCOMES, source: LABELS, status: DOCUMENTED, meaning: "180-day label restricted to high-confidence events (sensitivity label)"}

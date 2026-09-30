@@ -1,0 +1,722 @@
+[
+ {
+  "name": "Abdominal pain",
+  "retained": "yes",
+  "coef": "-0.0641861",
+  "OR": "0.93 (0.902\u20130.959)",
+  "sail": "101210 (15.3)",
+  "cb": "15393 (18.8)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Activity limitation",
+  "retained": "yes",
+  "coef": "0.0475092",
+  "OR": "1.064 (0.966\u20131.172)",
+  "sail": "5646 (0.9)",
+  "cb": "1689 (2.1)",
+  "origin": "eFI 2016 \u2014 Activity limitation",
+  "rule": "none"
+ },
+ {
+  "name": "Anaemia and haematinic deficiency",
+  "retained": "yes",
+  "coef": "0.1733029",
+  "OR": "1.193 (1.153\u20131.234)",
+  "sail": "57016 (8.6)",
+  "cb": "13356 (16.4)",
+  "origin": "eFI 2016 \u2014 Anaemia and haematinic deficiency",
+  "rule": "\u2021 some 5y"
+ },
+ {
+  "name": "Anxiety",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "32014 (4.8)",
+  "cb": "5838 (7.1)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Asthma",
+  "retained": "yes",
+  "coef": "0.0816046",
+  "OR": "1.086 (1.052\u20131.121)",
+  "sail": "135836 (20.6)",
+  "cb": "15812 (19.4)",
+  "origin": "eFI 2016 \u2014 Respiratory disease (split; inferred from efi-asthma_copd tag)",
+  "rule": "* age>=18"
+ },
+ {
+  "name": "Atrial fibrillation",
+  "retained": "yes",
+  "coef": "0.1519654",
+  "OR": "1.17 (1.131\u20131.21)",
+  "sail": "59098 (8.9)",
+  "cb": "11690 (14.3)",
+  "origin": "eFI 2016 \u2014 Atrial fibrillation",
+  "rule": "* age>=18; lone AF age>=55"
+ },
+ {
+  "name": "Back pain",
+  "retained": "yes",
+  "coef": "0.0498699",
+  "OR": "1.054 (1.027\u20131.081)",
+  "sail": "181488 (27.5)",
+  "cb": "24164 (29.6)",
+  "origin": "eFI+ additional",
+  "rule": "\u2021 some 5y (exceptions: chronic back pain, spondylosis, disc prolapse)"
+ },
+ {
+  "name": "Bone disease",
+  "retained": "yes",
+  "coef": "-0.0267845",
+  "OR": "0.956 (0.867\u20131.054)",
+  "sail": "5574 (0.8)",
+  "cb": "7831 (9.6)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Cancer",
+  "retained": "yes",
+  "coef": "0.0301854",
+  "OR": "1.035 (1.007\u20131.063)",
+  "sail": "134167 (20.3)",
+  "cb": "21378 (26.2)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Chronic kidney disease",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "156983 (23.8)",
+  "cb": "35713 (43.7)",
+  "origin": "eFI 2016 \u2014 Chronic kidney disease",
+  "rule": "none"
+ },
+ {
+  "name": "Cognitive impairment",
+  "retained": "yes",
+  "coef": "0.1472251",
+  "OR": "1.168 (1.079\u20131.264)",
+  "sail": "6644 (1)",
+  "cb": "26706 (32.7)",
+  "origin": "eFI 2016 \u2014 Memory and cognitive problems (inferred split; no efi- tag)",
+  "rule": "\u00a5 resolves if dementia recorded"
+ },
+ {
+  "name": "COPD",
+  "retained": "yes",
+  "coef": "0.039956",
+  "OR": "1.042 (1.007\u20131.08)",
+  "sail": "77849 (11.8)",
+  "cb": "10730 (13.1)",
+  "origin": "eFI 2016 \u2014 Respiratory disease (split; inferred from efi-asthma_copd tag)",
+  "rule": "none"
+ },
+ {
+  "name": "Dementia",
+  "retained": "yes",
+  "coef": "0.1038111",
+  "OR": "1.116 (1.054\u20131.181)",
+  "sail": "18870 (2.9)",
+  "cb": "8597 (10.5)",
+  "origin": "eFI 2016 \u2014 Memory and cognitive problems (inferred split; no efi- tag)",
+  "rule": "\u00a5 (listed)"
+ },
+ {
+  "name": "Depression",
+  "retained": "yes",
+  "coef": "0.1633415",
+  "OR": "1.182 (1.136\u20131.229)",
+  "sail": "43299 (6.6)",
+  "cb": "8321 (10.2)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Diabetes mellitus",
+  "retained": "yes",
+  "coef": "0.0373911",
+  "OR": "1.042 (1.01\u20131.075)",
+  "sail": "124173 (18.8)",
+  "cb": "21157 (25.9)",
+  "origin": "eFI 2016 \u2014 Diabetes",
+  "rule": "\u2021 5y only drug-induced/remission/gestational"
+ },
+ {
+  "name": "Dizziness",
+  "retained": "yes",
+  "coef": "0.0198363",
+  "OR": "1.024 (0.993\u20131.055)",
+  "sail": "88020 (13.3)",
+  "cb": "11112 (13.6)",
+  "origin": "eFI 2016 \u2014 Dizziness",
+  "rule": "\u2021 5y except vestibular/vertigo codes"
+ },
+ {
+  "name": "Dressing and grooming problems",
+  "retained": "yes",
+  "coef": "0.4532777",
+  "OR": "1.867 (0.374\u20139.326)",
+  "sail": "<10 (0)",
+  "cb": "12277 (15.0)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Dyspnoea",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "68751 (10.4)",
+  "cb": "15099 (18.5)",
+  "origin": "eFI 2016 \u2014 Dyspnoea",
+  "rule": "\u2021 5y except MRC grade 4"
+ },
+ {
+  "name": "Environment problems",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "12249 (1.9)",
+  "cb": "3054 (3.7)",
+  "origin": "eFI+ additional",
+  "rule": "none (footnote: housing & social environment codes)"
+ },
+ {
+  "name": "Faecal incontinence",
+  "retained": "yes",
+  "coef": "-0.071791",
+  "OR": "0.914 (0.83\u20131.007)",
+  "sail": "5589 (0.8)",
+  "cb": "3824 (4.7)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Falls",
+  "retained": "yes",
+  "coef": "0.3009161",
+  "OR": "1.351 (1.314\u20131.389)",
+  "sail": "106839 (16.2)",
+  "cb": "18182 (22.3)",
+  "origin": "eFI 2016 \u2014 Falls",
+  "rule": "\u2020\u03b1 all 5y; age>=55"
+ },
+ {
+  "name": "Fatigue",
+  "retained": "yes",
+  "coef": "-0.0635057",
+  "OR": "0.928 (0.88\u20130.978)",
+  "sail": "23641 (3.6)",
+  "cb": "5348 (6.5)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Foot problems",
+  "retained": "yes",
+  "coef": "0.0282736",
+  "OR": "1.031 (0.993\u20131.069)",
+  "sail": "51706 (7.8)",
+  "cb": "14499 (17.7)",
+  "origin": "eFI 2016 \u2014 Foot problems",
+  "rule": "\u2021 5y for corns only"
+ },
+ {
+  "name": "Fracture",
+  "retained": "yes",
+  "coef": "0.1957923",
+  "OR": "1.219 (1.187\u20131.253)",
+  "sail": "157004 (23.8)",
+  "cb": "19453 (23.8)",
+  "origin": "eFI+ additional",
+  "rule": "\u03b1 age>=55"
+ },
+ {
+  "name": "Fragility fracture",
+  "retained": "yes",
+  "coef": "0.2031303",
+  "OR": "1.226 (1.186\u20131.266)",
+  "sail": "79033 (12)",
+  "cb": "15018 (18.4)",
+  "origin": "eFI 2016 \u2014 Fragility fracture",
+  "rule": "\u03b1 age>=55"
+ },
+ {
+  "name": "General mental health",
+  "retained": "yes",
+  "coef": "0.0991068",
+  "OR": "1.107 (1.06\u20131.155)",
+  "sail": "44450 (6.7)",
+  "cb": "18079 (22.1)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Headache",
+  "retained": "yes",
+  "coef": "-0.0149365",
+  "OR": "0.975 (0.931\u20131.022)",
+  "sail": "34383 (5.2)",
+  "cb": "4134 (5.1)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Hearing impairment",
+  "retained": "yes",
+  "coef": "-0.0168728",
+  "OR": "0.976 (0.949\u20131.003)",
+  "sail": "122237 (18.5)",
+  "cb": "18685 (22.9)",
+  "origin": "eFI 2016 \u2014 Hearing impairment",
+  "rule": "\u2021 5y only hearing loss/deteriorating/impaired"
+ },
+ {
+  "name": "Heart failure",
+  "retained": "yes",
+  "coef": "-0.0190399",
+  "OR": "0.971 (0.94\u20131.004)",
+  "sail": "76939 (11.7)",
+  "cb": "8915 (10.9)",
+  "origin": "eFI 2016 \u2014 Heart failure",
+  "rule": "none"
+ },
+ {
+  "name": "Heart valve disease",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "24071 (3.6)",
+  "cb": "6296 (7.7)",
+  "origin": "eFI 2016 \u2014 Heart valve disease",
+  "rule": "none"
+ },
+ {
+  "name": "Housebound",
+  "retained": "yes",
+  "coef": "0.2549983",
+  "OR": "1.289 (1.25\u20131.329)",
+  "sail": "74800 (11.3)",
+  "cb": "8931 (10.9)",
+  "origin": "eFI 2016 \u2014 Housebound",
+  "rule": "\u2021\u03b1 5y and >=55 for home visit (not chronic or acute)"
+ },
+ {
+  "name": "Hypertension",
+  "retained": "yes",
+  "coef": "-0.0318888",
+  "OR": "0.959 (0.934\u20130.986)",
+  "sail": "347534 (52.6)",
+  "cb": "54726 (67.0)",
+  "origin": "eFI 2016 \u2014 Hypertension",
+  "rule": "\u2021 (no specific rule text given)"
+ },
+ {
+  "name": "Hypotension or syncope",
+  "retained": "yes",
+  "coef": "0.0778591",
+  "OR": "1.084 (1.046\u20131.122)",
+  "sail": "37756 (5.7)",
+  "cb": "14582 (17.9)",
+  "origin": "eFI 2016 \u2014 Hypotension/syncope",
+  "rule": "5y except PD with orthostatic hypotension, chronic, idiopathic, NOS"
+ },
+ {
+  "name": "Inflammatory arthritis",
+  "retained": "yes",
+  "coef": "0.0586785",
+  "OR": "1.065 (1.034\u20131.098)",
+  "sail": "96213 (14.6)",
+  "cb": "17549 (21.5)",
+  "origin": "eFI 2016 \u2014 Arthritis (split; inferred from efi-arthritis tag)",
+  "rule": "none"
+ },
+ {
+  "name": "Inflammatory bowel disease",
+  "retained": "yes",
+  "coef": "0.0145135",
+  "OR": "1.021 (0.973\u20131.072)",
+  "sail": "30168 (4.6)",
+  "cb": "1315 (1.6)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Ischaemic heart disease",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "97668 (14.8)",
+  "cb": "22880 (28.0)",
+  "origin": "eFI 2016 \u2014 Ischaemic heart disease",
+  "rule": "none"
+ },
+ {
+  "name": "Liver problems",
+  "retained": "yes",
+  "coef": "0.3803626",
+  "OR": "1.485 (1.314\u20131.677)",
+  "sail": "3400 (0.5)",
+  "cb": "1112 (1.4)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Meal preparation problems",
+  "retained": "yes",
+  "coef": "-0.140024",
+  "OR": "0.834 (0.513\u20131.357)",
+  "sail": "298 (0)",
+  "cb": "1106 (1.4)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Medication management",
+  "retained": "yes",
+  "coef": "0.8030273",
+  "OR": "3.153 (0.318\u201331.278)",
+  "sail": "<10 (0)",
+  "cb": "480 (0.6)",
+  "origin": "eFI+ additional",
+  "rule": "none (listed as \"Unable to manage medications\")"
+ },
+ {
+  "name": "Memory concerns",
+  "retained": "yes",
+  "coef": "0.2601186",
+  "OR": "1.296 (1.238\u20131.358)",
+  "sail": "25552 (3.9)",
+  "cb": "885 (1.1)",
+  "origin": "eFI 2016 \u2014 Memory and cognitive problems (inferred split; no efi- tag)",
+  "rule": "\u2020\u00a5 all 5y; resolves if cognitive impairment recorded"
+ },
+ {
+  "name": "Mobility problems",
+  "retained": "yes",
+  "coef": "-0.1310067",
+  "OR": "0.865 (0.805\u20130.929)",
+  "sail": "8894 (1.3)",
+  "cb": "15805 (19.3)",
+  "origin": "eFI 2016 \u2014 Mobility and transfer problems",
+  "rule": "none"
+ },
+ {
+  "name": "Mono or hemiparesis",
+  "retained": "yes",
+  "coef": "0.1020457",
+  "OR": "1.119 (1.032\u20131.213)",
+  "sail": "8102 (1.2)",
+  "cb": "1342 (1.6)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Motor neurone disease",
+  "retained": "yes",
+  "coef": "-0.1209976",
+  "OR": "0.805 (0.464\u20131.398)",
+  "sail": "251 (0)",
+  "cb": "91 (0.1)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Musculoskeletal problems",
+  "retained": "yes",
+  "coef": "0.0419361",
+  "OR": "1.046 (1.019\u20131.073)",
+  "sail": "236264 (35.8)",
+  "cb": "29156 (35.7)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Osteoarthritis",
+  "retained": "yes",
+  "coef": "0.0634073",
+  "OR": "1.067 (1.041\u20131.094)",
+  "sail": "220727 (33.4)",
+  "cb": "33211 (40.7)",
+  "origin": "eFI 2016 \u2014 Arthritis (split; inferred from efi-arthritis tag)",
+  "rule": "none"
+ },
+ {
+  "name": "Osteoporosis",
+  "retained": "yes",
+  "coef": "0.1276254",
+  "OR": "1.135 (1.1\u20131.172)",
+  "sail": "78236 (11.8)",
+  "cb": "14915 (18.3)",
+  "origin": "eFI 2016 \u2014 Osteoporosis",
+  "rule": "none"
+ },
+ {
+  "name": "Palliative care",
+  "retained": "yes",
+  "coef": "-0.2353552",
+  "OR": "0.774 (0.701\u20130.855)",
+  "sail": "5451 (0.8)",
+  "cb": "5584 (6.8)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Parkinsonism and tremor",
+  "retained": "yes",
+  "coef": "0.2312839",
+  "OR": "1.266 (1.205\u20131.331)",
+  "sail": "20670 (3.1)",
+  "cb": "2537 (3.1)",
+  "origin": "eFI 2016 \u2014 Parkinsonism and tremor",
+  "rule": "none"
+ },
+ {
+  "name": "Peptic ulcer disease",
+  "retained": "yes",
+  "coef": "0.0056687",
+  "OR": "1.023 (0.916\u20131.143)",
+  "sail": "4941 (0.7)",
+  "cb": "979 (1.2)",
+  "origin": "eFI 2016 \u2014 Peptic ulcer",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Peripheral neuropathy",
+  "retained": "yes",
+  "coef": "0.0335789",
+  "OR": "1.038 (0.994\u20131.084)",
+  "sail": "44734 (6.8)",
+  "cb": "8797 (10.8)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Peripheral vascular disease",
+  "retained": "yes",
+  "coef": "0.0173065",
+  "OR": "1.021 (0.981\u20131.062)",
+  "sail": "44496 (6.7)",
+  "cb": "10952 (13.4)",
+  "origin": "eFI 2016 \u2014 Peripheral vascular disease",
+  "rule": "none"
+ },
+ {
+  "name": "Problems managing finances",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "227 (0)",
+  "cb": "4 (0.0)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Requirement for care",
+  "retained": "yes",
+  "coef": "-0.2177301",
+  "OR": "0.792 (0.75\u20130.836)",
+  "sail": "23427 (3.5)",
+  "cb": "6689 (8.2)",
+  "origin": "eFI 2016 \u2014 Requirement for care",
+  "rule": "none"
+ },
+ {
+  "name": "Respiratory disease",
+  "retained": "yes",
+  "coef": "0.0132757",
+  "OR": "1.018 (0.978\u20131.059)",
+  "sail": "58989 (8.9)",
+  "cb": "8783 (10.8)",
+  "origin": "eFI 2016 \u2014 Respiratory disease",
+  "rule": "\u2021 5y only chronic cough, PE/infarction"
+ },
+ {
+  "name": "Seizures",
+  "retained": "yes",
+  "coef": "0.2571899",
+  "OR": "1.303 (1.227\u20131.385)",
+  "sail": "15238 (2.3)",
+  "cb": "2171 (2.7)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Self-harm",
+  "retained": "yes",
+  "coef": "0.1461241",
+  "OR": "1.182 (0.993\u20131.406)",
+  "sail": "1601 (0.2)",
+  "cb": "623 (0.8)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Severe mental illness",
+  "retained": "yes",
+  "coef": "0.0676153",
+  "OR": "1.071 (1.026\u20131.119)",
+  "sail": "46665 (7.1)",
+  "cb": "15873 (19.4)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Shopping problems",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "302 (0)",
+  "cb": "473 (0.6)",
+  "origin": "eFI+ additional",
+  "rule": "NOT LISTED in eFI2 App1"
+ },
+ {
+  "name": "Skin ulcer",
+  "retained": "yes",
+  "coef": "0.0746926",
+  "OR": "1.08 (1.046\u20131.115)",
+  "sail": "75506 (11.4)",
+  "cb": "10231 (12.5)",
+  "origin": "eFI 2016 \u2014 Skin ulcer",
+  "rule": "none"
+ },
+ {
+  "name": "Sleep problems",
+  "retained": "yes",
+  "coef": "0.0056967",
+  "OR": "1.012 (0.961\u20131.066)",
+  "sail": "22554 (3.4)",
+  "cb": "3765 (4.6)",
+  "origin": "eFI 2016 \u2014 Sleep disturbance",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Social vulnerability",
+  "retained": "yes",
+  "coef": "0.0495075",
+  "OR": "1.061 (1.004\u20131.122)",
+  "sail": "20681 (3.1)",
+  "cb": "10331 (12.6)",
+  "origin": "eFI 2016 \u2014 Social vulnerability",
+  "rule": "\u2021 5y only widowed/bereavement/loneliness"
+ },
+ {
+  "name": "Stress",
+  "retained": "yes",
+  "coef": "-0.0200494",
+  "OR": "0.965 (0.9\u20131.035)",
+  "sail": "15374 (2.3)",
+  "cb": "3049 (3.7)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Stroke",
+  "retained": "yes",
+  "coef": "0.0788542",
+  "OR": "1.086 (1.047\u20131.126)",
+  "sail": "48091 (7.3)",
+  "cb": "10733 (13.1)",
+  "origin": "eFI 2016 \u2014 Cerebrovascular disease (inferred; no efi- tag)",
+  "rule": "none"
+ },
+ {
+  "name": "Thyroid problems",
+  "retained": "yes",
+  "coef": "-0.0273864",
+  "OR": "0.965 (0.938\u20130.993)",
+  "sail": "108866 (16.5)",
+  "cb": "8765 (10.7)",
+  "origin": "eFI 2016 \u2014 Thyroid disease",
+  "rule": "none"
+ },
+ {
+  "name": "Toileting problems",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "241 (0)",
+  "cb": "2401 (2.9)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Transient ischaemic attack",
+  "retained": "no (LASSO zero)",
+  "coef": "0 (not selected)",
+  "OR": "\u2014",
+  "sail": "29018 (4.4)",
+  "cb": "4911 (6.0)",
+  "origin": "eFI 2016 \u2014 Cerebrovascular disease (inferred; no efi- tag)",
+  "rule": "none"
+ },
+ {
+  "name": "Urinary incontinence",
+  "retained": "yes",
+  "coef": "0.0345173",
+  "OR": "1.039 (0.998\u20131.081)",
+  "sail": "41496 (6.3)",
+  "cb": "13310 (16.3)",
+  "origin": "eFI 2016 \u2014 Urinary incontinence",
+  "rule": "\u03b1 age>=55"
+ },
+ {
+  "name": "Urinary system disease",
+  "retained": "yes",
+  "coef": "0.0119309",
+  "OR": "1.016 (0.988\u20131.044)",
+  "sail": "155282 (23.5)",
+  "cb": "32769 (40.1)",
+  "origin": "eFI 2016 \u2014 Urinary system disease",
+  "rule": "\u2021 5y except TURP, catheter, cystitis, detrusor instability, retention, BPH"
+ },
+ {
+  "name": "Visual impairment",
+  "retained": "yes",
+  "coef": "0.02332",
+  "OR": "1.024 (0.996\u20131.053)",
+  "sail": "145462 (22)",
+  "cb": "34017 (41.6)",
+  "origin": "eFI 2016 \u2014 Visual impairment",
+  "rule": "none"
+ },
+ {
+  "name": "Washing and bathing",
+  "retained": "yes",
+  "coef": "-0.1118824",
+  "OR": "0.853 (0.555\u20131.313)",
+  "sail": "377 (0.1)",
+  "cb": "2796 (3.4)",
+  "origin": "eFI+ additional",
+  "rule": "none"
+ },
+ {
+  "name": "Weakness",
+  "retained": "yes",
+  "coef": "-0.0589464",
+  "OR": "0.903 (0.699\u20131.167)",
+  "sail": "792 (0.1)",
+  "cb": "1120 (1.4)",
+  "origin": "eFI+ additional",
+  "rule": "\u2020 all 5y"
+ },
+ {
+  "name": "Weight loss",
+  "retained": "yes",
+  "coef": "0.0301414",
+  "OR": "1.033 (0.995\u20131.072)",
+  "sail": "49466 (7.5)",
+  "cb": "6114 (7.5)",
+  "origin": "eFI 2016 \u2014 Weight loss and anorexia",
+  "rule": "\u2021 5y only appetite loss"
+ }
+]

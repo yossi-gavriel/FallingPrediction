@@ -1,0 +1,295 @@
+# Meuhedet research-wide table: column inventory and data contract (Phase 1, spec §11 M-01..M-11, D-00, D-22).
+# Source: [Meuhedet_DWH].[dbo].[V_Falls_Prediction_Wide_1] (Definition_Version V1.0), 221 columns, DDL and S2T of 2026-09-17.
+# The VIEW is an immutable research source; this file is the adapter's contract ABOVE it. Nothing here is derived from row data.
+#
+# Per column:
+#   sql       SQL Server type from the DDL            nullable  DDL nullability (true = NULL allowed)
+#   role      exactly one of contract.roles           sem       canonical semantic type (contract.semantic_types)
+#   model     final model-matrix dtype, or never      timing    when the value is knowable (pre_index/at_index/post_index/unknown/na)
+#   allowed   allowed values for binary/ordinal/categorical columns (audit reports anything else as invalid)
+#   null_means business meaning of NULL (never converted silently); group = Phase-2 feature group; note = decision rationale
+#   sentinels  declared business sentinel dates (ISO, quoted) of a date column, kept as dates in the contract layer; sentinel_means = their
+#              meaning (required); sentinel_modeling_rule keep (default: the build stops if a modelling-layer column cannot hold the value)
+#              or to_null (NULL in the modelling layer only, counted in the build report). Undeclared far-future dates are reported, never repaired.
+# Rules enforced by falls_ml.data.meuhedet_wide.load_wide_contract: every column has a role; predictor roles need timing pre_index
+# or at_index; LABEL/FORBIDDEN_LEAKAGE/QA_CONTROL/IDENTIFIER/COHORT columns can never enter a model matrix (model: never).
+contract:
+  name: meuhedet_wide_v1
+  version: 1.0.0
+  source_view: "[Meuhedet_DWH].[dbo].[V_Falls_Prediction_Wide_1]"
+  definition_version: V1.0
+  n_columns: 221
+  one_row_per: [Customer_Full_ID, Index_Date]
+  roles: [IDENTIFIER, COHORT_ELIGIBILITY, QA_CONTROL, EFALLS_BASELINE_FEATURE, MEUHEDET_ENHANCED_FEATURE, LABEL, FORBIDDEN_LEAKAGE]
+  semantic_types: [identifier, date, binary, continuous, count, categorical, ordinal, quality_control, label]
+  model_dtypes: [never, float64, int8_binary, onehot_categorical, ordinal_float64]
+  timings: [pre_index, at_index, post_index, unknown, na]
+  phase2_groups: [PRIOR_FALLS_ENHANCED, DIAGNOSIS_BURDEN, HEALTHCARE_UTILIZATION, NURSE_FALL_ASSESSMENT, MOBILITY_ADL, COGNITION,
+                  HOME_SAFETY, MEDICATION_ENHANCED, REGISTRY_ENHANCED, MEFI_FRAILTY, COMORBIDITY_SOCIAL]
+  # Source date layouts accepted when a date column arrives as text (CSV / Excel text cells), tried in this order. They are
+  # declared, never inferred: 01/02/2024 is always 1 February 2024 under %d/%m/%Y. The loader refuses a set in which two formats
+  # would read the same text as different dates (e.g. %d/%m/%Y together with %m/%d/%Y). Real Excel/Parquet date cells are used as they are.
+  date_formats: ["%Y-%m-%d", "%d/%m/%Y"]
+  sql_to_pandas:   # raw type -> pandas dtype used when reading the extract (no inference)
+    int: Int64
+    smallint: Int64
+    tinyint: Int64
+    bit: Int64
+    decimal: float64
+    date: datetime64[us]       # the full SQL date range (0001..9999, e.g. the 2999-12-31 open-ended sentinel); only the canonical
+    datetime: datetime64[us]   # modelling dates (index_date, predictor_max_record_date, event/death/follow-up dates) are cast to datetime64[ns]
+    varchar: string
+columns:
+  # ==== identification ====
+  Customer_Full_ID: {sql: "varchar(11)", nullable: false, role: IDENTIFIER, sem: identifier, model: never, timing: na, note: "member id -> research_id (string); never a predictor; never printed by the audit"}
+  Index_Date: {sql: date, nullable: true, role: COHORT_ELIGIBILITY, sem: date, model: never, timing: at_index, note: "prediction point -> index_date; one snapshot selected per build (--index-date)"}
+  Snapshot_Key: {sql: "varchar(20)", nullable: true, role: IDENTIFIER, sem: identifier, model: never, timing: na, note: "technical row key; string; never a predictor"}
+  Customer_Id_Type_Prefix: {sql: "varchar(1)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na, note: "id-type digit (control)"}
+  Definition_Version: {sql: "varchar(20)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [V1.0], note: "VIEW definition version; must be constant; recorded as provenance"}
+  Observed_History_Days: {sql: int, nullable: true, role: COHORT_ELIGIBILITY, sem: count, model: never, timing: at_index, note: "history depth available at index (eligibility support)"}
+  Has_Full_365D_Lookback: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: at_index, allowed: [0, 1]}
+  Has_Full_30D_Label: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1], note: "label-window completeness (post-index knowledge)"}
+  Has_Full_180D_Label: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1], note: "label-window completeness (post-index knowledge)"}
+  # ==== population / eligibility ====
+  Is_Eligible_Cohort: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: at_index, allowed: [0, 1], note: "THE cohort filter (= 1); the only filter applied before training"}
+  Exclusion_Reason: {sql: "varchar(38)", nullable: true, role: COHORT_ELIGIBILITY, sem: categorical, model: never, timing: at_index, null_means: eligible, note: "audit reports the distribution among excluded rows"}
+  Population_Record_From_Date: {sql: date, nullable: true, role: QA_CONTROL, sem: date, model: never, timing: at_index, note: "SCD validity start"}
+  Population_Record_To_Date: {sql: date, nullable: true, role: QA_CONTROL, sem: date, model: never, timing: unknown, sentinels: ["2999-12-31"],
+                              sentinel_means: "open-ended SCD row (record still valid at extraction); PROPOSED from the first real extract (Q-M-08)",
+                              note: "SCD validity end; may be set after index; 2999-12-31 is kept as a date (never NULL); not used by the build"}
+  Population_Current_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: unknown, allowed: [0, 1], note: "exposed, not used (S2T)"}
+  Population_Record_Count: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na}
+  Multiple_Valid_Population_Rows_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1], note: "SCD duplicate flag; audit reports count"}
+  # ==== time windows ====
+  Obs_Window_Start: {sql: date, nullable: true, role: COHORT_ELIGIBILITY, sem: date, model: never, timing: at_index}
+  Label_End_30D: {sql: date, nullable: true, role: LABEL, sem: date, model: never, timing: at_index, note: "end of the 30-day label window (defines the outcome window, not a feature)"}
+  Label_End_180D: {sql: date, nullable: true, role: LABEL, sem: date, model: never, timing: at_index, note: "end of the 180-day label window; adapter checks Next_Fall_Date_180D <= Label_End_180D and the window length"}
+  Is_Active_For_Modeling: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: at_index, allowed: [0, 1]}
+  Index_Date_Status: {sql: "varchar(38)", nullable: false, role: COHORT_ELIGIBILITY, sem: categorical, model: never, timing: at_index}
+  # ==== demographics ====
+  Age_At_Index: {sql: int, nullable: true, role: EFALLS_BASELINE_FEATURE, sem: continuous, model: float64, timing: at_index, null_means: "invalid row (age is mandatory; build fails)", note: "completed years at index -> age_years; Birth_Date_Suspect_Ind flags default birth dates (10.5%)"}
+  Age_Group: {sql: "varchar(5)", nullable: false, role: QA_CONTROL, sem: categorical, model: never, timing: at_index, note: "redundant banding of Age_At_Index; not a predictor (age enters continuously)"}
+  Birth_Date_Suspect_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: at_index, allowed: [0, 1], note: "1 = default birth date, age unreliable; kept in the primary cohort (only filter = Is_Eligible_Cohort), reported, sensitivity analysis excludes"}
+  Gender_Code: {sql: smallint, nullable: true, role: EFALLS_BASELINE_FEATURE, sem: categorical, model: onehot_categorical, timing: at_index, allowed: [1, 2], null_means: "invalid row (sex is mandatory; build fails)", note: "1 = male (example row: 1/זכר), 2 = female (to confirm via Gender_Desc cross-tab in the audit)"}
+  Gender_Desc: {sql: "varchar(7)", nullable: true, role: QA_CONTROL, sem: categorical, model: never, timing: at_index, note: "label of Gender_Code; adapter verifies one description per code"}
+  # ==== history / follow-up ====
+  Available_History_Days: {sql: int, nullable: true, role: COHORT_ELIGIBILITY, sem: count, model: never, timing: at_index, note: "membership days until index (eligibility support; HMO_Seniority_Months is the feature form)"}
+  Has_Minimum_History: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: at_index, allowed: [0, 1]}
+  HMO_Seniority_Months: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: at_index, group: HEALTHCARE_UTILIZATION, null_means: unknown seniority (missing indicator)}
+  Followup_End_Date: {sql: date, nullable: true, role: COHORT_ELIGIBILITY, sem: date, model: never, timing: post_index, null_means: follow-up open,
+                      sentinels: ["2999-12-31"],
+                      sentinel_means: "OPEN_FOLLOWUP_NO_KNOWN_END - follow-up still open at extraction, no end date known; the same business meaning
+                                       as NULL in this column (null_means: follow-up open); PROPOSED from the first real extract (Q-M-09)",
+                      sentinel_modeling_rule: to_null,
+                      note: "censoring support -> followup_end_date metadata; post-index, never a predictor. The raw/contract layer keeps 2999-12-31;
+                             the canonical followup_end_date is NULL for those rows, which is this column's declared value for an open follow-up, so no
+                             censoring or follow-up-duration calculation can read the sentinel as an end date in the year 2999. Every conversion is
+                             counted in the build report (sentinel_to_null) and warned about. Censoring of the label itself comes from
+                             Fall_Next_180D_Ind / Label_Reason_180D and Is_Censored_180D, never from this date."}
+  Followup_End_Reason: {sql: "varchar(10)", nullable: false, role: COHORT_ELIGIBILITY, sem: categorical, model: never, timing: post_index, note: "censoring reason; post-index"}
+  Has_Full_Followup_30D: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1]}
+  Has_Full_Followup_180D: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1]}
+  Is_Censored_30D: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1]}
+  Is_Censored_180D: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1]}
+  Is_Deceased_Ind: {sql: int, nullable: false, role: COHORT_ELIGIBILITY, sem: binary, model: never, timing: post_index, allowed: [0, 1], note: "death after index (censoring); eFalls keeps deaths as non-events (D-18)"}
+  Leave_Join_Ind: {sql: int, nullable: true, role: COHORT_ELIGIBILITY, sem: categorical, model: never, timing: post_index, note: "raw leave code (post-index membership change)"}
+  Death_Identification_Status: {sql: "varchar(18)", nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: post_index}
+  Death_Censor_Date: {sql: date, nullable: true, role: COHORT_ELIGIBILITY, sem: date, model: never, timing: post_index, note: "-> death_date metadata"}
+  Death_Date_Gap_Days: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: post_index}
+  Abroad_Ind: {sql: bit, nullable: true, role: FORBIDDEN_LEAKAGE, sem: binary, model: never, timing: unknown, allowed: [0, 1], note: "stay abroad; as-of timing not defined in the S2T -> forbidden until data engineering confirms it is pre-index"}
+  # ==== prior falls ====
+  Prior_Fall_Count_30D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED, note: "falls AND fractures (Meuhedet event list V1.0)"}
+  Prior_Fall_Count_90D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED}
+  Prior_Fall_Count_180D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED}
+  Prior_Fall_Count_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED}
+  Prior_Fall_Since_Study_Start_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: pre_index, allowed: [0, 1], note: "-> falls (APPROXIMATE): any fall/fracture event since 2022-01-01 (<= 3 years at 2025-01-01 vs eFalls 5 years)"}
+  Prior_Fall_Count_Since_Study_Start: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED, null_means: no fall data (Prior_Fall_Missing_Ind)}
+  Last_Fall_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: PRIOR_FALLS_ENHANCED, null_means: no prior fall, note: "raw date never enters a model; Days_Since_Last_Fall is the derived feature; used for the D-00 timing check"}
+  Days_Since_Last_Fall: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: PRIOR_FALLS_ENHANCED, null_means: no prior fall (missing indicator + training-derived imputation)}
+  Last_Fall_Confidence: {sql: "varchar(6)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "date certainty of the last fall"}
+  Fall_On_Index_Date_Ind: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: binary, model: never, timing: at_index, allowed: [0, 1], note: "an index-day event lies in the outcome window (D-00: index_date <= event); audit cross-tabulates it with the labels and prior counts"}
+  Prior_Fall_Missing_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, allowed: [0, 1], note: "1 = no fall records at all (source absent) - distinct from 0 falls; counted by the adapter, eFalls absent_is_zero applied explicitly"}
+  # ==== diagnoses ====
+  Diagnosis_Count_180D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: DIAGNOSIS_BURDEN}
+  Diagnosis_Count_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: DIAGNOSIS_BURDEN}
+  Distinct_Diagnosis_Codes_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: DIAGNOSIS_BURDEN, note: "morbidity-burden proxy"}
+  Chronic_Diagnosis_Count_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: DIAGNOSIS_BURDEN}
+  Gait_Disorder_Since_Study_Start_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: pre_index, allowed: [0, 1], note: "-> mobility_problems (APPROXIMATE): ICD-9 719.7 difficulty in walking since 2022-01-01 (single code vs eFalls mobility/transfer code group)"}
+  Last_Dx_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: DIAGNOSIS_BURDEN, note: "D-00 timing check only"}
+  Days_Since_Last_Diagnosis: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: DIAGNOSIS_BURDEN, null_means: no diagnosis recorded}
+  # ==== visits / utilisation ====
+  Visit_Count_30D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Visit_Count_90D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Visit_Count_180D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Visit_Count_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Last_Visit_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: HEALTHCARE_UTILIZATION, note: "D-00 timing check only"}
+  Days_Since_Last_Visit: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION, null_means: no visit recorded}
+  Rx_Written_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION, null_means: no medication data}
+  Rx_Purchased_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION, null_means: no medication data}
+  Prescription_Fill_Ratio_365D: {sql: "decimal(21,15)", nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION, null_means: no prescriptions written (ratio undefined)}
+  Lab_Referred_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Lab_Performed_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION}
+  Lab_Performed_Ratio_365D: {sql: "decimal(21,15)", nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: HEALTHCARE_UTILIZATION, null_means: no referrals (ratio undefined)}
+  Unsettled_Visit_Counter_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: at_index, allowed: [0, 1], note: "3-day settlement trap (train/serve skew diagnostic)"}
+  # ==== nurse assessment 999.52 (falls risk) - assessment-conditional: NULL = not assessed ====
+  Falls_Risk_Assessment_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [1, 2, 3], null_means: not assessed (missing category)}
+  Falls_Risk_Assessment_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: NURSE_FALL_ASSESSMENT, note: "D-00 timing check only"}
+  Fall_Self_Report_Value: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: categorical, model: onehot_categorical, timing: pre_index, group: NURSE_FALL_ASSESSMENT, null_means: not asked, note: "code semantics to confirm (audit distribution)"}
+  Fall_Self_Report_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: NURSE_FALL_ASSESSMENT}
+  Fall_Count_Self_Reported: {sql: "decimal(18,4)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "empty in all rows (S2T); audit verifies"}
+  Fall_Required_Treatment_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed (missing indicator)}
+  Instability_Dizziness_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed, note: "eFalls dizziness candidate for Phase 2 only (assessment-conditional, not absent_is_zero)"}
+  Fear_Of_Falling_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Confined_To_Chair_Bed_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  # ==== nurse assessment 999.79 (get up and go) ====
+  Balance_Disorder_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Shuffling_Gait_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Hesitant_Gait_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Uses_Walking_Aid_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Prior_Falls_Nurse_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Muscle_Weakness_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed, note: "eFalls weakness candidate for Phase 2 only"}
+  Cognitive_Impairment_Nurse_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: COGNITION, allowed: [0, 1], null_means: not assessed, note: "eFalls cognitive_impairment candidate for Phase 2 only"}
+  On_Medications_Nurse_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Unsafe_Environment_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed, note: "eFalls environment_problems candidate for Phase 2 only"}
+  Unsuitable_Footwear_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed}
+  Missing_Sensory_Aids_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  Unsuitable_Bed_Chair_Height_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed}
+  Vision_Impairment_Nurse_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed, note: "eFalls visual_impairment candidate for Phase 2 only"}
+  Orthostatic_Hypotension_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed, note: "eFalls hypotension_or_syncope candidate for Phase 2 only"}
+  Polypharmacy_Nurse_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed}
+  No_Primary_Caregiver_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], null_means: not assessed, note: "eFalls social_vulnerability/requirement_for_care candidate for Phase 2 only"}
+  Get_Up_And_Go_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: NURSE_FALL_ASSESSMENT, note: "D-00 timing check only"}
+  # ==== nurse assessment 999.175 (function, mobility, senses) ====
+  ADL_Worst_Domain_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: MOBILITY_ADL, allowed: [0, 1, 2, 3, 4], null_means: not assessed (missing category), note: "0 independent .. 4 hoist; eFalls ADL candidates (dressing/washing/toileting) Phase 2 only"}
+  ADL_Domains_Assessed: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "how many ADL domains were measured (assessment completeness)"}
+  Transfer_Dependency_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: MOBILITY_ADL, allowed: [0, 1, 2, 3, 4], null_means: not assessed (missing category)}
+  Mobility_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: MOBILITY_ADL, allowed: [0, 1, 2, 3], null_means: not assessed (missing category), note: "0 walks alone .. 3 confined"}
+  Vision_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: MOBILITY_ADL, allowed: [0, 1, 2], null_means: not assessed (missing category), note: "0 normal, 1 limited, 2 blindness"}
+  Hearing_Score: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: MOBILITY_ADL, allowed: [0, 1, 2], null_means: not assessed (missing category), note: "eFalls hearing_impairment candidate for Phase 2 only"}
+  Mobility_Assessment_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: MOBILITY_ADL, note: "D-00 timing check only"}
+  # ==== nurse assessment - cognition ====
+  MMSE_Score: {sql: "decimal(18,4)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "empty in all rows (S2T); audit verifies; would be COGNITION"}
+  MMSE_Date: {sql: date, nullable: true, role: QA_CONTROL, sem: date, model: never, timing: pre_index}
+  MiniCog_Score: {sql: "decimal(18,4)", nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: pre_index, group: COGNITION, allowed: [0, 1, 2, 3, 4, 5], null_means: not assessed (missing category)}
+  MiniCog_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: COGNITION, note: "D-00 timing check only"}
+  # ==== nurse assessment 999.139 (home safety) ====
+  Fall_Location_At_Home_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not asked / no fall}
+  Fall_Count_Home_Safety: {sql: "decimal(18,4)", nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "empty in all rows (S2T); audit verifies"}
+  Orthostatic_BP_Measured_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed}
+  Slow_Rising_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed}
+  Vitamin_D_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: HOME_SAFETY, allowed: [0, 1], null_means: not assessed}
+  Home_Safety_Risk_Count: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: HOME_SAFETY, null_means: not assessed (missing indicator)}
+  Home_Safety_Questions_Answered: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "questionnaire completeness"}
+  Home_Safety_Assessment_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: HOME_SAFETY, note: "D-00 timing check only"}
+  # ==== nurse assessment - quality and counts ====
+  Unmapped_Answer_Count: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index}
+  Assessment_Count_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: NURSE_FALL_ASSESSMENT, null_means: no assessment source data}
+  Last_Assessment_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: pre_index, group: NURSE_FALL_ASSESSMENT, note: "D-00 timing check only"}
+  Days_Since_Last_Assessment: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: NURSE_FALL_ASSESSMENT, null_means: never assessed}
+  Distinct_Assessment_Dates_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: NURSE_FALL_ASSESSMENT}
+  Has_Repeat_Assessment_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1]}
+  Assessment_Not_Performed_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: NURSE_FALL_ASSESSMENT, allowed: [0, 1], note: "explicit not-assessed indicator (clinical process information; the missing indicator of the nurse block)"}
+  # ==== medication ====
+  Distinct_Active_Substance_Count: {sql: int, nullable: true, role: EFALLS_BASELINE_FEATURE, sem: count, model: float64, timing: pre_index, null_means: "no medication data (Medication_Missing_Ind = 1) -> eFalls absent_is_zero applied explicitly and counted", note: "-> polypharmacy_count_120d (APPROXIMATE): distinct active substances in active exposure vs eFalls distinct BNF paragraphs prescribed in 120 days (D-03)"}
+  Polypharmacy_5Plus_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: MEDICATION_ENHANCED, allowed: [0, 1], null_means: no medication data, note: "not used for eFalls: the published model uses the continuous count"}
+  Polypharmacy_10Plus_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: pre_index, group: MEDICATION_ENHANCED, allowed: [0, 1], null_means: no medication data}
+  Narcotic_Drug_Count: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: MEDICATION_ENHANCED, null_means: no medication data}
+  Prescribed_Not_Collected_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: MEDICATION_ENHANCED, null_means: no medication data}
+  Credited_Prescriptions_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index}
+  Approx_Matched_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "approximate ATC matching count (data quality)"}
+  Bought_Outside_Meuhedet_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: pre_index, group: MEDICATION_ENHANCED, null_means: no medication data}
+  Atc_Unmatched_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index}
+  Future_Dated_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "future-dated prescriptions (data-quality count)"}
+  Fallback_Exposure_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, note: "assumed exposure windows (data quality)"}
+  Total_DDD_Amount: {sql: "decimal(38,4)", nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: pre_index, group: MEDICATION_ENHANCED, null_means: no medication data}
+  Medication_Missing_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, allowed: [0, 1], note: "1 = no medication data; governs the explicit NULL -> 0 rule of polypharmacy_count_120d"}
+  # ==== external care / hospitalisation (invoice sources with billing lag) ====
+  External_Care_Count_30D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "counts records billed after the index date (S2T: hidden-by-billing-lag exists only for 365D); use the _Visible variant"}
+  External_Care_Count_90D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "as External_Care_Count_30D"}
+  External_Care_Count_180D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "as External_Care_Count_30D"}
+  External_Care_Count_365D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "= Visible + Hidden_By_Billing_Lag: includes records unknown at index (retrospective)"}
+  External_Care_Count_365D_Visible: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: at_index, group: HEALTHCARE_UTILIZATION, note: "external-care records already billed at index (as-of correct)"}
+  External_Care_Hidden_By_Billing_Lag_365D: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: post_index, note: "train/serve skew diagnostic (S2T); never a predictor"}
+  Max_Invoice_Lag_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: post_index, note: "billing lag in days; its upper quantiles set validation.outcome_lag_days"}
+  Last_Ext_Date: {sql: datetime, nullable: true, role: FORBIDDEN_LEAKAGE, sem: date, model: never, timing: unknown, note: "may be a record billed after index"}
+  Days_Since_Last_External_Care: {sql: int, nullable: true, role: FORBIDDEN_LEAKAGE, sem: continuous, model: never, timing: unknown, note: "derived from Last_Ext_Date (may include hidden records)"}
+  Hospitalization_Count_180D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: unknown, group: HEALTHCARE_UTILIZATION, note: "invoice-based; no as-of (visible) variant -> blocked until data engineering confirms as-of semantics"}
+  Hospitalization_Count_365D: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: unknown, group: HEALTHCARE_UTILIZATION, note: "as Hospitalization_Count_180D"}
+  Total_Hosp_Days_365D: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: unknown, group: HEALTHCARE_UTILIZATION, note: "as Hospitalization_Count_180D"}
+  Last_Hosp_Length: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: unknown, group: HEALTHCARE_UTILIZATION, null_means: no hospitalisation}
+  Last_Hosp_Date: {sql: datetime, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: unknown, group: HEALTHCARE_UTILIZATION, note: "D-00 timing check"}
+  Days_Since_Last_Hospitalization: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: unknown, group: HEALTHCARE_UTILIZATION, null_means: no hospitalisation}
+  Invoice_Src_Rows_365D: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na}
+  External_Care_Missing_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: pre_index, allowed: [0, 1], note: "1 = no external-care data (source absent)"}
+  # ==== disease registries (population-wide, active at index) ====
+  Active_Registry_Count: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: at_index, group: REGISTRY_ENHANCED}
+  Distinct_Registry_Type_Count: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: at_index, group: REGISTRY_ENHANCED}
+  Registry_Dementia_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> dementia (HIGH_CONFIDENCE): dementia registry active at index"}
+  Registry_Home_Confined_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> housebound (HIGH_CONFIDENCE): home-confined registry"}
+  Registry_SMI_Level: {sql: int, nullable: true, role: EFALLS_BASELINE_FEATURE, sem: ordinal, model: int8_binary, timing: at_index, allowed: [0, 1, 2, 3, 4], null_means: "not in the SMI registry -> 0 (explicit absent_is_zero)", note: "-> severe_mental_illness (APPROXIMATE): level >= 1; 4 severity levels whose inclusion criteria are unconfirmed (Q-M-03)"}
+  Registry_Suicide_Attempt_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> self_harm (APPROXIMATE): suicide-attempt registry (subset of self-harm; registry lifetime vs eFalls 5 years)"}
+  Registry_Heart_Disease_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: REGISTRY_ENHANCED, allowed: [0, 1], note: "cannot be assigned to ONE eFalls cardiac concept (heart_failure / ischaemic_heart_disease / heart_valve_disease / atrial_fibrillation) without the registry definition (Q-M-01)"}
+  Registry_Diabetes_T1_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> diabetes_mellitus (OR with T2)"}
+  Registry_Diabetes_T2_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> diabetes_mellitus (OR with T1)"}
+  Registry_Chronic_Renal_Failure_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> chronic_kidney_disease (APPROXIMATE): registry without the eFalls eGFR/ACR measurement rule"}
+  Registry_Kidneys_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: REGISTRY_ENHANCED, allowed: [0, 1], note: "kidney-disease registry; NOT mapped to urinary_system_disease (renal signal already used by chronic_kidney_disease; double counting)"}
+  Registry_Liver_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> liver_problems (HIGH_CONFIDENCE)"}
+  Registry_COPD_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> copd (HIGH_CONFIDENCE)"}
+  Registry_Asthma_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> asthma (HIGH_CONFIDENCE)"}
+  Registry_Blood_Pressure_Ind: {sql: int, nullable: false, role: EFALLS_BASELINE_FEATURE, sem: binary, model: int8_binary, timing: at_index, allowed: [0, 1], note: "-> hypertension (HIGH_CONFIDENCE): hypertension registry, without the eFalls 3-readings rule (Q-M-04: confirm it is the hypertension registry)"}
+  Registry_Transplant_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: REGISTRY_ENHANCED, allowed: [0, 1]}
+  Registry_Stoma_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: REGISTRY_ENHANCED, allowed: [0, 1]}
+  Longest_Registry_Duration_Days: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: at_index, group: REGISTRY_ENHANCED, null_means: no registry}
+  Registry_Distinct_Status_Values: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na, note: "meaning unknown (S2T)"}
+  Days_Since_First_Registry: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: at_index, group: REGISTRY_ENHANCED, null_means: no registry}
+  Registry_Unknown_Dictionary_Count: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na}
+  New_Registry_30D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "S2T: unreliable, do not feed to the model"}
+  New_Registry_90D: {sql: int, nullable: false, role: FORBIDDEN_LEAKAGE, sem: count, model: never, timing: unknown, note: "S2T: unreliable, do not feed to the model"}
+  First_Registry_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: at_index, group: REGISTRY_ENHANCED, note: "D-00 timing check only"}
+  Registry_Missing_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: at_index, allowed: [0, 1], note: "1 = no registry data (source absent); registry flags are 0 by construction -> counted by the adapter"}
+  # ==== MEFI frailty ====
+  MEFI_Group_At_Index: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: at_index, group: MEFI_FRAILTY, allowed: [1, 2, 3, 4], null_means: not assessed (missing category), note: "1 low .. 4 high; Meuhedet-specific frailty construct, not eFI (M-15)"}
+  MEFI_Group_Desc: {sql: "varchar(10)", nullable: true, role: QA_CONTROL, sem: categorical, model: never, timing: at_index, note: "label of MEFI_Group_At_Index"}
+  MEFI_From_Date: {sql: date, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: date, model: never, timing: at_index, group: MEFI_FRAILTY, note: "D-00 timing check only"}
+  MEFI_Assessed_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: MEFI_FRAILTY, allowed: [0, 1]}
+  Days_In_Current_MEFI_Group: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: at_index, group: MEFI_FRAILTY, null_means: not assessed}
+  Days_Since_MEFI_Assessment: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: continuous, model: float64, timing: at_index, group: MEFI_FRAILTY, null_means: not assessed}
+  MEFI_Assessment_Count: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: count, model: float64, timing: at_index, group: MEFI_FRAILTY}
+  MEFI_Ever_Assessed_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: MEFI_FRAILTY, allowed: [0, 1]}
+  MEFI_Prev_Group: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: at_index, group: MEFI_FRAILTY, allowed: [1, 2, 3, 4], null_means: no previous assessment}
+  MEFI_Worsened_Ind: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: MEFI_FRAILTY, allowed: [0, 1], null_means: no previous assessment}
+  Frailty_Not_Assessed_Ind: {sql: int, nullable: false, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: MEFI_FRAILTY, allowed: [0, 1], note: "explicit not-assessed indicator (not 'not frail')"}
+  # ==== comorbidity and social ====
+  CCI_Group: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: at_index, group: COMORBIDITY_SOCIAL, null_means: not computed, note: "Charlson group; composite, not eFalls"}
+  Malnutrition_Grade: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: ordinal, model: ordinal_float64, timing: at_index, group: COMORBIDITY_SOCIAL, null_means: not graded, note: "code semantics to confirm (audit distribution)"}
+  Siudi_Status: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: categorical, model: onehot_categorical, timing: at_index, group: COMORBIDITY_SOCIAL, null_means: no nursing-care status, note: "nursing-care (siudi) benefit status; eFalls requirement_for_care candidate once code semantics are confirmed (Q-M-02)"}
+  Customer_Risk_Code: {sql: int, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: categorical, model: onehot_categorical, timing: at_index, group: COMORBIDITY_SOCIAL, null_means: no risk code, note: "code semantics to confirm"}
+  Income_Support: {sql: tinyint, nullable: true, role: MEUHEDET_ENHANCED_FEATURE, sem: binary, model: int8_binary, timing: at_index, group: COMORBIDITY_SOCIAL, allowed: [0, 1], null_means: unknown, note: "income-support benefit; socio-economic, not the eFalls social_vulnerability construct"}
+  Audit_Only_Adif_Status: {sql: int, nullable: true, role: FORBIDDEN_LEAKAGE, sem: categorical, model: never, timing: na, note: "S2T: fairness audit only - never a predictor"}
+  Audit_Only_Si_Status: {sql: int, nullable: true, role: FORBIDDEN_LEAKAGE, sem: categorical, model: never, timing: na, note: "S2T: fairness audit only - never a predictor"}
+  # ==== coverage and quality ====
+  Has_Source_Visits_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_Diagnosis_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_Assessment_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_Medication_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_External_Care_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_Registry_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Has_Source_Frailty_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0, 1]}
+  Distinct_Sources_With_Data: {sql: int, nullable: true, role: QA_CONTROL, sem: quality_control, model: never, timing: na}
+  Snapshot_Confidence: {sql: "varchar(6)", nullable: false, role: QA_CONTROL, sem: categorical, model: never, timing: na, allowed: [HIGH, MEDIUM, LOW], note: "row confidence; audit reports the distribution; never a predictor"}
+  Leakage_Check_Ind: {sql: int, nullable: false, role: QA_CONTROL, sem: quality_control, model: never, timing: na, allowed: [0], note: "any 1 is a VIEW bug: the build fails"}
+  # ==== labels - never features ====
+  Fall_Next_30D_Ind: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index, allowed: [0, 1], null_means: censored}
+  Next_Fall_Date_30D: {sql: date, nullable: true, role: LABEL, sem: date, model: never, timing: post_index}
+  Days_To_Next_Fall_30D: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index}
+  Next_Fall_Event_ID_30D: {sql: "varchar(50)", nullable: true, role: LABEL, sem: identifier, model: never, timing: post_index, note: "event id (traceback); never printed by the audit"}
+  Next_Fall_Confidence_30D: {sql: "varchar(6)", nullable: true, role: LABEL, sem: label, model: never, timing: post_index}
+  Label_Reason_30D: {sql: "varchar(25)", nullable: false, role: LABEL, sem: label, model: never, timing: post_index}
+  Fall_Next_180D_Ind: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index, allowed: [0, 1], null_means: censored, note: "-> fall_next_180d (Meuhedet 180-day exploratory outcome; NOT the eFalls 12-month ED/admission outcome)"}
+  Next_Fall_Date_180D: {sql: date, nullable: true, role: LABEL, sem: date, model: never, timing: post_index, note: "-> outcome_first_event_date of the exploratory outcome"}
+  Days_To_Next_Fall_180D: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index}
+  Next_Fall_Event_ID_180D: {sql: "varchar(50)", nullable: true, role: LABEL, sem: identifier, model: never, timing: post_index, note: "event id (traceback); never printed by the audit"}
+  Next_Fall_Confidence_180D: {sql: "varchar(6)", nullable: true, role: LABEL, sem: label, model: never, timing: post_index}
+  Label_Reason_180D: {sql: "varchar(25)", nullable: false, role: LABEL, sem: label, model: never, timing: post_index, note: "POSITIVE / NEGATIVE / CENSORED (+ suffixes); audit reports the distribution"}
+  Fall_Next_30D_HighConf_Ind: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index, allowed: [0, 1], note: "sensitivity label"}
+  Fall_Next_180D_HighConf_Ind: {sql: int, nullable: true, role: LABEL, sem: label, model: never, timing: post_index, allowed: [0, 1], note: "sensitivity label"}

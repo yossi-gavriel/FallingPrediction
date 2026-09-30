@@ -1,0 +1,154 @@
+{
+  "label": "SYNTHETIC \u2014 NOT SCIENTIFIC EVIDENCE",
+  "purpose": "software tests only (spec \u00a713.2): ARBITRARY coefficients deliberately unrelated to eFalls Table S3.2; condition prevalences are arbitrary and NOT tuned to SAIL/CB marginals",
+  "model_form": "logit p = intercept + age_per_decade_from_75*(age_years-75)/10 + male*[sex=male] + polypharmacy_count_per_paragraph*polypharmacy_count_120d + bmi_missing*[bmi_value missing] + bmi_at_least_30*[bmi_value>=30] + smoking_current*[smoking_status=current] + alcohol_higher_risk_or_harmful*[alcohol_category in {higher_risk, harmful}] + sum(binary_coefficients[j]*x_j) + extension terms (binary: coefficient*x; numeric: per_unit*x with missing as 0 + missing*[x missing]); all other binaries have coefficient 0",
+  "terms": {
+    "age_per_decade_from_75": 0.7843,
+    "male": 0.7999,
+    "polypharmacy_count_per_paragraph": 0.0674,
+    "bmi_missing": 0.3478,
+    "bmi_at_least_30": 0.5319,
+    "smoking_current": 0.6996,
+    "alcohol_higher_risk_or_harmful": 0.7532
+  },
+  "binary_coefficients": {
+    "foot_problems": 1.5831,
+    "ischaemic_heart_disease": 1.079,
+    "liver_problems": 1.2124,
+    "peptic_ulcer_disease": 1.8517,
+    "transient_ischaemic_attack": 1.2955,
+    "weight_loss": 1.4755
+  },
+  "extension_coefficients": {},
+  "coefficient_ranges": {
+    "age_per_decade_from_75": [
+      0.6,
+      0.9
+    ],
+    "male": [
+      0.5,
+      0.8
+    ],
+    "polypharmacy_count_per_paragraph": [
+      0.04,
+      0.09
+    ],
+    "bmi_missing": [
+      0.3,
+      0.6
+    ],
+    "bmi_at_least_30": [
+      0.3,
+      0.6
+    ],
+    "smoking_current": [
+      0.4,
+      0.8
+    ],
+    "alcohol_higher_risk_or_harmful": [
+      0.7,
+      1.1
+    ],
+    "binary": [
+      1.0,
+      2.0
+    ]
+  },
+  "intercept": -5.256921,
+  "target_prevalence": 0.08,
+  "seed": 20260914,
+  "n_patients": 3000,
+  "index_dates": [
+    "2018-04-01",
+    "2019-04-01",
+    "2020-04-01",
+    "2021-04-01"
+  ],
+  "condition_onset_probability": {
+    "abdominal_pain": 0.0452,
+    "activity_limitation": 0.1511,
+    "anaemia_and_haematinic_deficiency": 0.0801,
+    "anxiety": 0.0979,
+    "asthma": 0.0655,
+    "atrial_fibrillation": 0.195,
+    "back_pain": 0.1613,
+    "bone_disease": 0.2373,
+    "cancer": 0.1712,
+    "chronic_kidney_disease": 0.1637,
+    "cognitive_impairment": 0.0665,
+    "copd": 0.1595,
+    "dementia": 0.2224,
+    "depression": 0.1572,
+    "diabetes_mellitus": 0.0777,
+    "dizziness": 0.1221,
+    "dressing_and_grooming_problems": 0.1001,
+    "dyspnoea": 0.0831,
+    "environment_problems": 0.027,
+    "faecal_incontinence": 0.1486,
+    "falls": 0.1056,
+    "fatigue": 0.2187,
+    "foot_problems": 0.0115,
+    "fracture": 0.1222,
+    "fragility_fracture": 0.1578,
+    "general_mental_health": 0.134,
+    "headache": 0.2006,
+    "hearing_impairment": 0.1673,
+    "heart_failure": 0.1277,
+    "heart_valve_disease": 0.0419,
+    "housebound": 0.0823,
+    "hypertension": 0.088,
+    "hypotension_or_syncope": 0.0923,
+    "inflammatory_arthritis": 0.1008,
+    "inflammatory_bowel_disease": 0.0762,
+    "ischaemic_heart_disease": 0.2353,
+    "liver_problems": 0.232,
+    "meal_preparation_problems": 0.019,
+    "medication_management": 0.1391,
+    "memory_concerns": 0.214,
+    "mobility_problems": 0.114,
+    "mono_or_hemiparesis": 0.2326,
+    "motor_neurone_disease": 0.0705,
+    "musculoskeletal_problems": 0.1871,
+    "osteoarthritis": 0.188,
+    "osteoporosis": 0.1397,
+    "palliative_care": 0.0849,
+    "parkinsonism_and_tremor": 0.1173,
+    "peptic_ulcer_disease": 0.104,
+    "peripheral_neuropathy": 0.2445,
+    "peripheral_vascular_disease": 0.1328,
+    "problems_managing_finances": 0.0212,
+    "requirement_for_care": 0.0296,
+    "respiratory_disease": 0.1452,
+    "seizures": 0.2141,
+    "self_harm": 0.0773,
+    "severe_mental_illness": 0.1928,
+    "shopping_problems": 0.0384,
+    "skin_ulcer": 0.1262,
+    "sleep_problems": 0.1309,
+    "social_vulnerability": 0.119,
+    "stress": 0.0759,
+    "stroke": 0.0268,
+    "thyroid_problems": 0.2004,
+    "toileting_problems": 0.0101,
+    "transient_ischaemic_attack": 0.2203,
+    "urinary_incontinence": 0.0987,
+    "urinary_system_disease": 0.1291,
+    "visual_impairment": 0.0236,
+    "washing_and_bathing": 0.2176,
+    "weakness": 0.2263,
+    "weight_loss": 0.154
+  },
+  "realised": {
+    "n_rows": 8630,
+    "n_patients": 2377,
+    "outcome_prevalence": 0.0825028968713789
+  },
+  "derivation_exclusions": {
+    "missing_person_record": 0,
+    "missing_date_of_birth": 0,
+    "invalid_sex": 52,
+    "died_before_index": 1033,
+    "not_member_at_index": 822,
+    "age_below_minimum": 1463
+  }
+}

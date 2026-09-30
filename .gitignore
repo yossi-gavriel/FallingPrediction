@@ -1,0 +1,17 @@
+# generated / local-only (never committed): environments, caches, run outputs, packages
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+runs*/
+logs/
+outputs/
+reports/
+demo_outputs/
+setup_logs/
+offline_packages/
+.claude/
+.DS_Store

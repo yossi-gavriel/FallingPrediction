@@ -1,0 +1,141 @@
+# Phase 2 analysis settings (planning/EXPERIMENT_PLAN.md). Frozen into PHASE2_PLAN.json with the feature catalogue, the code hash and the
+# input hash before any fit; resume refuses a changed file. Written before any Phase 2 result existed; no row-level data, no outcome values
+# and no test-set result were used.
+phase2:
+  name: meuhedet_phase2_discovery
+  version: 1.1.0
+  features: configs/meuhedet/phase2_features.yaml
+  d00_config: configs/meuhedet/d00_sensitivity.yaml
+  outcome_note: "Fall_Next_180D_Ind - EXPLORATORY 180-DAY OUTCOME, NOT EFALLS REPRODUCTION"
+  seed: 20260929
+  threads: {blas: auto, xgboost: auto, max_auto: 4}      # auto = min(max_auto, os.cpu_count()); the resolved values are frozen in the plan
+
+  eligibility:
+    min_observed_train_rows: 100            # fewer observed TRAIN rows -> INELIGIBLE_DATA
+    categories:                              # three concepts, never mixed in reporting (reviews/ASTRA_FINAL_RESOLUTION.md)
+      HISTORICAL_BASELINE_15: []             # the previous benchmark (15 EXTENDED predictors, provenance as found), reproduced for comparison only
+      SAFE_DISCOVERY: [SAFE]                 # PRIMARY: new AND baseline features with proven prediction-time provenance only (hard-stop invariant)
+      EXPLORATORY_UNRESOLVED_SENSITIVITY: [SAFE, UNRESOLVED]   # separately labelled LASSO sensitivity; never UNSAFE; never a selection candidate
+
+  screening:
+    redundancy_abs_spearman: 0.90
+    item_unanswered_min_share: 0.0          # an item gets its own "unanswered" indicator whenever its NULL pattern differs from its form's on ANY
+                                             # TRAIN row (Astra F-04; no documented form semantics say omission = negative); identical patterns share one
+    sparse_min_events: 20
+    min_cell: 10
+
+  cv:
+    outer_folds: 5
+    inner_folds_linear: 10
+    inner_folds_xgb: 5
+
+  lasso:
+    n_lambda: 100
+    lambda_min_ratio: 1.0e-3                 # measured on synthetic data at Phase 2 size: the 1e-4 tail is separation-driven and does not converge
+                                             # (lambda* ~ 0.1 x lambda_max either way); a lambda* on the last grid point is flagged (grid boundary)
+    selection: min
+    tol: 1.0e-7
+    max_iter: 10000
+  enet:
+    l1_ratios: [0.1, 0.5, 0.9]
+    n_lambda: 100
+    max_sets: 2                              # ALL_REVIEWED_SAFE + the best SAFE LASSO set by outer-OOF AP if different
+
+  xgb:
+    fixed:                                   # every booster parameter is explicit (xgboost 3.2.0); nothing is left to a library default
+      objective: "binary:logistic"
+      eval_metric: logloss
+      booster: gbtree
+      tree_method: hist
+      device: cpu
+      grow_policy: depthwise
+      max_bin: 256
+      learning_rate: 0.05
+      subsample: 0.8
+      sampling_method: uniform
+      colsample_bytree: 0.8
+      colsample_bylevel: 1.0
+      colsample_bynode: 1.0
+      gamma: 0.0
+      reg_alpha: 0.0
+      max_delta_step: 0.0
+      scale_pos_weight: 1.0                  # no class weighting: probabilities stay on the risk scale (calibration is evaluated for every model)
+      base_score: auto                       # xgboost 3.2 estimates the starting intercept from the fitting rows' labels (deterministic); not passed
+    n_estimators_max: 3000
+    early_stopping_rounds: 100
+    stage0: {max_depth: 3, min_child_weight: 10.0, reg_lambda: 5.0, sets: [BASELINE_15, ALL_REVIEWED_SAFE]}
+    stage1:
+      set: ALL_REVIEWED_SAFE
+      n_trials: 15
+      n_startup_trials: 6
+      space:
+        max_depth: {type: int, low: 1, high: 3}
+        min_child_weight: {type: float, low: 5.0, high: 30.0, log: true}
+        reg_lambda: {type: float, low: 1.0, high: 30.0, log: true}
+    stage2:
+      enabled: false                         # Astra F-06: stage 1 answers the question (does boosting add value?); a refinement stage adds OOF-driven
+                                             # adaptation and <= 240 inner fits; deeper XGBoost tuning is a future experiment if stage 1 shows value
+      n_trials: 8
+      condition_min_ap_gain_vs_best_linear: 0.005
+      local_factor: 2.0                      # min_child_weight / reg_lambda range = best / factor .. best * factor (clipped to stage-1 range)
+      space:
+        subsample: {type: float, low: 0.6, high: 1.0}
+        colsample_bytree: {type: float, low: 0.5, high: 1.0}
+    max_trials_per_study: 25
+    optuna:
+      sampler: TPE                           # optuna.samplers.TPESampler(multivariate=True), re-seeded per trial = f(seed, study, trial index)
+      multivariate: true
+      direction: minimize
+      objective: inner_cv_mean_logloss       # mean held-out log loss over the inner folds (early stopping on the same inner held-out fold)
+      pruner: none                           # every trial runs all inner folds (no pruning: identical cost, simpler resume)
+      storage: checkpoints/xgb_optuna.sqlite # derived cache rebuilt from the committed trial records at every attempt
+      ledger: checkpoints/xgb_trials.jsonl   # append-only audit log of completed trials
+
+  selection:
+    candidates: SAFE_DISCOVERY               # only SAFE_DISCOVERY configurations (main / one-domain / waterfall sets; LASSO, ENET, XGBoost) can be recommended
+    discovery_reference: LASSO:SAFE_BASE     # the advancement rule is applied against this reference (SAFE-only incremental value)
+    benchmark: LASSO:BASELINE_15             # the historical benchmark: the recommended SAFE model is classified against it (never mixed)
+    benchmark_noninferiority: {max_ap_loss: 0.010, max_capture_loss_pp: 1.0}   # NON_INFERIOR if dAP >= -0.010 and d capture@principal >= -1.0 pp
+    principal_capacity: 0.10
+    min_delta_ap: 0.010
+    min_delta_capture_principal_pp: 1.0
+    max_logloss_ratio: 1.01
+    calibration_slope_range: [0.80, 1.25]
+    max_abs_citl: 0.20
+    simplicity_margin_ap: 0.005
+    max_challengers: 3
+  validation_confirmation:                  # one-shot, pre-declared; recommended SAFE model vs the discovery reference (and benchmark class vs BASELINE_15)
+    min_delta_ap: 0.005
+    min_delta_capture_principal_pp: 0.0
+    calibration_slope_range: [0.70, 1.40]
+    max_abs_citl: 0.30
+    max_logloss_ratio: 1.01                  # Astra F-08: the probability-quality safeguard also on VALIDATION; undefined calibration never passes
+    benchmark_noninferiority: {max_ap_loss: 0.010, max_capture_loss_pp: 1.0}
+
+  stability: {n_replicates: 25, max_sets: 3, max_failure_fraction: 0.10}
+  ablation: {individual_top_n: 15}
+  explain: {shap_sample_rows: 12000, permutation_repeats: 5, interaction_pairs: 5}
+  consensus:
+    univariate_min_abs_smd: 0.10
+    univariate_auroc_band: [0.45, 0.55]
+    linear_min_stability: 0.60
+    shap_top_rank: 15                        # importance evidence I = SHAP rank <= 15 of the promoted XGBoost; a positive permutation loss alone is
+                                             # weak support only (Astra F-14)
+    domain_min_delta_ap: 0.005
+    ablation_min_delta_ap: 0.002
+
+  metrics:
+    capacities: [0.01, 0.03, 0.05, 0.10, 0.20]
+    calibration_groups: 10
+    bootstrap_n: 2000                        # paired patient bootstrap; each bootstrap uses its item seed (derived from phase2.seed)
+    smooth_calibration: {knots: 4, grid_points: 50}   # restricted cubic spline of logit(p) with a 95% band (Astra F-11); deciles kept descriptively
+    subgroup_min_events: 10
+
+  gates:
+    single_feature_univariate_auroc: 0.80
+    max_delta_auroc: 0.05
+    max_ap_ratio: 1.5
+    calibration_slope_range: [0.6, 1.5]
+    max_abs_citl: 0.5
+    max_single_feature_share: 0.5
+    max_fit_failure_fraction: 0.10

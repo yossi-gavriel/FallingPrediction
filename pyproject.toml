@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falls_ml"
+version = "0.8.1"
+description = "Clinical fall-risk prediction: eFalls reproduction, evaluation and production pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.1",
+  "pandas>=2.2",
+  "scipy>=1.13",
+  "scikit-learn>=1.6",
+  "statsmodels>=0.14",
+  "matplotlib>=3.9",
+  "pyyaml>=6.0",
+  "pyarrow>=17",
+  "openpyxl>=3.1",
+  "xgboost-cpu==3.2.0; sys_platform == 'win32'",
+  "xgboost==3.2.0; sys_platform != 'win32'",
+  "optuna>=5.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "slow: long-running tests (bootstrap/stability); deselect with -m 'not slow'",
+]
+filterwarnings = [
+  "error::FutureWarning:falls_ml",
+]

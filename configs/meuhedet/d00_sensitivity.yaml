@@ -1,0 +1,109 @@
+# D-00 sensitivity framework (falls_ml meuhedet-d00): the evidence standard of the D-00 feature-dependency graph and the pre-specified
+# analysis plan. Written from the DDL / S2T / data dictionary before any sensitivity model was fitted; no row-level data, no outcome
+# values and no test-set result were used to write it. The feature sets are NOT listed here: they are derived by the dependency graph
+# (falls_ml.d00.dependency) from the mapping, the data dictionary and the record dates measured on the extract.
+#
+# D-00 (prediction at the START of the index day): a predictor may use only source records dated strictly before Index_Date. A feature is
+#   SAFE        when its complete provenance shows that no record dated on/after the index day can enter its value in the analysed cohort;
+#   UNSAFE      when the extract proves, on at least one row of the analysed cohort, that such a record entered a source it reads;
+#   UNRESOLVED  when the extract can neither prove nor exclude it (no record date, only first-entry evidence, undocumented date semantics,
+#               or rows with a recorded value but no record date).
+# The status of a feature is the worst status over every source it reads (value inputs, including declared VIEW-level derivations,
+# followed transitively): UNSAFE > UNRESOLVED > SAFE. Nothing is repaired: no date is moved, no value is set to 0 or NULL, no count
+# is decremented, no earlier date is invented.
+d00_sensitivity:
+  name: meuhedet_d00_sensitivity
+  version: 1.0.0
+  mapping: configs/meuhedet/wide_v1_efalls_mapping.yaml
+  data_dictionary: configs/meuhedet/wide_v1_data_dictionary.yaml
+  prediction_time: START_OF_INDEX_DAY
+  predictor_record_rule: "source_event_date < Index_Date"
+
+# How the wide extract can bound each data-dictionary source in time. Every dictionary source must be listed (the loader refuses a gap).
+#   STATIC_ATTRIBUTE              fixed member attributes, or values computed only from them and the index date (no event record can enter);
+#                                 SAFE only for columns whose dictionary meaning is DOCUMENTED (a NAME_ONLY / UNKNOWN column is UNRESOLVED)
+#   COMPLETE_RECORD_DATE          the source's record-date column (data dictionary) bounds every record behind its values (last record /
+#                                 assessment behind the value): UNSAFE if it is on/after the index day on >= 1 cohort row; SAFE if it is
+#                                 before the index day on every cohort row, its meaning is DOCUMENTED and no cohort row carries a recorded
+#                                 value without a record date; otherwise UNRESOLVED
+#   SUFFICIENT_ONLY_RECORD_DATE   the date proves an index-day record when it is on/after the index day (UNSAFE), but cannot exclude one
+#                                 otherwise (First_Registry_Date: a later same-day entry of a member with an older registry is invisible) -> UNRESOLVED
+#   NO_RECORD_DATE                no record date in the extract -> UNRESOLVED
+#   POST_INDEX                    follow-up / outcome information -> UNSAFE (never available at prediction time)
+#   NOT_A_PREDICTOR_SOURCE        technical keys, cohort logic, SCD bookkeeping -> UNRESOLVED if a feature ever read it
+source_evidence:
+  VIEW_TECHNICAL: NOT_A_PREDICTOR_SOURCE
+  MEMBER_MASTER: STATIC_ATTRIBUTE
+  POPULATION_SCD: NOT_A_PREDICTOR_SOURCE
+  COHORT_DEFINITION: NOT_A_PREDICTOR_SOURCE
+  FOLLOWUP: POST_INDEX
+  FALL_EVENTS: COMPLETE_RECORD_DATE
+  DIAGNOSES: COMPLETE_RECORD_DATE
+  VISITS: COMPLETE_RECORD_DATE
+  PRESCRIPTIONS: NO_RECORD_DATE
+  LABS: NO_RECORD_DATE
+  NURSE_FALLS_RISK_999_52: COMPLETE_RECORD_DATE
+  NURSE_GET_UP_AND_GO_999_79: COMPLETE_RECORD_DATE
+  NURSE_FUNCTION_999_175: COMPLETE_RECORD_DATE
+  NURSE_COGNITION: COMPLETE_RECORD_DATE
+  NURSE_HOME_SAFETY_999_139: COMPLETE_RECORD_DATE
+  NURSE_ASSESSMENT_SUMMARY: COMPLETE_RECORD_DATE
+  MEDICATION_EXPOSURE: NO_RECORD_DATE
+  EXTERNAL_CARE_INVOICES: COMPLETE_RECORD_DATE
+  HOSPITALISATIONS: COMPLETE_RECORD_DATE
+  REGISTRIES: SUFFICIENT_ONLY_RECORD_DATE
+  MEFI: COMPLETE_RECORD_DATE
+  COMORBIDITY_SOCIAL: NO_RECORD_DATE
+  SOURCE_COVERAGE: NO_RECORD_DATE
+  LABELS: POST_INDEX
+
+# VIEW-level derivations documented in the data dictionary (transitive edges: the column's value is computed from these columns, so it
+# inherits their sources). Only DOCUMENTED derivations are declared; an undocumented one is never assumed from a column name.
+derived_from:
+  Days_Since_Last_Fall: {from: [Last_Fall_Date], evidence: "data dictionary (DOCUMENTED): days from the last fall/fracture record to Index_Date"}
+  Age_Group: {from: [Age_At_Index], evidence: "data dictionary (DOCUMENTED): age band derived from Age_At_Index"}
+
+# Open provenance questions (never resolved by assumption): they keep a column UNRESOLVED or its derivation undeclared until answered.
+open_questions:
+  Q-D00-01: "CCI_Group (Charlson comorbidity group): which diagnosis records and which window feed it? If diagnoses up to and including the
+             index day feed it, it inherits the DIAGNOSES D-00 defect; the derivation is not declared until the DWH documents it"
+  Q-D00-02: "Registry flags (REGISTRIES): is 'active at Index_Date' evaluated with Registry_Start_Date < Index_Date or <= Index_Date? The
+             extract has only First_Registry_Date (first entry), so a same-day entry of a member with an older registry cannot be seen"
+  Q-D00-03: "Distinct_Active_Substance_Count (MEDICATION_EXPOSURE): is a dispensing on the index day counted as active exposure at index?
+             The extract has no record date for this source"
+  Q-D00-04: "Has_Source_*_Ind coverage flags: do they count records dated on the index day?"
+
+# Pre-specified analyses (written before any sensitivity result existed; never chosen, extended or pruned with test results).
+analysis_plan:
+  cohorts:
+    FULL_LABELED: "every eligible row on the index date with a usable (non-NULL) 180-day label; D-00 rows stay; no row is removed because
+                   of a record date - features whose provenance is not proven safe are removed instead"
+    D00_CLEAN: "the reference cohort: FULL_LABELED minus the rows whose D-00 guard columns (mapping cohort.predictor_max_record_date) are
+                on/after the index date - rebuilt and verified row by row against the completed reference run"
+  # evidence standards: 'primary' is the rule "only features proven safe"; 'secondary' (pre-declared) also admits features whose timing
+  # the extract can neither prove nor exclude (UNRESOLVED), never a feature proven UNSAFE. Both are derived by the graph, both reported.
+  evidence_standards:
+    PROVEN_SAFE: {admit: [SAFE], role: primary}
+    SAFE_OR_UNRESOLVED: {admit: [SAFE, UNRESOLVED], role: secondary}
+  # cells of the sensitivity matrix: (cohort, feature set). Feature sets: STRICT_SAFE / SAFE_EXTENDED are derived per evidence standard;
+  # FULL_EXTENDED = the reference EXTENDED set (D00_CLEAN only until the DWH correction). Identical specifications share one run.
+  matrix:
+    - {cell: STRICT_SAFE_FULL, cohort: FULL_LABELED, feature_set: STRICT_SAFE}
+    - {cell: SAFE_EXTENDED_FULL, cohort: FULL_LABELED, feature_set: SAFE_EXTENDED}
+    - {cell: STRICT_SAFE_D00_CLEAN, cohort: D00_CLEAN, feature_set: STRICT_SAFE}
+    - {cell: SAFE_EXTENDED_D00_CLEAN, cohort: D00_CLEAN, feature_set: SAFE_EXTENDED}
+    - {cell: FULL_EXTENDED_D00_CLEAN, cohort: D00_CLEAN, feature_set: FULL_EXTENDED}
+  # pre-specified ablations on the reference cohort and the reference test rows (questions A-C); no automated subset search
+  ablations:
+    - {cell: EXTENDED_NO_FALLS, remove: [falls], question: A, text: "How much predictive performance remains without prior-fall history?"}
+    - {cell: EXTENDED_NO_MOBILITY, remove: [mobility_problems], question: B, text: "How much independent predictive information does mobility add?"}
+    - {cell: EXTENDED_NO_FALLS_NO_MOBILITY, remove: [falls, mobility_problems], question: C,
+       text: "How much of EXTENDED's improvement depends on those two features together?"}
+  future:
+    - {cell: FINAL_DWH_FIXED, status: NOT_RUN, text: "all FULL_LABELED rows with the complete EXTENDED set after the DWH rebuilds every source window
+       with Event_Date < Index_Date; requires the source correction - no result is fabricated"}
+  risk_concentration_fractions: [0.01, 0.02, 0.05, 0.10, 0.20]
+  learning_curve_intervals: [[0.4, 0.6], [0.6, 0.8], [0.8, 1.0]]
+  # plateau wording rule (pre-declared): the curve is described as "approaching a plateau" only if the 80%->100% gain in validation
+  # AUROC is below plateau_max_gain AND its 95% interval includes 0 AND it is not larger than the 60%->80% gain. Never "more data will not help".
+  plateau_max_gain: 0.01

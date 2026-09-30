@@ -1,0 +1,81 @@
+group,term,coef,or_unpen,or_lo,or_hi
+,Age (years),0.0415506,1.043,1.041,1.045
+Polypharmacy,ln((Polypharmacy+1)/10),0.3296295,1.392,1.366,1.418
+Gender,Male,Reference,,,
+Gender,Female,-0.303708,0.732,0.712,0.753
+BMI category,Underweight,0.4896735,1.632,1.537,1.732
+BMI category,Normal,0.2394177,1.269,1.228,1.31
+BMI category,Overweight,Reference,,,
+BMI category,Obese,-0.0411134,0.952,0.92,0.985
+BMI category,Missing,-0.1451981,0.858,0.825,0.892
+Smoking,Ex/never,Reference,,,
+Smoking,Current,0.0684529,1.078,1.039,1.118
+Alcohol consumption,Harmful drinking,0.4164064,1.536,1.343,1.756
+Alcohol consumption,Higher risk drinking,0.1549725,1.255,0.879,1.791
+Alcohol consumption,Lower risk drinking,Reference,,,
+Alcohol consumption,Previous higher risk/harmful drinking,0.0849676,1.226,0.577,2.603
+Alcohol consumption,Zero alcohol,0.0070124,1.055,0.812,1.369
+Alcohol consumption,Missing,-0.0679367,0.935,0.858,1.018
+,Abdominal pain,-0.0641861,0.93,0.902,0.959
+,Activity limitation,0.0475092,1.064,0.966,1.172
+,Anaemia and haematinic deficiency,0.1733029,1.193,1.153,1.234
+,Asthma,0.0816046,1.086,1.052,1.121
+,Atrial fibrillation,0.1519654,1.17,1.131,1.21
+,Back pain,0.0498699,1.054,1.027,1.081
+,Bone disease,-0.0267845,0.956,0.867,1.054
+,Cancer,0.0301854,1.035,1.007,1.063
+,Cognitive impairment,0.1472251,1.168,1.079,1.264
+,COPD,0.039956,1.042,1.007,1.08
+,Dementia,0.1038111,1.116,1.054,1.181
+,Depression,0.1633415,1.182,1.136,1.229
+,Diabetes mellitus,0.0373911,1.042,1.01,1.075
+,Dizziness,0.0198363,1.024,0.993,1.055
+,Dressing and grooming problems,0.4532777,1.867,0.374,9.326
+,Faecal incontinence,-0.071791,0.914,0.83,1.007
+,Falls,0.3009161,1.351,1.314,1.389
+,Fatigue,-0.0635057,0.928,0.88,0.978
+,Foot problems,0.0282736,1.031,0.993,1.069
+,Fracture,0.1957923,1.219,1.187,1.253
+,Fragility fracture,0.2031303,1.226,1.186,1.266
+,General mental health,0.0991068,1.107,1.06,1.155
+,Headache,-0.0149365,0.975,0.931,1.022
+,Hearing impairment,-0.0168728,0.976,0.949,1.003
+,Heart failure,-0.0190399,0.971,0.94,1.004
+,Housebound,0.2549983,1.289,1.25,1.329
+,Hypertension,-0.0318888,0.959,0.934,0.986
+,Hypotension or syncope,0.0778591,1.084,1.046,1.122
+,Inflammatory arthritis,0.0586785,1.065,1.034,1.098
+,Inflammatory bowel disease,0.0145135,1.021,0.973,1.072
+,Liver problems,0.3803626,1.485,1.314,1.677
+,Meal preparation problems,-0.140024,0.834,0.513,1.357
+,Medication management,0.8030273,3.153,0.318,31.278
+,Memory concerns,0.2601186,1.296,1.238,1.358
+,Mobility problems,-0.1310067,0.865,0.805,0.929
+,Mono or hemiparesis,0.1020457,1.119,1.032,1.213
+,Motor neurone disease,-0.1209976,0.805,0.464,1.398
+,Musculoskeletal problems,0.0419361,1.046,1.019,1.073
+,Osteoarthritis,0.0634073,1.067,1.041,1.094
+,Osteoporosis,0.1276254,1.135,1.1,1.172
+,Palliative care,-0.2353552,0.774,0.701,0.855
+,Parkinsonism and tremor,0.2312839,1.266,1.205,1.331
+,Peptic ulcer disease,0.0056687,1.023,0.916,1.143
+,Peripheral neuropathy,0.0335789,1.038,0.994,1.084
+,Peripheral vascular disease,0.0173065,1.021,0.981,1.062
+,Requirement for care,-0.2177301,0.792,0.75,0.836
+,Respiratory disease,0.0132757,1.018,0.978,1.059
+,Seizures,0.2571899,1.303,1.227,1.385
+,Self-harm,0.1461241,1.182,0.993,1.406
+,Severe mental illness,0.0676153,1.071,1.026,1.119
+,Skin ulcer,0.0746926,1.08,1.046,1.115
+,Sleep problems,0.0056967,1.012,0.961,1.066
+,Social vulnerability,0.0495075,1.061,1.004,1.122
+,Stress,-0.0200494,0.965,0.9,1.035
+,Stroke,0.0788542,1.086,1.047,1.126
+,Thyroid problems,-0.0273864,0.965,0.938,0.993
+,Urinary incontinence,0.0345173,1.039,0.998,1.081
+,Urinary system disease,0.0119309,1.016,0.988,1.044
+,Visual impairment,0.02332,1.024,0.996,1.053
+,Washing and bathing,-0.1118824,0.853,0.555,1.313
+,Weakness,-0.0589464,0.903,0.699,1.167
+,Weight loss,0.0301414,1.033,0.995,1.072
+,Constant,-5.954459,0.003,0.002,0.003

@@ -1,0 +1,1800 @@
+{
+  "schema": "falls_ml.phase2.final_experiment_config/1",
+  "name": "meuhedet_phase2_final_experiment_config",
+  "status": "FROZEN for the real-data run (reviews/ASTRA_FINAL_RESOLUTION.md); any change requires a new review and a new freeze",
+  "falls_ml_version": "0.8.1",
+  "sources": {
+    "analysis_settings": {
+      "path": "configs/meuhedet/phase2.yaml",
+      "name": "meuhedet_phase2_discovery",
+      "version": "1.1.0",
+      "sha256": "2c75758f556c6fb83687d843f36633307ee3b95224a25a50db1d0c9858d2ed42"
+    },
+    "feature_catalogue": {
+      "path": "configs/meuhedet/phase2_features.yaml",
+      "name": "meuhedet_phase2_features",
+      "version": "1.1.0",
+      "sha256": "f87f29448bd2605d2822c4cb951292282a522295b313f417cfa6965a192c1139"
+    },
+    "d00_config": {
+      "path": "configs/meuhedet/d00_sensitivity.yaml",
+      "name": "meuhedet_d00_sensitivity",
+      "version": "1.0.0",
+      "sha256": "108302d8215057ea8706df20d5da30a43725674e5d6465bc6998a1a92d183171"
+    },
+    "contract_sha256": "1fa9f18d7758fc523280b6d06aa79e1b4267e129d8bec2125d5899c5ee068c7a",
+    "data_dictionary_sha256": "71abc55379a09712165d5fa81499f4e57d107c79e6e2afc69c15ef7950e85953",
+    "efalls_mapping_sha256": "3ceb6e86d7dbe59095df0c5e1bcb0b250682c53f100e6c6fc72c63800fb76824"
+  },
+  "outcome": {
+    "label": "Fall_Next_180D_Ind",
+    "note": "Fall_Next_180D_Ind - EXPLORATORY 180-DAY OUTCOME, NOT EFALLS REPRODUCTION",
+    "prediction_time": "START_OF_INDEX_DAY",
+    "predictor_record_rule": "source_event_date < Index_Date (unchanged D-00 rule; never weakened)",
+    "death_rule": "a recorded fall/fracture inside the window stays an event when death follows; death before any recorded event is a non-event; the warehouse label is audited on TRAIN+VALIDATION (label_death_audit) and the run stops (LABEL_DEATH_SEMANTICS) if deaths inside the window never carry an event (Astra F-05)",
+    "scope": "exploratory prediction of recorded events in the D00_CLEAN selected cohort (Astra F-03)"
+  },
+  "data_split_policy": {
+    "cohort": "the reference meuhedet-explore D00_CLEAN cohort (age >= 65, one index date), rebuilt from the same extract and verified row-for-row and value-for-value against the reference dataset",
+    "split": "the reference patient-grouped split reproduced with the reference configuration; the TEST row-set sha256 must equal the reference; the assignment is cross-checked against the reference splits.csv",
+    "patient_overlap": "hard stop if any patient appears in more than one partition",
+    "TRAIN": "all feature screening, redundancy, encoding decisions, tuning, feature/model selection, stability, ablation, SHAP",
+    "VALIDATION": "sealed until SELECTION_FROZEN.json exists; opened ONCE (VALIDATION_OPENED.json) for a one-shot evaluation of the frozen configurations; never used to choose, tune, recalibrate or threshold anything",
+    "TEST": "identified during the split audit (count + sha256 only), dropped in memory before any other computation, never loaded again, never used by Phase 2"
+  },
+  "cv_policy": {
+    "outer": {
+      "folds": 5,
+      "stratified_by_outcome": true,
+      "grouped_by_patient": "one row per patient (the cohort has one index date)",
+      "seed": "rng_for(phase2.seed, 'phase2_outer_folds')",
+      "repeats": 1
+    },
+    "inner_linear": {
+      "folds": 10,
+      "assignment": "random permutation of patients (falls_ml.models.lasso_cv.assign_folds, grouped, not stratified)",
+      "seed": "the item seed",
+      "used_for": "lambda (LASSO) and (l1_ratio, lambda) (elastic net) by minimum mean held-out deviance"
+    },
+    "inner_xgboost": {
+      "folds": 5,
+      "stratified_by_outcome": true,
+      "seed": "the item seed ('xgb_inner_folds')",
+      "used_for": "early stopping per inner fold (held-out log loss) and the Optuna objective (mean held-out log loss)"
+    },
+    "label_blind_steps_once_on_all_TRAIN": [
+      "redundancy clusters (|Spearman| >= threshold, representative-anchored)",
+      "thermometer levels present",
+      "NULL-pattern groups (na__ indicators)"
+    ],
+    "fitted_inside_every_fold": [
+      "eFalls preprocessor incl. fractional-polynomial selection for age_years, polypharmacy_count_120d",
+      "median fills",
+      "standardisation (LASSO / elastic net)",
+      "hyper-parameters",
+      "tree counts"
+    ],
+    "common_inner_folds": "one inner-fold assignment per tuning scope (outer<k> / final), shared by every feature set, lambda, l1_ratio and Optuna trial of that scope (Astra F-07); booster randomness keeps the item seed",
+    "conditionality": "the inner lambda search is conditional on the outer-training-fold FP choice; OOF results are conditional on the TRAIN-wide label-blind decisions listed above (Astra F-07 / Q2)"
+  },
+  "seed_policy": {
+    "master_seed": 20260929,
+    "item_seed": "int(sha256(f'{seed}|{stage}|{item}')[:8], 16): independent of order and restarts",
+    "optuna_trial_seed": "sha256(f'{seed}|{study}|{trial_index}') mod 2^31-1 (sampler re-created per trial)",
+    "bootstrap_seed": "the item seed of the stage item that computes it",
+    "threads": {
+      "blas": "auto",
+      "xgboost": "auto",
+      "max_auto": 4,
+      "rule": "auto = min(max_auto, os.cpu_count()); the resolved numbers are frozen in PHASE2_PLAN.json at the first start"
+    }
+  },
+  "provenance_policy": {
+    "rule": "the unchanged Phase 1 D-00 rules (falls_ml.d00.dependency._trace) on TRAIN + VALIDATION record dates; a feature takes the worst status of its inputs (UNSAFE > UNRESOLVED > SAFE)",
+    "UNSAFE": "excluded from every set ('candidate after DWH fix'); no row removal, no masking, no value replacement",
+    "UNRESOLVED": "EXPLORATORY_UNRESOLVED_SENSITIVITY only; never in a SAFE_DISCOVERY set (hard stop INELIGIBLE_FEATURE_IN_SET)",
+    "quarantine": {
+      "Siudi_Status": "nursing-care benefit status: code values unknown (Q-M-02)",
+      "Customer_Risk_Code": "member risk code: code semantics unknown",
+      "Malnutrition_Grade": "malnutrition grade: code semantics unknown",
+      "Fall_Self_Report_Value": "self-reported fall answer code: code semantics unknown",
+      "On_Medications_Nurse_Ind": "nurse medication item: which medications / threshold undocumented",
+      "Orthostatic_BP_Measured_Ind": "whether 1 = measured or 1 = abnormal is undocumented",
+      "Slow_Rising_Ind": "observation or advice given - undocumented",
+      "Vitamin_D_Ind": "supplement taken or recommended - undocumented"
+    },
+    "represented_by": {
+      "Frailty_Not_Assessed_Ind": "form_mefi_assessed",
+      "MEFI_Assessed_Ind": "form_mefi_assessed",
+      "MEFI_Ever_Assessed_Ind": "form_mefi_assessed",
+      "Prior_Fall_Since_Study_Start_Ind": "BASELINE_15 falls",
+      "Gait_Disorder_Since_Study_Start_Ind": "BASELINE_15 mobility_problems",
+      "Distinct_Active_Substance_Count": "BASELINE_15 polypharmacy_count_120d"
+    },
+    "min_observed_train_rows": 100
+  },
+  "categories": {
+    "HISTORICAL_BASELINE_15": {
+      "sets": [
+        "BASELINE_15"
+      ],
+      "definition": "the previous benchmark: the 15 EXTENDED predictors with unchanged definitions (provenance as found), refitted in the Phase 2 protocol; comparison only"
+    },
+    "SAFE_DISCOVERY": {
+      "allowed_status": [
+        "SAFE"
+      ],
+      "definition": "PRIMARY: new and baseline features whose prediction-time provenance is proven SAFE"
+    },
+    "EXPLORATORY_UNRESOLVED_SENSITIVITY": {
+      "allowed_status": [
+        "SAFE",
+        "UNRESOLVED"
+      ],
+      "sets": [
+        "EXPLORATORY_B15_PLUS_SAFE",
+        "EXPLORATORY_ALL_REVIEWED"
+      ],
+      "families": [
+        "LASSO"
+      ],
+      "definition": "separately labelled sensitivity; never a selection candidate; never UNSAFE"
+    },
+    "reporting_rule": "never mixed: separate tables / sections; every row carries its category"
+  },
+  "feature_set_definitions": {
+    "BASELINE_15": "the 15 EXTENDED predictors (HISTORICAL_BASELINE_15)",
+    "SAFE_BASE": "the BASELINE_15 predictors whose D-00 status is SAFE",
+    "EFALLS_MAPPABLE_SAFE": "SAFE_BASE + SAFE non-redundant features with an eFalls mapping class",
+    "MEUHEDET_NATIVE_SAFE": "SAFE_BASE + SAFE non-redundant Meuhedet-native features",
+    "ALL_REVIEWED_SAFE": "SAFE_BASE + every SAFE non-redundant feature (= the last SAFE waterfall step = ALL_SAFE_LINEAR)",
+    "ALL_REVIEWED_SAFE_WITHOUT_EXPLICIT_ASSESSMENT_FLAGS": "ALL_REVIEWED_SAFE without the explicit form 'assessed' indicators (sensitivity; other NULL indicators stay, so missingness can still carry assessment information)",
+    "SAFE_BASE_PLUS_<DOMAIN>": "SAFE_BASE + every SAFE feature of one domain (one-domain addition, not pruned)",
+    "SAFE_WATERFALL_<k>_<DOMAIN>": "cumulative SAFE steps in the declared order: COGNITION -> MEDICATION -> FRAILTY -> FUNCTION_MOBILITY -> UTILISATION -> HOME_ENVIRONMENT -> OTHER_NATIVE",
+    "ALL_REVIEWED_SAFE_MINUS_<DOMAIN>": "ALL_REVIEWED_SAFE without one domain (leave-one-domain-out, fully nested)",
+    "EXPLORATORY_B15_PLUS_SAFE": "BASELINE_15 (incl. its UNRESOLVED predictors) + every SAFE non-redundant feature (exploratory)",
+    "EXPLORATORY_ALL_REVIEWED": "BASELINE_15 + every SAFE or UNRESOLVED non-redundant feature (exploratory)",
+    "forms_rule": "a set with an item of an assessment form also holds that form's 'assessed' indicator (not measured != negative)",
+    "aliases": "identical specifications share one fit (recorded in FEATURE_SETS.json)",
+    "candidate_kinds": [
+      "main",
+      "domain_add",
+      "waterfall"
+    ]
+  },
+  "encoding_policy": {
+    "linear": {
+      "binary": "1 if positive else 0; NULL covered by the form indicator, else an na__ indicator",
+      "ordinal": "thermometer dummies (>= level) for the declared levels present on TRAIN",
+      "count_days_amount": "log1p; NULL -> fold median + na__ indicator",
+      "fall_recency_bands": "days since last fall: <= 90, 91-180, 181-365, > 365 (reference: no prior fall)",
+      "item_unanswered_min_share": 0.0,
+      "baseline_block": "unchanged eFalls preprocessor (efalls_fp_all_levels; FP selection for age / polypharmacy inside each fold)",
+      "standardisation": "z-score of every design column on the fitting rows (inside the solver); coefficients reported on both scales",
+      "duplicate_columns": "exact duplicate design columns dropped inside each fold (first kept, recorded)"
+    },
+    "trees": "raw engineered values, NULL kept (native missing-value routing); sex -> female 0/1; form indicators included; no scaling, no log, no thermometer, no imputation",
+    "redundancy": {
+      "abs_spearman": 0.9,
+      "universes": "SAFE and exploratory separately",
+      "rule": "representative-anchored; representative = baseline feature, else lowest missingness, then catalogue order"
+    }
+  },
+  "model_families": {
+    "LASSO": {
+      "implementation": "falls_ml.models.lasso_cv.LassoLogisticCV (Stata-equivalent penalised logistic regression)",
+      "penalty": "L1 on standardised coefficients; intercept unpenalised",
+      "solver": "proximal-Newton (IRLS) + covariance-mode cyclic coordinate descent, warm starts along the lambda path",
+      "lambda_grid": {
+        "n_lambda": 100,
+        "lambda_min_ratio": 0.001,
+        "spacing": "log-uniform from lambda_max"
+      },
+      "selection": {
+        "rule": "min",
+        "objective": "minimum mean held-out deviance (= 2 x log loss) over the inner folds"
+      },
+      "cv_folds": 10,
+      "tol": 1e-07,
+      "max_iter": 10000,
+      "class_weight": "none",
+      "served_coefficients": "penalised (refit_unpenalized = false)",
+      "convergence_retry": "policy v1: one retry with a 10x full-path iteration limit at the same lambda*; never accepted unconverged"
+    },
+    "ELASTIC_NET": {
+      "implementation": "falls_ml.phase2.enet.ElasticNetLogisticCV (glmnet parameterisation, same solver; = LASSO at l1_ratio 1)",
+      "l1_ratios": [
+        0.1,
+        0.5,
+        0.9
+      ],
+      "n_lambda": 100,
+      "lambda_min_ratio": 0.001,
+      "selection": "joint (l1_ratio, lambda) by minimum inner-CV mean deviance",
+      "cv_folds": 10,
+      "tol": 1e-07,
+      "max_iter": 10000,
+      "class_weight": "none",
+      "sets": "ALL_REVIEWED_SAFE + the best SAFE LASSO set by outer-OOF AP (max 2)"
+    },
+    "XGBOOST": {
+      "library": "xgboost 3.2.0 (xgboost-cpu wheel on Windows)",
+      "api": "xgboost.train (native)",
+      "fixed_parameters": {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "booster": "gbtree",
+        "tree_method": "hist",
+        "device": "cpu",
+        "grow_policy": "depthwise",
+        "max_bin": 256,
+        "learning_rate": 0.05,
+        "subsample": 0.8,
+        "sampling_method": "uniform",
+        "colsample_bytree": 0.8,
+        "colsample_bylevel": 1.0,
+        "colsample_bynode": 1.0,
+        "gamma": 0.0,
+        "reg_alpha": 0.0,
+        "max_delta_step": 0.0,
+        "scale_pos_weight": 1.0,
+        "base_score": "auto"
+      },
+      "base_score_note": "auto = estimated by xgboost from the fitting rows' labels (not passed)",
+      "per_fit": {
+        "seed": "item seed mod 2^31-1",
+        "nthread": "resolved threads.xgboost",
+        "verbosity": 0
+      },
+      "num_boost_round_ceiling": 3000,
+      "early_stopping_rounds": 100,
+      "early_stopping": "xgb.train(num_boost_round=ceiling, evals=[inner held-out fold], early_stopping_rounds); the inner held-out fold is scored with iteration_range=(0, best_iteration+1) (the native API returns the LAST model); the final fit of a scope = median inner best iteration + 1 trees on all its training rows, WITHOUT early stopping; outer held-out rows never seen (Astra F-01)",
+      "stage0": {
+        "params": {
+          "max_depth": 3,
+          "min_child_weight": 10.0,
+          "reg_lambda": 5.0
+        },
+        "sets": [
+          "BASELINE_15",
+          "ALL_REVIEWED_SAFE"
+        ]
+      },
+      "stage1": {
+        "set": "ALL_REVIEWED_SAFE",
+        "n_trials_per_scope": 15,
+        "n_startup_trials": 6,
+        "space": {
+          "max_depth": {
+            "type": "int",
+            "low": 1,
+            "high": 3
+          },
+          "min_child_weight": {
+            "type": "float",
+            "low": 5.0,
+            "high": 30.0,
+            "log": true
+          },
+          "reg_lambda": {
+            "type": "float",
+            "low": 1.0,
+            "high": 30.0,
+            "log": true
+          }
+        }
+      },
+      "stage2": {
+        "enabled": false,
+        "n_trials_per_scope": 8,
+        "local_factor": 2.0,
+        "space_added": {
+          "subsample": {
+            "type": "float",
+            "low": 0.6,
+            "high": 1.0
+          },
+          "colsample_bytree": {
+            "type": "float",
+            "low": 0.5,
+            "high": 1.0
+          }
+        },
+        "depth_rule": "{best-1, best, best+1} intersected with the stage-1 range (never 0)",
+        "condition": "stage-1 outer-OOF AP >= best SAFE linear outer-OOF AP + 0.005",
+        "local_space": "max_depth +/-1 and min_child_weight / reg_lambda within best/factor..best*factor of the scope's stage-1 best (clipped to the stage-1 range)"
+      },
+      "max_trials_per_study": 25,
+      "tuning_scopes": "5 outer folds + 1 final = 6",
+      "class_weighting": "none (scale_pos_weight 1)",
+      "monotone_constraints": "none",
+      "deterministic": "hist on CPU with a fixed thread count and seed (checked bit-for-bit by the preflight self-test)"
+    }
+  },
+  "optuna": {
+    "sampler": "TPE",
+    "multivariate": true,
+    "direction": "minimize",
+    "objective": "inner_cv_mean_logloss",
+    "pruner": "none",
+    "storage": "checkpoints/xgb_optuna.sqlite",
+    "ledger": "checkpoints/xgb_trials.jsonl",
+    "n_startup_trials": 6,
+    "stage2_n_startup_trials": 2,
+    "failure_handling": "a trial is a committed item; an interrupted trial leaves no trace (study rebuilt from committed trials); a trial error stops the run (no silent FAIL state)",
+    "promotion_metric": "stage 1 -> stage 2 and XGBoost vs linear: outer-OOF AP (never VALIDATION)"
+  },
+  "selection": {
+    "candidates": "SAFE_DISCOVERY",
+    "discovery_reference": "LASSO:SAFE_BASE",
+    "benchmark": "LASSO:BASELINE_15",
+    "benchmark_noninferiority": {
+      "max_ap_loss": 0.01,
+      "max_capture_loss_pp": 1.0
+    },
+    "principal_capacity": 0.1,
+    "min_delta_ap": 0.01,
+    "min_delta_capture_principal_pp": 1.0,
+    "max_logloss_ratio": 1.01,
+    "calibration_slope_range": [
+      0.8,
+      1.25
+    ],
+    "max_abs_citl": 0.2,
+    "simplicity_margin_ap": 0.005,
+    "max_challengers": 3,
+    "rule": "a SAFE_DISCOVERY candidate (kinds main, domain_add, waterfall; families LASSO / ENET / XGBOOST) qualifies vs LASSO:SAFE_BASE if ALL of: dAP >= min_delta_ap, d capture@principal >= min_delta_capture_principal_pp, log loss <= max_logloss_ratio x reference, OOF calibration slope within calibration_slope_range and |CITL| <= max_abs_citl; recommended = the simplest (linear before XGBoost, then fewer features used) within simplicity_margin_ap of the best qualifying OOF AP, else LASSO:SAFE_BASE. The recommended model is then classified vs LASSO:BASELINE_15: SUPERIOR (meets the same rule), NON_INFERIOR (dAP >= -max_ap_loss and d capture >= -max_capture_loss_pp), else INFERIOR. Frozen in SELECTION_FROZEN.json before VALIDATION is opened.",
+    "benchmark_classes": [
+      "MEETS_SUPERIORITY_RULE",
+      "WITHIN_NONINFERIORITY_MARGINS",
+      "OUTSIDE_MARGINS"
+    ],
+    "benchmark_class_kind": "point-estimate classification, not a formal superiority / non-inferiority test (Astra F-03)",
+    "benchmark_identity": "LASSO:BASELINE_15 = the 15 historical predictors refitted on TRAIN in the Phase 2 protocol, no recalibration; not the Phase 1 model recalibrated on VALIDATION (Astra F-02)",
+    "no_selection_outcome": "NO_INCREMENTAL_MODEL_SELECTED (SAFE_BASE is reported, never self-compared; Astra F-08)",
+    "undefined_values": "an undefined (NaN) quantity never passes a rule (Astra F-08)",
+    "attribution_contrasts": {
+      "FEATURE_EXPANSION": "LASSO:ALL_REVIEWED_SAFE vs LASSO:SAFE_BASE",
+      "MODEL_FAMILY_PIPELINE": "XGB_TUNED:ALL_REVIEWED_SAFE vs the TRAIN-selected best linear model on ALL_REVIEWED_SAFE",
+      "note": "frozen before VALIDATION; paired intervals on OOF and VALIDATION; no extra fits (Astra F-09)"
+    },
+    "shortlist": "LASSO:SAFE_BASE, LASSO:BASELINE_15, the recommended model, then the best SAFE candidate of each other family (<= max_challengers)"
+  },
+  "validation": {
+    "min_delta_ap": 0.005,
+    "min_delta_capture_principal_pp": 0.0,
+    "calibration_slope_range": [
+      0.7,
+      1.4
+    ],
+    "max_abs_citl": 0.3,
+    "max_logloss_ratio": 1.01,
+    "benchmark_noninferiority": {
+      "max_ap_loss": 0.01,
+      "max_capture_loss_pp": 1.0
+    },
+    "rule": "one-shot exploratory screen on reused VALIDATION: recommended vs SAFE_BASE -> CONFIRMED_PROMISING if dAP >= min_delta_ap, d capture@principal >= min pp, log loss <= max_logloss_ratio x SAFE_BASE and calibration within range (NaN never passes), else NOT_CONFIRMED; point-estimate class vs the BASELINE_15 refit with the same superiority margins and the non-inferiority margins; every frozen configuration is also scored descriptively on the same rows",
+    "artifacts": [
+      "VALIDATION_OPENED.json (write-once)",
+      "validation_evaluation_registry.jsonl (append-only)"
+    ]
+  },
+  "metrics": {
+    "primary": "average precision (AP = PR-AUC, step-wise, sklearn-equivalent, ties grouped)",
+    "secondary": [
+      "log loss (proper scoring rule; tuning objective and safeguard)",
+      "AUROC",
+      "Brier",
+      "scaled Brier (1 - Brier / Brier of the prevalence)",
+      "calibration-in-the-large (CITL, slope fixed at 1)",
+      "calibration intercept and slope (logistic recalibration of the logit)",
+      "O:E"
+    ],
+    "capacities": [
+      0.01,
+      0.03,
+      0.05,
+      0.1,
+      0.2
+    ],
+    "principal_capacity": 0.1,
+    "capacity_rule": "ceil(capacity x n) highest risks; ties keep row order; identical rule for every model on the same rows",
+    "per_capacity": [
+      "falls identified (tp)",
+      "sensitivity (capture)",
+      "PPV",
+      "false alerts (fp)",
+      "lift",
+      "specificity",
+      "NPV"
+    ],
+    "thresholds": [
+      0.01,
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.07,
+      0.08,
+      0.09,
+      0.1,
+      0.125,
+      0.15,
+      0.175,
+      0.2,
+      0.225,
+      0.25,
+      0.275,
+      0.3,
+      0.325,
+      0.35,
+      0.375,
+      0.4,
+      0.425,
+      0.45,
+      0.475,
+      0.5
+    ],
+    "calibration_groups": 10,
+    "paired_bootstrap": {
+      "n": 2000,
+      "unit": "patient (one row per patient)",
+      "interval": "percentile 95%",
+      "same_patients_both_models": true,
+      "top_n_recomputed_per_replicate": true,
+      "per_capacity": "difference in recorded events identified at every capacity, also per 10,000 comparable D00_CLEAN patients (Astra F-12)",
+      "note": "describes sampling variation of frozen predictions; does not account for the model search"
+    },
+    "definitions": {
+      "scaled_brier": "1 - Brier / [p_eval (1 - p_eval)], p_eval = prevalence of the evaluated rows",
+      "oe": "sum(y) / sum(p)",
+      "citl": "a in logit P(y=1) = a + 1 x logit(p) (offset)",
+      "calibration": "logit P(y=1) = a + b logit(p)"
+    },
+    "subgroup_min_events": 10,
+    "small_cell_suppression": 10
+  },
+  "calibration_policy": {
+    "no_recalibration": "no model is recalibrated in Phase 2 (no calibration data independent of VALIDATION exists)",
+    "evaluated": "every configuration: CITL, slope, intercept, O:E, Brier, scaled Brier (OOF and VALIDATION); for the shortlist and the management waterfall: bootstrap intervals of these indices and a smooth calibration curve (restricted cubic spline of logit(p), 95% band) with decile points (Astra F-11)",
+    "smooth_curve": {
+      "knots": 4,
+      "grid_points": 50
+    },
+    "class_weighting": "none, so predicted probabilities stay on the risk scale"
+  },
+  "stability": {
+    "n_replicates": 25,
+    "max_sets": 3,
+    "max_failure_fraction": 0.1,
+    "method": "LASSO on bootstrap resamples of TRAIN (inner CV repeated, copies of a resampled patient kept in one inner fold); selection count, frequency with Monte Carlo SE, sign consistency; LASSO only - never certifies elastic-net-only or XGBoost findings (Astra F-13)",
+    "sets": "finalists only: SAFE linear shortlist sets, ALL_REVIEWED_SAFE, then BASELINE_15 (max_sets)",
+    "feature_selected": "any of its encoded design columns non-zero"
+  },
+  "ablation": {
+    "individual_top_n": 15,
+    "leave_one_domain_out": "LASSO, fully nested (retuned), vs LASSO:ALL_REVIEWED_SAFE on the same outer folds",
+    "individual": "top-N new features of the recommended SAFE model (or the best SAFE model with new features) by final-model importance, refitted without the feature with the fold's frozen hyper-parameters (explanatory)"
+  },
+  "explainability": {
+    "shap_sample_rows": 12000,
+    "permutation_repeats": 5,
+    "interaction_pairs": 5,
+    "target": "the XGBoost member of the frozen shortlist (if any)",
+    "permutation": "per outer fold, on that fold's held-out rows, with that fold's booster; delta AP and delta log loss",
+    "shap": "TreeSHAP (pred_contribs) of the final booster on a class-stratified TRAIN sample; aggregated quantiles only (no per-patient points leave the PC)"
+  },
+  "consensus": {
+    "univariate_min_abs_smd": 0.1,
+    "univariate_auroc_band": [
+      0.45,
+      0.55
+    ],
+    "linear_min_stability": 0.6,
+    "shap_top_rank": 15,
+    "domain_min_delta_ap": 0.005,
+    "ablation_min_delta_ap": 0.002,
+    "label": "exploratory predictive evidence (not causal)",
+    "classes": "U univariate; L = LASSO selection with LASSO stability >= linear_min_stability; I = SHAP rank <= shap_top_rank of the promoted XGBoost; permutation gain > 0 alone and elastic-net-only selection = weak support; A_dom one-domain gain >= domain_min_delta_ap; A_feat individual ablation >= ablation_min_delta_ap",
+    "ratings": "STRONG = A_feat and (L or I); MODERATE = (L or I) and (U or A_dom), or A_feat; WEAK = any single support; NONE"
+  },
+  "stop_gates": {
+    "hard": [
+      "INPUT_MISSING",
+      "PROTECTED_MISSING",
+      "OUT_INSIDE_PROTECTED",
+      "SYNCED_FOLDER",
+      "OUT_NOT_EMPTY",
+      "NOTHING_TO_RESUME",
+      "FROZEN_CONFIG_MISMATCH",
+      "INPUT_CHANGED",
+      "PLAN_CHANGED",
+      "CODE_CHANGED",
+      "REFERENCE_INVALID",
+      "INPUT_NOT_REFERENCE",
+      "PEPPER_MISSING",
+      "PEPPER_MISMATCH",
+      "COHORT_MISMATCH",
+      "COHORT_VALUES_DIFFER",
+      "SPLIT_MISMATCH",
+      "PATIENT_OVERLAP",
+      "ROW_MAPPING",
+      "LABEL_MISMATCH",
+      "INELIGIBLE_FEATURE_IN_SET",
+      "PROTECTED_CHANGED",
+      "COMPLETED_ARTIFACT_CHANGED",
+      "STAGE_ORDER",
+      "OOF_INCOMPLETE",
+      "FIT_FAILURES",
+      "REFERENCE_FAILED",
+      "VALIDATION_CONFIG_MISMATCH",
+      "VALIDATION_REOPEN_REFUSED",
+      "SELFTEST_FAILED",
+      "DEPENDENCY_MISSING",
+      "WORDING",
+      "PRIVACY_SCAN"
+    ],
+    "investigation": {
+      "LABEL_DEATH_SEMANTICS": "deaths inside the 180-day window (>= 50) never carry a recorded event (possible overwrite of prior events by death; Astra F-05)",
+      "SINGLE_FEATURE_DOMINANCE": "a new feature with TRAIN univariate AUROC >= 0.8 (or its mirror)",
+      "IMPLAUSIBLE_GAIN_OOF": "any SAFE / exploratory configuration vs BASELINE_15 on TRAIN OOF: dAUROC > 0.05 or AP ratio > 1.5",
+      "IMPLAUSIBLE_CALIBRATION_OOF": "recommended model OOF slope outside [0.6, 1.5] or |CITL| > 0.5",
+      "PROXY_DOMINANCE": "one new feature > 50% of mean |SHAP| or of the permutation AP loss of the promoted XGBoost",
+      "IMPLAUSIBLE_GAIN_VALIDATION": "same limits as the OOF gate, on VALIDATION",
+      "IMPLAUSIBLE_CALIBRATION_VALIDATION": "a shortlist model's VALIDATION calibration outside the gate range"
+    },
+    "gate_values": {
+      "single_feature_univariate_auroc": 0.8,
+      "max_delta_auroc": 0.05,
+      "max_ap_ratio": 1.5,
+      "calibration_slope_range": [
+        0.6,
+        1.5
+      ],
+      "max_abs_citl": 0.5,
+      "max_single_feature_share": 0.5,
+      "max_fit_failure_fraction": 0.1
+    },
+    "acceptance": "never automatic: --resume --accept-gate <GATE> --reason \"...\" after reviewing INVESTIGATION_<GATE>.md (recorded)"
+  },
+  "compute_budget": {
+    "max_lasso_sets": 24,
+    "lasso_fits_per_set": "5 outer + 1 final, each with a 10-fold path CV",
+    "enet_fits": "<= 2 sets x 6 fits x 3 l1_ratios x 10-fold path CV",
+    "xgb_stage0_fits": "2 sets x 6 scopes x (5 inner + 1 final)",
+    "xgb_stage1_trials": 90,
+    "xgb_stage2_trials_max": 0,
+    "xgb_trials_total_max": 90,
+    "xgb_inner_booster_fits_stage1": 450,
+    "stability_fits": 75,
+    "ablation_fits_max": "<= 10 domains x 5 + 15 features x 5",
+    "bootstrap_replicates_per_comparison": 2000
+  },
+  "catalogue": {
+    "domains": {
+      "COGNITION": "cognition",
+      "MEDICATION": "medications",
+      "FRAILTY": "frailty (MEFI)",
+      "FUNCTION_MOBILITY": "function and mobility",
+      "PRIOR_FALLS_DETAIL": "prior falls (detail)",
+      "NURSE_FALL_RISK": "nurse fall-risk assessment",
+      "UTILISATION": "healthcare utilisation",
+      "HOME_ENVIRONMENT": "home environment",
+      "SOCIAL_SUPPORT": "social support",
+      "ADDITIONAL_COMORBIDITY": "additional comorbidity"
+    },
+    "waterfall": [
+      "COGNITION",
+      "MEDICATION",
+      "FRAILTY",
+      "FUNCTION_MOBILITY",
+      "UTILISATION",
+      "HOME_ENVIRONMENT",
+      "OTHER_NATIVE"
+    ],
+    "forms": {
+      "NURSE_FALLS_RISK_999_52": {
+        "indicator": "form_nurse_fallrisk_assessed",
+        "date": "Falls_Risk_Assessment_Date"
+      },
+      "NURSE_GET_UP_AND_GO_999_79": {
+        "indicator": "form_nurse_gug_assessed",
+        "date": "Get_Up_And_Go_Date"
+      },
+      "NURSE_FUNCTION_999_175": {
+        "indicator": "form_nurse_function_assessed",
+        "date": "Mobility_Assessment_Date"
+      },
+      "NURSE_COGNITION": {
+        "indicator": "form_minicog_assessed",
+        "date": "MiniCog_Date"
+      },
+      "NURSE_HOME_SAFETY_999_139": {
+        "indicator": "form_home_safety_assessed",
+        "date": "Home_Safety_Assessment_Date"
+      },
+      "MEFI": {
+        "indicator": "form_mefi_assessed",
+        "date": "MEFI_From_Date"
+      }
+    },
+    "features": [
+      {
+        "name": "form_minicog_assessed",
+        "domain": "COGNITION",
+        "op": "present",
+        "inputs": [
+          "MiniCog_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "cog_minicog_score",
+        "domain": "COGNITION",
+        "op": "copy",
+        "inputs": [
+          "MiniCog_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          4.0,
+          5.0
+        ]
+      },
+      {
+        "name": "cog_minicog_abnormal",
+        "domain": "COGNITION",
+        "op": "flag_lt",
+        "inputs": [
+          "MiniCog_Score"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE",
+        "threshold": 3.0
+      },
+      {
+        "name": "cog_minicog_days_since",
+        "domain": "COGNITION",
+        "op": "days_since",
+        "inputs": [
+          "MiniCog_Date"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "cog_nurse_impairment",
+        "domain": "COGNITION",
+        "op": "copy",
+        "inputs": [
+          "Cognitive_Impairment_Nurse_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "med_polypharmacy_5plus",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Polypharmacy_5Plus_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_polypharmacy_10plus",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Polypharmacy_10Plus_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_narcotic_count",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Narcotic_Drug_Count"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_narcotic_any",
+        "domain": "MEDICATION",
+        "op": "flag_ge",
+        "inputs": [
+          "Narcotic_Drug_Count"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "threshold": 1.0
+      },
+      {
+        "name": "med_not_collected_365d",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Prescribed_Not_Collected_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_bought_outside_365d",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Bought_Outside_Meuhedet_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_total_ddd",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Total_DDD_Amount"
+        ],
+        "kind": "continuous",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_rx_written_365d",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Rx_Written_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_rx_purchased_365d",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Rx_Purchased_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_fill_ratio_365d",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Prescription_Fill_Ratio_365D"
+        ],
+        "kind": "continuous",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "med_nurse_polypharmacy",
+        "domain": "MEDICATION",
+        "op": "copy",
+        "inputs": [
+          "Polypharmacy_Nurse_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "form_mefi_assessed",
+        "domain": "FRAILTY",
+        "op": "present",
+        "inputs": [
+          "MEFI_From_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "frail_mefi_group",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "MEFI_Group_At_Index"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ]
+      },
+      {
+        "name": "frail_mefi_prev_group",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "MEFI_Prev_Group"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ]
+      },
+      {
+        "name": "frail_mefi_worsened",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "MEFI_Worsened_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "frail_mefi_days_since_assessment",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_MEFI_Assessment"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "frail_mefi_days_in_group",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "Days_In_Current_MEFI_Group"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "frail_mefi_assessment_count",
+        "domain": "FRAILTY",
+        "op": "copy",
+        "inputs": [
+          "MEFI_Assessment_Count"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "form_nurse_function_assessed",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "present",
+        "inputs": [
+          "Mobility_Assessment_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "form_nurse_gug_assessed",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "present",
+        "inputs": [
+          "Get_Up_And_Go_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_adl_worst",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "ADL_Worst_Domain_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ]
+      },
+      {
+        "name": "func_transfer_dependency",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Transfer_Dependency_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0,
+          3.0,
+          4.0
+        ]
+      },
+      {
+        "name": "func_mobility_score",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Mobility_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0,
+          3.0
+        ]
+      },
+      {
+        "name": "func_confined_chair_bed",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Confined_To_Chair_Bed_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_walking_aid",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Uses_Walking_Aid_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_balance_disorder",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Balance_Disorder_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_shuffling_gait",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Shuffling_Gait_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_hesitant_gait",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Hesitant_Gait_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_gait_any_abnormal",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "any_positive",
+        "inputs": [
+          "Balance_Disorder_Ind",
+          "Shuffling_Gait_Ind",
+          "Hesitant_Gait_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_muscle_weakness",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "copy",
+        "inputs": [
+          "Muscle_Weakness_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "func_gug_days_since",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "days_since",
+        "inputs": [
+          "Get_Up_And_Go_Date"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "func_function_form_days_since",
+        "domain": "FUNCTION_MOBILITY",
+        "op": "days_since",
+        "inputs": [
+          "Mobility_Assessment_Date"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_count_30d",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Fall_Count_30D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_count_90d",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Fall_Count_90D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_count_180d",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Fall_Count_180D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_count_365d",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Fall_Count_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_count_since_start",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Fall_Count_Since_Study_Start"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_days_since_last",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_Last_Fall"
+        ],
+        "kind": "days",
+        "linear": "fall_recency_bands",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_nurse_reported",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Prior_Falls_Nurse_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_required_treatment",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Fall_Required_Treatment_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "falls_at_home",
+        "domain": "PRIOR_FALLS_DETAIL",
+        "op": "copy",
+        "inputs": [
+          "Fall_Location_At_Home_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "form_nurse_fallrisk_assessed",
+        "domain": "NURSE_FALL_RISK",
+        "op": "present",
+        "inputs": [
+          "Falls_Risk_Assessment_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_fallrisk_score",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Falls_Risk_Assessment_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE",
+        "levels": [
+          1.0,
+          2.0,
+          3.0
+        ]
+      },
+      {
+        "name": "nfr_dizziness",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Instability_Dizziness_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "nfr_fear_of_falling",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Fear_Of_Falling_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_orthostatic_hypotension",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Orthostatic_Hypotension_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "nfr_vision_impairment",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Vision_Impairment_Nurse_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "nfr_missing_sensory_aids",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Missing_Sensory_Aids_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_vision_score",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Vision_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0
+        ]
+      },
+      {
+        "name": "nfr_hearing_score",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Hearing_Score"
+        ],
+        "kind": "ordinal",
+        "linear": "thermometer",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE",
+        "levels": [
+          0.0,
+          1.0,
+          2.0
+        ]
+      },
+      {
+        "name": "nfr_assessment_count_365d",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Assessment_Count_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_distinct_assessment_dates_365d",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Distinct_Assessment_Dates_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "source_absent",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_days_since_last_assessment",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_Last_Assessment"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_repeat_assessment",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Has_Repeat_Assessment_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_assessment_not_performed",
+        "domain": "NURSE_FALL_RISK",
+        "op": "copy",
+        "inputs": [
+          "Assessment_Not_Performed_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "nfr_fallrisk_days_since",
+        "domain": "NURSE_FALL_RISK",
+        "op": "days_since",
+        "inputs": [
+          "Falls_Risk_Assessment_Date"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_visits_30d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Visit_Count_30D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_visits_90d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Visit_Count_90D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_visits_180d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Visit_Count_180D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_visits_365d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Visit_Count_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_days_since_last_visit",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_Last_Visit"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_lab_referred_365d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Lab_Referred_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_lab_performed_365d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Lab_Performed_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_lab_performed_ratio",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "Lab_Performed_Ratio_365D"
+        ],
+        "kind": "continuous",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_external_care_visible_365d",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "External_Care_Count_365D_Visible"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "util_hmo_seniority_months",
+        "domain": "UTILISATION",
+        "op": "copy",
+        "inputs": [
+          "HMO_Seniority_Months"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "form_home_safety_assessed",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "present",
+        "inputs": [
+          "Home_Safety_Assessment_Date"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "home_unsafe_environment",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "copy",
+        "inputs": [
+          "Unsafe_Environment_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "home_unsuitable_footwear",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "copy",
+        "inputs": [
+          "Unsuitable_Footwear_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "home_unsuitable_bed_chair",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "copy",
+        "inputs": [
+          "Unsuitable_Bed_Chair_Height_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "home_safety_risk_count",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "copy",
+        "inputs": [
+          "Home_Safety_Risk_Count"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "home_safety_days_since",
+        "domain": "HOME_ENVIRONMENT",
+        "op": "days_since",
+        "inputs": [
+          "Home_Safety_Assessment_Date"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "not_assessed",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "soc_no_primary_caregiver",
+        "domain": "SOCIAL_SUPPORT",
+        "op": "copy",
+        "inputs": [
+          "No_Primary_Caregiver_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "not_assessed",
+        "mapping_class": "EFALLS_APPROXIMATE"
+      },
+      {
+        "name": "soc_income_support",
+        "domain": "SOCIAL_SUPPORT",
+        "op": "copy",
+        "inputs": [
+          "Income_Support"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_dx_count_180d",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Diagnosis_Count_180D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_dx_count_365d",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Diagnosis_Count_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_distinct_dx_365d",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Distinct_Diagnosis_Codes_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_chronic_dx_365d",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Chronic_Diagnosis_Count_365D"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_days_since_last_dx",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_Last_Diagnosis"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_cci_group",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "CCI_Group"
+        ],
+        "kind": "continuous",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_registry_heart",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Registry_Heart_Disease_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_registry_kidneys",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Registry_Kidneys_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_registry_transplant",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Registry_Transplant_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_registry_stoma",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Registry_Stoma_Ind"
+        ],
+        "kind": "binary",
+        "linear": "none",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_active_registry_count",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Active_Registry_Count"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_distinct_registry_types",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Distinct_Registry_Type_Count"
+        ],
+        "kind": "count",
+        "linear": "log1p",
+        "missing": "unexpected",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_longest_registry_days",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Longest_Registry_Duration_Days"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      },
+      {
+        "name": "com_days_since_first_registry",
+        "domain": "ADDITIONAL_COMORBIDITY",
+        "op": "copy",
+        "inputs": [
+          "Days_Since_First_Registry"
+        ],
+        "kind": "days",
+        "linear": "log1p",
+        "missing": "no_event",
+        "mapping_class": "MEUHEDET_NATIVE"
+      }
+    ]
+  }
+}

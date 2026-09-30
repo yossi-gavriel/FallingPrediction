@@ -1,0 +1,131 @@
+# EXAMPLE ONLY — illustrative SAIL-like layout for an eFalls-compatible external extract (spec §13.1).
+# Source column names and codes are invented placeholders, NOT a real SAIL or Connected Bradford specification.
+# The adapter renames and recodes only; the source environment must already have derived every feature
+# (binary indicators, decimal age, polypharmacy count, BMI value, smoking, alcohol, outcome) per spec D-00..D-09.
+adapter:
+  name: example_sail_like
+  version: 0.0.1
+  source: example_external_dataset
+  example_only: true
+column_map:
+  ALF_PE: research_id
+  INDEX_DT: index_date
+  PRED_MAX_RECORD_DT: predictor_max_record_date
+  FALL_FRACTURE_12M_FLG: outcome_12m
+  FIRST_FALL_FRACTURE_DT: outcome_first_event_date
+  AGE_AT_INDEX_DEC: age_years
+  GNDR_CD: sex
+  POLYPHARM_BNF_PARA_120D_CNT: polypharmacy_count_120d
+  BMI_VAL: bmi_value
+  SMOKING_STATUS_CD: smoking_status
+  ALCOHOL_CAT_CD: alcohol_category
+  EFIPLUS_ABDOMINAL_PAIN_FLG: abdominal_pain
+  EFIPLUS_ACTIVITY_LIMITATION_FLG: activity_limitation
+  EFIPLUS_ANAEMIA_AND_HAEMATINIC_DEFICIENCY_FLG: anaemia_and_haematinic_deficiency
+  EFIPLUS_ANXIETY_FLG: anxiety
+  EFIPLUS_ASTHMA_FLG: asthma
+  EFIPLUS_ATRIAL_FIBRILLATION_FLG: atrial_fibrillation
+  EFIPLUS_BACK_PAIN_FLG: back_pain
+  EFIPLUS_BONE_DISEASE_FLG: bone_disease
+  EFIPLUS_CANCER_FLG: cancer
+  EFIPLUS_CHRONIC_KIDNEY_DISEASE_FLG: chronic_kidney_disease
+  EFIPLUS_COGNITIVE_IMPAIRMENT_FLG: cognitive_impairment
+  EFIPLUS_COPD_FLG: copd
+  EFIPLUS_DEMENTIA_FLG: dementia
+  EFIPLUS_DEPRESSION_FLG: depression
+  EFIPLUS_DIABETES_MELLITUS_FLG: diabetes_mellitus
+  EFIPLUS_DIZZINESS_FLG: dizziness
+  EFIPLUS_DRESSING_AND_GROOMING_PROBLEMS_FLG: dressing_and_grooming_problems
+  EFIPLUS_DYSPNOEA_FLG: dyspnoea
+  EFIPLUS_ENVIRONMENT_PROBLEMS_FLG: environment_problems
+  EFIPLUS_FAECAL_INCONTINENCE_FLG: faecal_incontinence
+  EFIPLUS_FALLS_FLG: falls
+  EFIPLUS_FATIGUE_FLG: fatigue
+  EFIPLUS_FOOT_PROBLEMS_FLG: foot_problems
+  EFIPLUS_FRACTURE_FLG: fracture
+  EFIPLUS_FRAGILITY_FRACTURE_FLG: fragility_fracture
+  EFIPLUS_GENERAL_MENTAL_HEALTH_FLG: general_mental_health
+  EFIPLUS_HEADACHE_FLG: headache
+  EFIPLUS_HEARING_IMPAIRMENT_FLG: hearing_impairment
+  EFIPLUS_HEART_FAILURE_FLG: heart_failure
+  EFIPLUS_HEART_VALVE_DISEASE_FLG: heart_valve_disease
+  EFIPLUS_HOUSEBOUND_FLG: housebound
+  EFIPLUS_HYPERTENSION_FLG: hypertension
+  EFIPLUS_HYPOTENSION_OR_SYNCOPE_FLG: hypotension_or_syncope
+  EFIPLUS_INFLAMMATORY_ARTHRITIS_FLG: inflammatory_arthritis
+  EFIPLUS_INFLAMMATORY_BOWEL_DISEASE_FLG: inflammatory_bowel_disease
+  EFIPLUS_ISCHAEMIC_HEART_DISEASE_FLG: ischaemic_heart_disease
+  EFIPLUS_LIVER_PROBLEMS_FLG: liver_problems
+  EFIPLUS_MEAL_PREPARATION_PROBLEMS_FLG: meal_preparation_problems
+  EFIPLUS_MEDICATION_MANAGEMENT_FLG: medication_management
+  EFIPLUS_MEMORY_CONCERNS_FLG: memory_concerns
+  EFIPLUS_MOBILITY_PROBLEMS_FLG: mobility_problems
+  EFIPLUS_MONO_OR_HEMIPARESIS_FLG: mono_or_hemiparesis
+  EFIPLUS_MOTOR_NEURONE_DISEASE_FLG: motor_neurone_disease
+  EFIPLUS_MUSCULOSKELETAL_PROBLEMS_FLG: musculoskeletal_problems
+  EFIPLUS_OSTEOARTHRITIS_FLG: osteoarthritis
+  EFIPLUS_OSTEOPOROSIS_FLG: osteoporosis
+  EFIPLUS_PALLIATIVE_CARE_FLG: palliative_care
+  EFIPLUS_PARKINSONISM_AND_TREMOR_FLG: parkinsonism_and_tremor
+  EFIPLUS_PEPTIC_ULCER_DISEASE_FLG: peptic_ulcer_disease
+  EFIPLUS_PERIPHERAL_NEUROPATHY_FLG: peripheral_neuropathy
+  EFIPLUS_PERIPHERAL_VASCULAR_DISEASE_FLG: peripheral_vascular_disease
+  EFIPLUS_PROBLEMS_MANAGING_FINANCES_FLG: problems_managing_finances
+  EFIPLUS_REQUIREMENT_FOR_CARE_FLG: requirement_for_care
+  EFIPLUS_RESPIRATORY_DISEASE_FLG: respiratory_disease
+  EFIPLUS_SEIZURES_FLG: seizures
+  EFIPLUS_SELF_HARM_FLG: self_harm
+  EFIPLUS_SEVERE_MENTAL_ILLNESS_FLG: severe_mental_illness
+  EFIPLUS_SHOPPING_PROBLEMS_FLG: shopping_problems
+  EFIPLUS_SKIN_ULCER_FLG: skin_ulcer
+  EFIPLUS_SLEEP_PROBLEMS_FLG: sleep_problems
+  EFIPLUS_SOCIAL_VULNERABILITY_FLG: social_vulnerability
+  EFIPLUS_STRESS_FLG: stress
+  EFIPLUS_STROKE_FLG: stroke
+  EFIPLUS_THYROID_PROBLEMS_FLG: thyroid_problems
+  EFIPLUS_TOILETING_PROBLEMS_FLG: toileting_problems
+  EFIPLUS_TRANSIENT_ISCHAEMIC_ATTACK_FLG: transient_ischaemic_attack
+  EFIPLUS_URINARY_INCONTINENCE_FLG: urinary_incontinence
+  EFIPLUS_URINARY_SYSTEM_DISEASE_FLG: urinary_system_disease
+  EFIPLUS_VISUAL_IMPAIRMENT_FLG: visual_impairment
+  EFIPLUS_WASHING_AND_BATHING_FLG: washing_and_bathing
+  EFIPLUS_WEAKNESS_FLG: weakness
+  EFIPLUS_WEIGHT_LOSS_FLG: weight_loss
+  PRAC_CD_PE: practice_id
+  WIMD_2019_QUINTILE: deprivation_group
+  EXTRACT_SITE_CD: site_id
+  DOD: death_date
+  FOLLOWUP_END_DT: followup_end_date
+recode_map:
+  sex:
+    '1': male
+    '2': female
+  smoking_status:
+    N: never
+    E: ex
+    C: current
+  alcohol_category:
+    HARM: harmful
+    HIGH: higher_risk
+    LOW: lower_risk
+    PREV: previous_higher_risk_or_harmful
+    ZERO: zero
+  outcome_12m:
+    Y: 1
+    N: 0
+  deprivation_group:
+    '1': '1'
+    '2': '2'
+    '3': '3'
+    '4': '4'
+    '5': '5'
+    U: missing
+drop_columns:
+- WOB
+- LSOA2011_CD
+date_columns:
+- index_date
+- predictor_max_record_date
+- outcome_first_event_date
+- death_date
+- followup_end_date

@@ -1,0 +1,35 @@
+# Human-readable labels for the model reports (falls_ml model-report). Hebrew for the management reports, English for the technical
+# ones; the canonical field name always stays visible in the technical report. Wording is descriptive: a predictor is "associated with
+# the model's prediction" (קשור לתחזית המודל), never "causes a fall". Labels only - no data, no mapping decisions.
+labels:
+  name: meuhedet_feature_labels
+  version: 1.0.0
+features:
+  age_years: {he: "גיל (שנים)", en: "Age (years)", domain_he: "דמוגרפיה", source: Age_At_Index}
+  sex: {he: "מין", en: "Sex", domain_he: "דמוגרפיה", source: Gender_Code}
+  polypharmacy_count_120d: {he: "מספר תרופות פעילות שונות (ריבוי תרופות)", en: "Number of distinct active medications", domain_he: "תרופות", source: Distinct_Active_Substance_Count}
+  falls: {he: "נפילה או שבר מאז 2022", en: "Fall or fracture since 2022", domain_he: "נפילות קודמות", source: Prior_Fall_Since_Study_Start_Ind}
+  dementia: {he: "דמנציה (רשם)", en: "Dementia (registry)", domain_he: "רשמי מחלות", source: Registry_Dementia_Ind}
+  copd: {he: "מחלת ריאות חסימתית כרונית – COPD (רשם)", en: "COPD (registry)", domain_he: "רשמי מחלות", source: Registry_COPD_Ind}
+  asthma: {he: "אסתמה (רשם)", en: "Asthma (registry)", domain_he: "רשמי מחלות", source: Registry_Asthma_Ind}
+  diabetes_mellitus: {he: "סוכרת (רשם)", en: "Diabetes (registry)", domain_he: "רשמי מחלות", source: "Registry_Diabetes_T1_Ind; Registry_Diabetes_T2_Ind"}
+  liver_problems: {he: "מחלת כבד (רשם)", en: "Liver disease (registry)", domain_he: "רשמי מחלות", source: Registry_Liver_Ind}
+  chronic_kidney_disease: {he: "אי-ספיקת כליות כרונית (רשם)", en: "Chronic renal failure (registry)", domain_he: "רשמי מחלות", source: Registry_Chronic_Renal_Failure_Ind}
+  hypertension: {he: "יתר לחץ דם (רשם)", en: "Hypertension (registry)", domain_he: "רשמי מחלות", source: Registry_Blood_Pressure_Ind}
+  housebound: {he: "מרותק/ת לבית (רשם)", en: "Home-confined (registry)", domain_he: "רשמי מחלות", source: Registry_Home_Confined_Ind}
+  severe_mental_illness: {he: "מחלת נפש קשה (רשם)", en: "Severe mental illness (registry)", domain_he: "רשמי מחלות", source: Registry_SMI_Level}
+  self_harm: {he: "ניסיון אובדני בעבר (רשם)", en: "Suicide attempt (registry)", domain_he: "רשמי מחלות", source: Registry_Suicide_Attempt_Ind}
+  mobility_problems: {he: "קושי בהליכה (אבחנה)", en: "Difficulty walking (diagnosis 719.7)", domain_he: "ניידות", source: Gait_Disorder_Since_Study_Start_Ind}
+levels:
+  female: {he: "אישה", en: "female"}
+  male: {he: "גבר", en: "male"}
+mapping_quality:
+  EXACT: {he: "התאמה מלאה", en: "exact"}
+  HIGH_CONFIDENCE: {he: "התאמה גבוהה", en: "high confidence"}
+  APPROXIMATE: {he: "התאמה מקורבת", en: "approximate"}
+analyses:
+  STRICT: {he: "מודל בסיסי (STRICT)", en: "STRICT", text_he: "רק משתנים בהתאמה גבוהה להגדרות eFalls"}
+  EXTENDED: {he: "מודל מורחב (EXTENDED)", en: "EXTENDED", text_he: "משתנים בהתאמה גבוהה ומקורבת להגדרות eFalls"}
+  SAFE_ALL_ROWS: {he: "מודל בטוח-תזמון על כל השורות (SAFE-ALL-ROWS)", en: "SAFE-ALL-ROWS", text_he: "כל השורות, ללא המשתנים שמקורם עלול לכלול מידע מיום התחזית"}
+  ABLATION: {he: "ניסוי הסרה (ablation)", en: "ablation", text_he: "המודל המורחב בלי משתנה אחד או יותר, על אותן שורות"}
+  FINAL_DWH_FIXED: {he: "מודל לאחר תיקון ה-DWH (טרם הורץ)", en: "FINAL_DWH_FIXED (not run)", text_he: "יורץ רק אחרי תיקון חלונות הזמן במחסן הנתונים"}

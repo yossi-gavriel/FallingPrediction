@@ -1,0 +1,16 @@
+# SOFTWARE DEMONSTRATION on the deterministic SYNTHETIC fixture (data/fixtures/synthetic_v1). Results are NOT scientific evidence.
+# Ablation of ILLUSTRATIVE placeholder Meuhedet feature groups on the synthetic fixture.
+name: meuhedet_enhanced_ablation_example
+base_experiment_config: configs/experiments/fixture/logistic_unpenalized.yaml
+extension_specs:
+- configs/features/meuhedet_enhanced_example.yaml
+steps:
+- name: + cognition
+  groups:
+  - cognition
+- name: + mobility
+  groups:
+  - mobility
+- name: + nurse assessments
+  groups:
+  - nurse_assessment

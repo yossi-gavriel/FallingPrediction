@@ -1,0 +1,185 @@
+# Phase 2 engineered-feature catalogue for V_Falls_Prediction_Wide_1 (planning/EXPERIMENT_PLAN.md §3). Written from the DDL / S2T / data
+# dictionary only: no row-level data, no outcome values and no test-set result were used. Every operation is row-wise and parameter-free
+# (nothing is fitted here); fitted transforms (fold medians, FP forms, thermometer levels) belong to the design builder inside each fold.
+#
+# Rules that the loader enforces:
+#   - every input column exists in the contract and is readable for its purpose (value inputs: predictor role or a declared helper);
+#   - a feature's domain is one of `domains`; names are unique; kinds and ops are known;
+#   - quarantined columns (undocumented codes / meaning of "1") are never an input;
+#   - a feature reading an assessment-conditional source gets its form automatically (from the data dictionary source), so NULL there
+#     means "not assessed" and is encoded with the form's single "assessed" indicator - never as 0 (not measured != negative).
+# Provenance (SAFE / UNSAFE / UNRESOLVED) is NOT declared here: it is computed on the extract by the unchanged D-00 rules and a feature takes
+# the worst status of its inputs.
+#
+# kind:  binary | count | continuous | days | ordinal
+# op:    copy (one input) | flag_lt / flag_ge (threshold on one input; NULL stays NULL) | any_positive (NULL only if every input is NULL)
+#        | days_since (Index_Date - a record date, whole days; NULL = no record) | present (1 if the record date is present, else 0)
+# linear: log1p | none | thermometer | fall_recency_bands   (how the linear design encodes it; trees always get the raw value)
+# missing: not_assessed (form-conditional) | no_event (NULL = none recorded, a real state) | source_absent | unexpected (NULL is not
+#          declared; counted and reported) - decides which indicator covers NULL in the linear design
+# mapping_class: EFALLS_HIGH_CONFIDENCE | EFALLS_APPROXIMATE | MEUHEDET_NATIVE
+phase2_features:
+  name: meuhedet_phase2_features
+  version: 1.1.0
+  contract: configs/meuhedet/wide_v1_columns.yaml
+  data_dictionary: configs/meuhedet/wide_v1_data_dictionary.yaml
+  mapping: configs/meuhedet/wide_v1_efalls_mapping.yaml
+  status: PROPOSED - engineering choices by the ML lead; clinical meaning of NAME_ONLY columns still needs SME review
+
+domains:   # catalogue order; the SAFE waterfall order is declared separately below
+  COGNITION: {label: "cognition", label_he: "קוגניציה"}
+  MEDICATION: {label: "medications", label_he: "תרופות"}
+  FRAILTY: {label: "frailty (MEFI)", label_he: "שבריריות (MEFI)"}
+  FUNCTION_MOBILITY: {label: "function and mobility", label_he: "תפקוד וניידות"}
+  PRIOR_FALLS_DETAIL: {label: "prior falls (detail)", label_he: "נפילות קודמות (פירוט)"}
+  NURSE_FALL_RISK: {label: "nurse fall-risk assessment", label_he: "הערכת סיכון נפילה של אחות"}
+  UTILISATION: {label: "healthcare utilisation", label_he: "שימוש בשירותי בריאות"}
+  HOME_ENVIRONMENT: {label: "home environment", label_he: "סביבת הבית"}
+  SOCIAL_SUPPORT: {label: "social support", label_he: "תמיכה חברתית"}
+  ADDITIONAL_COMORBIDITY: {label: "additional comorbidity", label_he: "תחלואה נוספת"}
+
+waterfall:   # cumulative SAFE steps after SAFE_BASE (pre-declared management story, planning/EXPERIMENT_PLAN.md §5): BASELINE_15 -> SAFE_BASE ->
+             # + each domain below (SAFE features only) -> the last step adds every other domain = ALL_REVIEWED_SAFE (ALL_SAFE_LINEAR)
+             # -> ALL_SAFE_ELASTIC_NET -> ALL_SAFE_XGBOOST. A domain without a SAFE feature adds nothing (reported as such).
+  - COGNITION
+  - MEDICATION
+  - FRAILTY
+  - FUNCTION_MOBILITY
+  - UTILISATION
+  - HOME_ENVIRONMENT
+  - OTHER_NATIVE
+
+# assessment-conditional sources: NULL in their items = the form was not assessed. The "assessed" indicator is engineered from the
+# form's record date (present = assessed) and joins every feature set that contains an item of the form.
+forms:
+  NURSE_FALLS_RISK_999_52: {indicator: form_nurse_fallrisk_assessed, date: Falls_Risk_Assessment_Date}
+  NURSE_GET_UP_AND_GO_999_79: {indicator: form_nurse_gug_assessed, date: Get_Up_And_Go_Date}
+  NURSE_FUNCTION_999_175: {indicator: form_nurse_function_assessed, date: Mobility_Assessment_Date}
+  NURSE_COGNITION: {indicator: form_minicog_assessed, date: MiniCog_Date}
+  NURSE_HOME_SAFETY_999_139: {indicator: form_home_safety_assessed, date: Home_Safety_Assessment_Date}
+  MEFI: {indicator: form_mefi_assessed, date: MEFI_From_Date}
+
+# NEEDS_SME: never used as an input until the code values / the meaning of 1 are documented (Astra A-22)
+quarantine:
+  Siudi_Status: "nursing-care benefit status: code values unknown (Q-M-02)"
+  Customer_Risk_Code: "member risk code: code semantics unknown"
+  Malnutrition_Grade: "malnutrition grade: code semantics unknown"
+  Fall_Self_Report_Value: "self-reported fall answer code: code semantics unknown"
+  On_Medications_Nurse_Ind: "nurse medication item: which medications / threshold undocumented"
+  Orthostatic_BP_Measured_Ind: "whether 1 = measured or 1 = abnormal is undocumented"
+  Slow_Rising_Ind: "observation or advice given - undocumented"
+  Vitamin_D_Ind: "supplement taken or recommended - undocumented"
+
+# raw predictor-role columns intentionally represented by another feature (their disposition says so; not an oversight)
+represented_by:
+  Frailty_Not_Assessed_Ind: form_mefi_assessed
+  MEFI_Assessed_Ind: form_mefi_assessed
+  MEFI_Ever_Assessed_Ind: form_mefi_assessed
+  Prior_Fall_Since_Study_Start_Ind: "BASELINE_15 falls"
+  Gait_Disorder_Since_Study_Start_Ind: "BASELINE_15 mobility_problems"
+  Distinct_Active_Substance_Count: "BASELINE_15 polypharmacy_count_120d"
+
+features:
+  # ------------------------------------------------------------------ COGNITION
+  - {name: form_minicog_assessed, domain: COGNITION, op: present, inputs: [MiniCog_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "Mini-Cog test recorded before the index day"}
+  - {name: cog_minicog_score, domain: COGNITION, op: copy, inputs: [MiniCog_Score], kind: ordinal, levels: [0, 1, 2, 3, 4, 5], linear: thermometer, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "latest Mini-Cog score (0-5, lower = worse)"}
+  - {name: cog_minicog_abnormal, domain: COGNITION, op: flag_lt, threshold: 3, inputs: [MiniCog_Score], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: cognitive_impairment, text: "Mini-Cog score below 3 (usual positive screen)"}
+  - {name: cog_minicog_days_since, domain: COGNITION, op: days_since, inputs: [MiniCog_Date], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the Mini-Cog test"}
+  - {name: cog_nurse_impairment, domain: COGNITION, op: copy, inputs: [Cognitive_Impairment_Nurse_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: cognitive_impairment, text: "cognitive impairment recorded by the nurse"}
+  # ------------------------------------------------------------------ MEDICATION
+  - {name: med_polypharmacy_5plus, domain: MEDICATION, op: copy, inputs: [Polypharmacy_5Plus_Ind], kind: binary, linear: none, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "five or more active substances"}
+  - {name: med_polypharmacy_10plus, domain: MEDICATION, op: copy, inputs: [Polypharmacy_10Plus_Ind], kind: binary, linear: none, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "ten or more active substances"}
+  - {name: med_narcotic_count, domain: MEDICATION, op: copy, inputs: [Narcotic_Drug_Count], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "number of narcotic drugs (class definition not documented)"}
+  - {name: med_narcotic_any, domain: MEDICATION, op: flag_ge, threshold: 1, inputs: [Narcotic_Drug_Count], kind: binary, linear: none, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "any narcotic drug"}
+  - {name: med_not_collected_365d, domain: MEDICATION, op: copy, inputs: [Prescribed_Not_Collected_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "prescriptions not collected (365 days)"}
+  - {name: med_bought_outside_365d, domain: MEDICATION, op: copy, inputs: [Bought_Outside_Meuhedet_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "medications bought outside Meuhedet (365 days)"}
+  - {name: med_total_ddd, domain: MEDICATION, op: copy, inputs: [Total_DDD_Amount], kind: continuous, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "total defined daily doses"}
+  - {name: med_rx_written_365d, domain: MEDICATION, op: copy, inputs: [Rx_Written_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "prescriptions written (365 days)"}
+  - {name: med_rx_purchased_365d, domain: MEDICATION, op: copy, inputs: [Rx_Purchased_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "prescriptions purchased (365 days)"}
+  - {name: med_fill_ratio_365d, domain: MEDICATION, op: copy, inputs: [Prescription_Fill_Ratio_365D], kind: continuous, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "share of written prescriptions purchased (none written = own state)"}
+  - {name: med_nurse_polypharmacy, domain: MEDICATION, op: copy, inputs: [Polypharmacy_Nurse_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "polypharmacy recorded by the nurse"}
+  # ------------------------------------------------------------------ FRAILTY (MEFI)
+  - {name: form_mefi_assessed, domain: FRAILTY, op: present, inputs: [MEFI_From_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "MEFI frailty assessment recorded before the index day"}
+  - {name: frail_mefi_group, domain: FRAILTY, op: copy, inputs: [MEFI_Group_At_Index], kind: ordinal, levels: [1, 2, 3, 4], linear: thermometer, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "MEFI frailty group (1 low - 4 high)"}
+  - {name: frail_mefi_prev_group, domain: FRAILTY, op: copy, inputs: [MEFI_Prev_Group], kind: ordinal, levels: [1, 2, 3, 4], linear: thermometer, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "previous MEFI group (none = no previous assessment)"}
+  - {name: frail_mefi_worsened, domain: FRAILTY, op: copy, inputs: [MEFI_Worsened_Ind], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "MEFI group worse than the previous one"}
+  - {name: frail_mefi_days_since_assessment, domain: FRAILTY, op: copy, inputs: [Days_Since_MEFI_Assessment], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the last MEFI assessment"}
+  - {name: frail_mefi_days_in_group, domain: FRAILTY, op: copy, inputs: [Days_In_Current_MEFI_Group], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days in the current MEFI group"}
+  - {name: frail_mefi_assessment_count, domain: FRAILTY, op: copy, inputs: [MEFI_Assessment_Count], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "number of MEFI assessments"}
+  # ------------------------------------------------------------------ FUNCTION_MOBILITY
+  - {name: form_nurse_function_assessed, domain: FUNCTION_MOBILITY, op: present, inputs: [Mobility_Assessment_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "nurse function/mobility form (999.175) recorded before the index day"}
+  - {name: form_nurse_gug_assessed, domain: FUNCTION_MOBILITY, op: present, inputs: [Get_Up_And_Go_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "nurse get-up-and-go form (999.79) recorded before the index day"}
+  - {name: func_adl_worst, domain: FUNCTION_MOBILITY, op: copy, inputs: [ADL_Worst_Domain_Score], kind: ordinal, levels: [0, 1, 2, 3, 4], linear: thermometer, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: activity_limitation, text: "worst ADL domain score (0 independent - 4 hoist)"}
+  - {name: func_transfer_dependency, domain: FUNCTION_MOBILITY, op: copy, inputs: [Transfer_Dependency_Score], kind: ordinal, levels: [0, 1, 2, 3, 4], linear: thermometer, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "transfer dependency score (anchors not documented)"}
+  - {name: func_mobility_score, domain: FUNCTION_MOBILITY, op: copy, inputs: [Mobility_Score], kind: ordinal, levels: [0, 1, 2, 3], linear: thermometer, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "mobility score (0 walks alone - 3 confined)"}
+  - {name: func_confined_chair_bed, domain: FUNCTION_MOBILITY, op: copy, inputs: [Confined_To_Chair_Bed_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "confined to chair or bed"}
+  - {name: func_walking_aid, domain: FUNCTION_MOBILITY, op: copy, inputs: [Uses_Walking_Aid_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "uses a walking aid"}
+  - {name: func_balance_disorder, domain: FUNCTION_MOBILITY, op: copy, inputs: [Balance_Disorder_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "balance disorder observed"}
+  - {name: func_shuffling_gait, domain: FUNCTION_MOBILITY, op: copy, inputs: [Shuffling_Gait_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "shuffling gait observed"}
+  - {name: func_hesitant_gait, domain: FUNCTION_MOBILITY, op: copy, inputs: [Hesitant_Gait_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "hesitant gait observed"}
+  - {name: func_gait_any_abnormal, domain: FUNCTION_MOBILITY, op: any_positive, inputs: [Balance_Disorder_Ind, Shuffling_Gait_Ind, Hesitant_Gait_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "any balance/gait abnormality observed by the nurse"}
+  - {name: func_muscle_weakness, domain: FUNCTION_MOBILITY, op: copy, inputs: [Muscle_Weakness_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: weakness, text: "muscle weakness observed"}
+  - {name: func_gug_days_since, domain: FUNCTION_MOBILITY, op: days_since, inputs: [Get_Up_And_Go_Date], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the get-up-and-go assessment"}
+  - {name: func_function_form_days_since, domain: FUNCTION_MOBILITY, op: days_since, inputs: [Mobility_Assessment_Date], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the function/mobility assessment"}
+  # ------------------------------------------------------------------ PRIOR_FALLS_DETAIL
+  - {name: falls_count_30d, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Fall_Count_30D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "fall/fracture events in the 30 days before the index day"}
+  - {name: falls_count_90d, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Fall_Count_90D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "fall/fracture events in 90 days"}
+  - {name: falls_count_180d, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Fall_Count_180D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "fall/fracture events in 180 days"}
+  - {name: falls_count_365d, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Fall_Count_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "fall/fracture events in 365 days"}
+  - {name: falls_count_since_start, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Fall_Count_Since_Study_Start], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "fall/fracture events since 2022-01-01"}
+  - {name: falls_days_since_last, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Days_Since_Last_Fall], kind: days, linear: fall_recency_bands, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days since the last fall/fracture (bands; none = no prior fall)"}
+  - {name: falls_nurse_reported, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Prior_Falls_Nurse_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "prior falls recorded by the nurse"}
+  - {name: falls_required_treatment, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Fall_Required_Treatment_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "a reported fall required treatment"}
+  - {name: falls_at_home, domain: PRIOR_FALLS_DETAIL, op: copy, inputs: [Fall_Location_At_Home_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "a fall happened at home (home-safety form)"}
+  # ------------------------------------------------------------------ NURSE_FALL_RISK
+  - {name: form_nurse_fallrisk_assessed, domain: NURSE_FALL_RISK, op: present, inputs: [Falls_Risk_Assessment_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "nurse falls-risk form (999.52) recorded before the index day"}
+  - {name: nfr_fallrisk_score, domain: NURSE_FALL_RISK, op: copy, inputs: [Falls_Risk_Assessment_Score], kind: ordinal, levels: [1, 2, 3], linear: thermometer, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "nurse falls-risk score 1-3 (anchors not documented)"}
+  - {name: nfr_dizziness, domain: NURSE_FALL_RISK, op: copy, inputs: [Instability_Dizziness_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: dizziness, text: "instability / dizziness"}
+  - {name: nfr_fear_of_falling, domain: NURSE_FALL_RISK, op: copy, inputs: [Fear_Of_Falling_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "fear of falling"}
+  - {name: nfr_orthostatic_hypotension, domain: NURSE_FALL_RISK, op: copy, inputs: [Orthostatic_Hypotension_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: hypotension_or_syncope, text: "orthostatic hypotension recorded"}
+  - {name: nfr_vision_impairment, domain: NURSE_FALL_RISK, op: copy, inputs: [Vision_Impairment_Nurse_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: visual_impairment, text: "vision impairment recorded by the nurse"}
+  - {name: nfr_missing_sensory_aids, domain: NURSE_FALL_RISK, op: copy, inputs: [Missing_Sensory_Aids_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "missing sensory aids (glasses / hearing aid)"}
+  - {name: nfr_vision_score, domain: NURSE_FALL_RISK, op: copy, inputs: [Vision_Score], kind: ordinal, levels: [0, 1, 2], linear: thermometer, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: visual_impairment, text: "vision score (0 normal, 1 limited, 2 blindness)"}
+  - {name: nfr_hearing_score, domain: NURSE_FALL_RISK, op: copy, inputs: [Hearing_Score], kind: ordinal, levels: [0, 1, 2], linear: thermometer, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: hearing_impairment, text: "hearing score (0-2, anchors not documented)"}
+  - {name: nfr_assessment_count_365d, domain: NURSE_FALL_RISK, op: copy, inputs: [Assessment_Count_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "nurse assessments in 365 days"}
+  - {name: nfr_distinct_assessment_dates_365d, domain: NURSE_FALL_RISK, op: copy, inputs: [Distinct_Assessment_Dates_365D], kind: count, linear: log1p, missing: source_absent, mapping_class: MEUHEDET_NATIVE, text: "distinct nurse-assessment dates in 365 days"}
+  - {name: nfr_days_since_last_assessment, domain: NURSE_FALL_RISK, op: copy, inputs: [Days_Since_Last_Assessment], kind: days, linear: log1p, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days since the last nurse assessment (none = never assessed)"}
+  - {name: nfr_repeat_assessment, domain: NURSE_FALL_RISK, op: copy, inputs: [Has_Repeat_Assessment_Ind], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "more than one nurse assessment"}
+  - {name: nfr_assessment_not_performed, domain: NURSE_FALL_RISK, op: copy, inputs: [Assessment_Not_Performed_Ind], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "no nurse assessment performed (explicit indicator)"}
+  - {name: nfr_fallrisk_days_since, domain: NURSE_FALL_RISK, op: days_since, inputs: [Falls_Risk_Assessment_Date], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the falls-risk assessment"}
+  # ------------------------------------------------------------------ UTILISATION
+  - {name: util_visits_30d, domain: UTILISATION, op: copy, inputs: [Visit_Count_30D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "visits in 30 days"}
+  - {name: util_visits_90d, domain: UTILISATION, op: copy, inputs: [Visit_Count_90D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "visits in 90 days"}
+  - {name: util_visits_180d, domain: UTILISATION, op: copy, inputs: [Visit_Count_180D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "visits in 180 days"}
+  - {name: util_visits_365d, domain: UTILISATION, op: copy, inputs: [Visit_Count_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "visits in 365 days"}
+  - {name: util_days_since_last_visit, domain: UTILISATION, op: copy, inputs: [Days_Since_Last_Visit], kind: days, linear: log1p, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days since the last visit (none = no visit)"}
+  - {name: util_lab_referred_365d, domain: UTILISATION, op: copy, inputs: [Lab_Referred_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "laboratory referrals (365 days)"}
+  - {name: util_lab_performed_365d, domain: UTILISATION, op: copy, inputs: [Lab_Performed_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "laboratory tests performed (365 days)"}
+  - {name: util_lab_performed_ratio, domain: UTILISATION, op: copy, inputs: [Lab_Performed_Ratio_365D], kind: continuous, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "share of referred tests performed (none referred = own state)"}
+  - {name: util_external_care_visible_365d, domain: UTILISATION, op: copy, inputs: [External_Care_Count_365D_Visible], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "external-care records already billed at the index date"}
+  - {name: util_hmo_seniority_months, domain: UTILISATION, op: copy, inputs: [HMO_Seniority_Months], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "months of HMO membership"}
+  # ------------------------------------------------------------------ HOME_ENVIRONMENT
+  - {name: form_home_safety_assessed, domain: HOME_ENVIRONMENT, op: present, inputs: [Home_Safety_Assessment_Date], kind: binary, linear: none, missing: no_event, mapping_class: MEUHEDET_NATIVE, form_indicator: true, text: "home-safety questionnaire (999.139) recorded before the index day"}
+  - {name: home_unsafe_environment, domain: HOME_ENVIRONMENT, op: copy, inputs: [Unsafe_Environment_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: environment_problems, text: "unsafe environment recorded"}
+  - {name: home_unsuitable_footwear, domain: HOME_ENVIRONMENT, op: copy, inputs: [Unsuitable_Footwear_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "unsuitable footwear recorded"}
+  - {name: home_unsuitable_bed_chair, domain: HOME_ENVIRONMENT, op: copy, inputs: [Unsuitable_Bed_Chair_Height_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "unsuitable bed/chair height recorded"}
+  - {name: home_safety_risk_count, domain: HOME_ENVIRONMENT, op: copy, inputs: [Home_Safety_Risk_Count], kind: count, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "number of home-safety risks recorded"}
+  - {name: home_safety_days_since, domain: HOME_ENVIRONMENT, op: days_since, inputs: [Home_Safety_Assessment_Date], kind: days, linear: log1p, missing: not_assessed, mapping_class: MEUHEDET_NATIVE, text: "days since the home-safety questionnaire"}
+  # ------------------------------------------------------------------ SOCIAL_SUPPORT
+  - {name: soc_no_primary_caregiver, domain: SOCIAL_SUPPORT, op: copy, inputs: [No_Primary_Caregiver_Ind], kind: binary, linear: none, missing: not_assessed, mapping_class: EFALLS_APPROXIMATE, efalls_concept: social_vulnerability, text: "no primary caregiver recorded"}
+  - {name: soc_income_support, domain: SOCIAL_SUPPORT, op: copy, inputs: [Income_Support], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "income-support benefit (socio-economic)"}
+  # ------------------------------------------------------------------ ADDITIONAL_COMORBIDITY
+  - {name: com_dx_count_180d, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Diagnosis_Count_180D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "diagnosis records (180 days)"}
+  - {name: com_dx_count_365d, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Diagnosis_Count_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "diagnosis records (365 days)"}
+  - {name: com_distinct_dx_365d, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Distinct_Diagnosis_Codes_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "distinct diagnosis codes (365 days)"}
+  - {name: com_chronic_dx_365d, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Chronic_Diagnosis_Count_365D], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "chronic diagnoses (365 days)"}
+  - {name: com_days_since_last_dx, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Days_Since_Last_Diagnosis], kind: days, linear: log1p, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days since the last diagnosis (none = no diagnosis)"}
+  - {name: com_cci_group, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [CCI_Group], kind: continuous, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "Charlson comorbidity group (grouping not documented)"}
+  - {name: com_registry_heart, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Registry_Heart_Disease_Ind], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "heart-disease registry (content not documented, Q-M-01)"}
+  - {name: com_registry_kidneys, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Registry_Kidneys_Ind], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "kidney-disease registry"}
+  - {name: com_registry_transplant, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Registry_Transplant_Ind], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "transplant registry"}
+  - {name: com_registry_stoma, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Registry_Stoma_Ind], kind: binary, linear: none, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "stoma registry"}
+  - {name: com_active_registry_count, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Active_Registry_Count], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "active registries at the index date"}
+  - {name: com_distinct_registry_types, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Distinct_Registry_Type_Count], kind: count, linear: log1p, missing: unexpected, mapping_class: MEUHEDET_NATIVE, text: "distinct registry types"}
+  - {name: com_longest_registry_days, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Longest_Registry_Duration_Days], kind: days, linear: log1p, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days in the longest active registry (none = no registry)"}
+  - {name: com_days_since_first_registry, domain: ADDITIONAL_COMORBIDITY, op: copy, inputs: [Days_Since_First_Registry], kind: days, linear: log1p, missing: no_event, mapping_class: MEUHEDET_NATIVE, text: "days since the first registry entry (none = no registry)"}

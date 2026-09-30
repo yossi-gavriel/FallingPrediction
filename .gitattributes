@@ -1,0 +1,10 @@
+# Line endings if this folder is later put under git (for example on Windows with core.autocrlf=true):
+# text files stay LF, as shipped (PACKAGE_MANIFEST.txt and offline_packages\OFFLINE_MANIFEST.json record byte-level
+# SHA-256 hashes, for example of requirements.lock); CMD scripts stay CRLF; binary files are never converted.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.parquet binary
+*.whl binary
+*.png binary
+*.zip binary
