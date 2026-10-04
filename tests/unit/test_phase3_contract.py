@@ -173,9 +173,24 @@ def test_phase3_frozen_configuration_is_current(L: dict[str, Any]) -> None:
     from falls_ml.phase3.final_config import FROZEN_PATH, build_final_config, sha256_of, sha_line, to_bytes
 
     fc = build_final_config(L["cfg"], L["rules"], L["cat"], contract=L["contract"], dictionary=L["dictionary"], mapping=L["mapping"], d00=L["d00"], tc=L["tc"])
+    # falls_ml 0.10.0 (Phase 4) carries the Phase 3 freeze of the 0.9.0 package unchanged: every scientific value must still match it; only the
+    # package version differs (Phase 3 runs only from its own 0.9.0 installation - see test_phase3_production_run_is_refused_in_this_package)
+    assert fc["falls_ml_version"] != "0.9.0"
+    fc["falls_ml_version"] = "0.9.0"
     assert (ROOT / FROZEN_PATH).read_bytes() == to_bytes(fc), "run tools/freeze_phase3_config.py after a reviewed change"
     assert (ROOT / FROZEN_PATH).with_suffix(".sha256").read_text(encoding="utf-8") == sha_line(sha256_of(fc))
     assert fc["outcome"]["prediction_time"] == "END_OF_INDEX_DAY" and "UNRESOLVED" not in fc["standards"]["PRIMARY_FULL"]
+
+
+def test_phase3_production_run_is_refused_in_this_package(L: dict[str, Any]) -> None:
+    """Isolation (Phase 4 package, falls_ml 0.10.0): the delivered Phase 3 freeze belongs to falls_ml 0.9.0, so this package can never start or
+    resume a production Phase 3 run - Phase 3 stays on its own installation."""
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase3.runner import effective_final_config
+
+    with pytest.raises(Phase2Stop) as e:
+        effective_final_config(L, allow_unfrozen=False)
+    assert e.value.gate == "PHASE3_FROZEN_CONFIG_MISMATCH"
 
 
 def test_phase2_files_are_byte_identical_to_the_running_0_8_1_package() -> None:

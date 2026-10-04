@@ -503,6 +503,91 @@ def _cmd_meuhedet_phase3(a: argparse.Namespace) -> int:
     return 0
 
 
+def _phase4_stop(exc: Exception) -> int:
+    from falls_ml.phase2.state import Phase2Stop
+
+    if isinstance(exc, Phase2Stop):
+        print(f"STOPPED [{exc.gate}] - {exc.message}", file=sys.stderr)
+        for d in exc.details:
+            print(f"  - {d}", file=sys.stderr)
+    else:
+        print(f"STOPPED - {type(exc).__name__}: " + str(exc).replace("\n", "\n  "), file=sys.stderr)
+    print("  The outcomes stay sealed unless meuhedet-phase4-evaluate verified the frozen predictions. Send back only <out>\\share.", file=sys.stderr)
+    return 2
+
+
+def _cmd_meuhedet_phase4_preflight(a: argparse.Namespace) -> int:
+    from falls_ml.phase4.preflight import run_preflight
+
+    return run_preflight(a.input_2026, a.phase3_out, out_dir=a.out, phase3_config=a.phase3_config, config_path=a.config,
+                         allow_unfrozen_phase3=a.allow_unfrozen_phase3, expected_definition_version=a.expected_definition_version,
+                         allow_synced_folder=a.allow_synced_folder)
+
+
+def _cmd_meuhedet_phase4_score(a: argparse.Namespace) -> int:
+    from falls_ml.errors import FallsMLError
+    from falls_ml.phase4.score import run_score
+
+    try:
+        res = run_score(a.input_2026, a.input_2025, a.phase3_out, out_dir=a.out, phase3_config=a.phase3_config, config_path=a.config,
+                        allow_unfrozen_phase3=a.allow_unfrozen_phase3, expected_definition_version=a.expected_definition_version)
+    except FallsMLError as exc:
+        return _phase4_stop(exc)
+    print(json.dumps(res, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _cmd_meuhedet_phase4_evaluate(a: argparse.Namespace) -> int:
+    from falls_ml.errors import FallsMLError
+    from falls_ml.phase4.evaluate import run_evaluate
+
+    try:
+        res = run_evaluate(a.input_2026, out_dir=a.out, config_path=a.config, phase3_config=a.phase3_config, accept_code_change=a.accept_code_change)
+    except FallsMLError as exc:
+        return _phase4_stop(exc)
+    print(json.dumps({**res, "SEND_BACK_ONLY": str(Path(a.out) / "share")}, indent=2, ensure_ascii=False))
+    return 0
+
+
+def _cmd_meuhedet_phase4_status(a: argparse.Namespace) -> int:
+    from falls_ml.phase4.status import phase4_status
+
+    return phase4_status(a.out)
+
+
+def _phase4_common(p: argparse.ArgumentParser, *, score: bool = False) -> None:
+    p.add_argument("--input-2026", required=True, help="the 2026 extract (Index_Date 2026-01-01; .csv with NULL literals or .parquet)")
+    p.add_argument("--out", required=True, help="NEW local folder for Phase 4 (separate from every Phase 2 / Phase 3 folder; not OneDrive)")
+    p.add_argument("--config", default="configs/meuhedet/phase4.yaml", help="Phase 4 settings (pre-declared; hashed into every manifest)")
+    p.add_argument("--phase3-config", default="configs/meuhedet/phase3.yaml", help="the frozen Phase 3 settings (verified against the Phase 3 run)")
+    if score:
+        p.add_argument("--phase3-out", required=True, help="the FINISHED Phase 3 output folder (read-only: every file verified, nothing written)")
+        p.add_argument("--allow-unfrozen-phase3", action="store_true", help="tests only: accept a Phase 3 run without the frozen production configuration")
+        p.add_argument("--expected-definition-version", help="the Definition_Version value the 2026 V21 extract must carry (mismatch = STOP)")
+
+
+def _add_phase4_parsers(sub: Any) -> None:
+    p = sub.add_parser("meuhedet-phase4-preflight", help="Phase 4 (temporal validation 2026): read-only predictor / schema / timing audit of the 2026 "
+                                                         "extract against the frozen Phase 3 models; outcomes are never loaded. Last line: SAFE TO SCORE BLIND "
+                                                         "or STOP - TEMPORAL VALIDATION NOT DEFENSIBLE")
+    _phase4_common(p, score=True)
+    p.add_argument("--allow-synced-folder", action="store_true", help="allow --out inside OneDrive / a synced folder (not recommended)")
+    p.set_defaults(func=_cmd_meuhedet_phase4_preflight)
+    p = sub.add_parser("meuhedet-phase4-score", help="Phase 4: BLIND scoring with the frozen 2025 models; predictions, models, feature list and input "
+                                                     "schema are hashed and frozen before any outcome is opened (write-once)")
+    _phase4_common(p, score=True)
+    p.add_argument("--input-2025", required=True, help="the 2025 extract Phase 3 used (member ids + 2025 eligibility only, for the patient overlap)")
+    p.set_defaults(func=_cmd_meuhedet_phase4_score)
+    p = sub.add_parser("meuhedet-phase4-evaluate", help="Phase 4: verifies every frozen hash, then opens the 2026 outcomes, checks the 2026 outcome "
+                                                        "contract (stops before any metric if it fails) and reports the temporal validation")
+    _phase4_common(p)
+    p.add_argument("--accept-code-change", help="evaluate although the falls_ml code differs from the scoring code (reason recorded)")
+    p.set_defaults(func=_cmd_meuhedet_phase4_evaluate)
+    p = sub.add_parser("meuhedet-phase4-status", help="READ-ONLY progress of a Phase 4 folder")
+    p.add_argument("--out", required=True, help="the Phase 4 output folder")
+    p.set_defaults(func=_cmd_meuhedet_phase4_status)
+
+
 def _cmd_meuhedet_eda(a: argparse.Namespace) -> int:
     """Full, aggregate EDA of the wide extract: data dictionary, profiles, missingness, data quality, timing / leakage audit, cohort funnel,
     split diagnostic and TRAIN-only supervised EDA -> REAL_DATA_EDA_REPORT.html, REAL_DATA_EDA_SUMMARY.md, DATA_QUALITY_REPORT.md, eda/*.csv."""
@@ -850,6 +935,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("meuhedet-phase3-status", help="READ-ONLY progress of a Phase 3 run; never writes, moves or locks anything")
     p.add_argument("--out", required=True, help="the Phase 3 output folder")
     p.set_defaults(func=_cmd_meuhedet_phase3_status)
+
+    _add_phase4_parsers(sub)
 
     p = sub.add_parser("freeze-baseline", help="freeze a completed run as a named immutable baseline (e.g. EFALLS_BASELINE_MEUHEDET_V1)")
     p.add_argument("--run", required=True, help="completed run directory (RUN_COMPLETE.json present)")

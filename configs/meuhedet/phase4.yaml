@@ -1,0 +1,65 @@
+# Phase 4 - TEMPORAL VALIDATION of the frozen Phase 3 (2025) models on the 2026 snapshot (Index_Date 2026-01-01).
+# Every rule below is declared BEFORE any 2026 value is read; nothing here may be changed after the 2026 extract was examined.
+# No 2026 outcome is used for training, tuning, feature selection, thresholds, calibration, model choice, imputation or schema adaptation.
+phase4:
+  version: 1
+  index_date: "2026-01-01"
+  development_index_date: "2025-01-01"
+  seed: 20261101
+
+  # ------------------------------------------------------------------ the frozen models (declared before the 2026 data existed)
+  models:
+    primary: "LASSO:P3_BASE"
+    secondary: ["LASSO:P3_VERIFIED_ALL", "LASSO:P3_ALL_RECOVERED"]
+  phase3_stage_lasso: "07_lasso"            # Phase 3 stage holding the committed final fits (items LASSO__<set>__final: model.pkl)
+
+  # ------------------------------------------------------------------ sealing (never loaded before meuhedet-phase4-evaluate verified the frozen hashes)
+  sealed_columns: [Fall_Next_30D_Ind, Next_Fall_Date_30D, Days_To_Next_Fall_30D, Next_Fall_Event_ID_30D, Next_Fall_Confidence_30D, Label_Reason_30D,
+                   Fall_Next_180D_Ind, Next_Fall_Date_180D, Days_To_Next_Fall_180D, Next_Fall_Event_ID_180D, Next_Fall_Confidence_180D, Label_Reason_180D,
+                   Fall_Next_180D_HighConf_Ind]
+  sealed_contract_roles: [LABEL, FORBIDDEN_LEAKAGE]        # + every contract column with timing post_index (follow-up, death, censoring)
+  # a column that is NOT in the 2025 contract is sealed when its name matches one of these (case-insensitive) patterns: it is catalogued by name only
+  sealed_name_patterns: ["next", "future", "label", "follow_?up", "censor", "outcome", "days_?to", "after_?index", "post_?index", "death", "deceas",
+                         "died", "target", "event_?id", "leakage", "_hit", "within_\\d+d", "_\\d+d_after", "end_date"]
+
+  # ------------------------------------------------------------------ preflight (predictors only; pre-declared stop / warn rules)
+  preflight:
+    min_eligible_rows: 1000
+    stop_if_duplicate_ids: true                       # Customer_Full_ID or Snapshot_Key duplicated among the eligible index-date rows
+    max_unreadable_share_frozen_input: 0.01           # wrong-type / not-allowed cells in an input of a frozen predictor: > 1% of eligible rows -> STOP
+    unit_change_ratio: 10.0                           # 2026 vs 2025 median (or p95 for counts) ratio beyond x10 / /10 -> STOP (semantic / unit change)
+    min_observed_share_2025_for_absence_stop: 0.01    # observed in >= 1% of 2025 TRAIN rows but in NO 2026 row -> STOP (semantically absent)
+    warn_missingness_change_pp: 20.0
+    warn_psi: 0.25
+    psi_bins: 10
+    min_cell: 10
+
+  # ------------------------------------------------------------------ the 2026 outcome contract (checked by meuhedet-phase4-evaluate before any metric)
+  outcome_contract:
+    label_column: Fall_Next_180D_Ind
+    event_date_column: Next_Fall_Date_180D
+    days_to_event_column: Days_To_Next_Fall_180D
+    window_end_column: Label_End_180D
+    reason_column: Label_Reason_180D
+    followup_end_column: Followup_End_Date
+    window_days: 180
+    max_positive_after_followup_share: 0.005          # positives with an event dated after Followup_End_Date (non-sentinel): > 0.5% of positives -> STOP
+    max_label_date_inconsistency_share: 0.001         # positives without an event date / negatives with one: > 0.1% -> STOP
+    min_usable_events: 100                            # fewer usable 2026 events -> STOP (no defensible performance estimate)
+    warn_usable_share_below: 0.90
+    episode_audit:                                    # descriptive investigation (never a stop): one injury episode counted as history AND outcome
+      early_days: 14
+      recent_fall_days: 30
+
+  # ------------------------------------------------------------------ evaluation (identical frozen rules for every model; nothing chosen on 2026)
+  metrics:
+    capacities: [0.01, 0.05, 0.10]                    # top 1% / 5% / 10% of the scored 2026 population (the Phase 3 capacity rule)
+    principal_capacity: 0.10
+    frozen_cutoff_capacities: [0.01, 0.05, 0.10]      # absolute 2025 risk cut-offs (frozen before scoring): secondary operational view
+    calibration_groups: 10
+    bootstrap_n: 2000
+    subgroup_min_events: 50                           # pre-declared overlap subgroups are reported only with >= 50 events and >= 50 non-events
+    subgroup_min_nonevents: 50
+  comparison:
+    rule: "A 2025-vs-2026 difference is called CI-SUPPORTED only when the two 95% intervals do not overlap; otherwise WITHIN UNCERTAINTY. The
+           2025 and 2026 cohorts share patients, so this rule is conservative and no formal test of the difference is claimed."
