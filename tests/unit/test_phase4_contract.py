@@ -178,7 +178,7 @@ def test_metric_intervals_are_reproducible_and_cover_the_point() -> None:
 
 
 def test_cli_offers_the_four_separate_phase4_commands() -> None:
-    out = subprocess.run([sys.executable, "-m", "falls_ml", "--help"], capture_output=True, text=True, cwd=ROOT,
+    out = subprocess.run([sys.executable, "-m", "falls_ml", "--help"], capture_output=True, text=True, encoding="utf-8", cwd=ROOT,
                          env={**__import__("os").environ, "PYTHONPATH": str(ROOT / "src")}).stdout
     for c in ("meuhedet-phase4-preflight", "meuhedet-phase4-score", "meuhedet-phase4-evaluate", "meuhedet-phase4-status"):
         assert c in out
