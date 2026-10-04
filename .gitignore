@@ -19,3 +19,4 @@ offline_packages/
 .venv
 .p3work*
 .p4work*
+.p5work*

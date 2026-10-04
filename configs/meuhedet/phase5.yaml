@@ -1,0 +1,152 @@
+# Phase 5 - 2026 REDEVELOPMENT + INCREMENTAL VALUE OF THE NEW V21 PREDICTORS (Index_Date 2026-01-01).
+# INTERNAL NESTED CROSS-VALIDATION ON THE 2026 SNAPSHOT: development data, never called external validation. Phase 4 (temporal validation of the
+# frozen Phase 3 models) stays frozen and unused. Every rule below is declared BEFORE any 2026 outcome is analysed; the run records this file's sha256
+# in its plan and refuses to resume with a different one.
+phase5:
+  version: 1
+  index_date: "2026-01-01"
+  expected_definition_version: "V21"
+  seed: 20261201
+  design_label: "INTERNAL NESTED CROSS-VALIDATION ON 2026 SNAPSHOT"
+  phase3_config: configs/meuhedet/phase3.yaml          # the Phase 3 feature universe (catalogue, eFalls mapping, time contract, recovery rules) - read only
+  v21_catalogue: configs/meuhedet/phase5_v21_features.yaml
+
+  # ------------------------------------------------------------------ columns that can NEVER enter X (outcome / future / label / follow-up)
+  x_sealing:
+    columns: [Fall_Next_30D_Ind, Next_Fall_Date_30D, Days_To_Next_Fall_30D, Next_Fall_Event_ID_30D, Next_Fall_Confidence_30D, Label_Reason_30D,
+              Fall_Next_180D_Ind, Next_Fall_Date_180D, Days_To_Next_Fall_180D, Next_Fall_Event_ID_180D, Next_Fall_Confidence_180D, Label_Reason_180D,
+              Fall_Next_180D_HighConf_Ind, Fall_Next_30D_HighConf_Ind, Label_End_180D, Label_End_30D, Followup_End_Date, Followup_End_Reason,
+              Is_Censored_180D, Is_Censored_30D, Has_Full_Followup_180D, Has_Full_Followup_30D, Has_Full_180D_Label, Has_Full_30D_Label]
+    contract_roles: [LABEL, FORBIDDEN_LEAKAGE]          # + every 2025-contract column with timing post_index (follow-up, death, censoring)
+    # a column that is NOT in the 2025 contract is sealed when its name matches one of these (case-insensitive) patterns
+    name_patterns: ["next", "future", "label", "follow_?up", "censor", "outcome", "days_?to", "after_?index", "post_?index", "death", "deceas",
+                    "died", "target", "event_?id", "leakage", "_hit", "within_\\d+d", "_\\d+d_after", "end_date", "discharge", "settle", "invoice_?lag",
+                    "billing_?lag", "hidden_?by"]
+
+  # ------------------------------------------------------------------ cohort and the 2026 outcome contract (audited before ANY model is fitted)
+  cohort:
+    min_eligible_rows: 1000
+    stop_if_duplicate_ids: true                       # Customer_Full_ID duplicated among the eligible index-date rows -> STOP (one snapshot per patient)
+  outcome_contract:
+    label_column: Fall_Next_180D_Ind
+    event_date_column: Next_Fall_Date_180D
+    days_to_event_column: Days_To_Next_Fall_180D
+    window_end_column: Label_End_180D
+    reason_column: Label_Reason_180D
+    followup_end_column: Followup_End_Date
+    window_days: 180
+    max_positive_after_followup_share: 0.005          # positives with an event after Followup_End_Date: > 0.5% of positives -> STOP
+    max_label_date_inconsistency_share: 0.001         # positives without an event date / negatives with one: > 0.1% -> STOP
+    min_usable_events: 100                            # fewer usable 2026 events -> STOP before training
+    warn_usable_share_below: 0.90
+    episode_audit: {early_days: 14, recent_fall_days: 30}
+
+  # ------------------------------------------------------------------ feature eligibility (label-free except the leakage screen)
+  eligibility:
+    min_known_observed_rows: 100                      # = Phase 3 eligibility.min_observed_train_rows (KNOWN, non-NULL rows of the usable cohort)
+    max_unreadable_share: 0.01                        # wrong-type / not-allowed cells: > 1% of the eligible rows -> INELIGIBLE_DATA (old) / _SEMANTICS (new)
+    leakage_univariate_auroc: 0.80                    # = Phase 3 gates.single_feature_univariate_auroc: a single predictor this strong is INELIGIBLE_LEAKAGE
+                                                      #   (exclusion only - it can never make a model look better; reported for DWH review)
+    primary_classes: [SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED]   # = Phase 3 PRIMARY_FULL (the same pre-declared rule)
+    verified_only_classes: [SAFE_VERIFIED]            # VERIFIED_ONLY sensitivity: row-verified, no post-index cell at all (stricter than Phase 3)
+    low_availability_risk_levels: [LOW, MEDIUM]       # = Phase 3 time contract low_risk_levels (HIGH / UNKNOWN leave the LOW_AVAILABILITY_RISK set)
+    medication_purchase_date_columns: [Last_Purchased_Date, Last_Purchase_Date]   # known concern 1-2: any date after Index_Date -> new MEDICATION
+                                                                                 # features INELIGIBLE_TIMING
+
+  # ------------------------------------------------------------------ the experiment
+  cv: {outer_folds: 5, inner_folds: 5}                # one fixed stratified assignment shared by every model and feature set
+  families: [LASSO, ENET, XGB]                        # pre-declared; no other algorithm is added after results are seen
+  primary_sets: [OLD, OLD_PLUS_NEW_SAFE]
+  sensitivity_sets: [OLD_PLUS_NEW_VERIFIED_ONLY, OLD_PLUS_NEW_LOW_AVAILABILITY_RISK]
+  domains: [NEW_DIAGNOSIS, NEW_REGISTRY, NEW_FRAILTY_MEFI, NEW_FUNCTION_MOBILITY, NEW_COGNITION, NEW_MEDICATION_SAFE, NEW_UTILISATION_SAFE]
+  ablations:                                          # removed from OLD_PLUS_NEW_SAFE (old and new members alike)
+    NO_FALL_RECENCY: {features: [falls_days_since_last, falls_count_30d, falls_count_90d], domains: []}
+    NO_MEFI: {features: [], domains: [FRAILTY, NEW_FRAILTY_MEFI]}
+    NO_DIAGNOSIS_NEW: {features: [], domains: [NEW_DIAGNOSIS]}
+    NO_REGISTRY_NEW: {features: [], domains: [NEW_REGISTRY]}
+    NO_UTILISATION_NEW: {features: [], domains: [NEW_UTILISATION_SAFE]}
+    NO_MEDICATION_NEW: {features: [], domains: [NEW_MEDICATION_SAFE]}
+    NO_ASSESSMENT_PROCESS: {features: [form_minicog_assessed, form_mefi_assessed, form_nurse_function_assessed, form_nurse_gug_assessed,
+                                       form_nurse_fallrisk_assessed, form_home_safety_assessed, cog_minicog_days_since, func_gug_days_since,
+                                       func_function_form_days_since, nfr_fallrisk_days_since, home_safety_days_since, nfr_assessment_count_365d,
+                                       nfr_distinct_assessment_dates_365d, nfr_days_since_last_assessment, nfr_repeat_assessment,
+                                       nfr_assessment_not_performed, frail_mefi_days_since_assessment, frail_mefi_assessment_count], domains: [], process_flag: true}
+  # domain additions / ablations re-tune linear models in full; XGBoost re-uses the per-fold hyper-parameters of its reference model (OLD for domains,
+  # OLD_PLUS_NEW_SAFE for ablations) with its own inner early stopping and inner thresholds: only the feature set changes
+  derived_tuning: {LASSO: full, ENET: full, XGB: reuse_reference}
+
+  operating:
+    primary_sensitivity: 0.70
+    targets: [0.50, 0.60, 0.70, 0.75, 0.80, 0.90]
+    tie_resolution: 0.0001                            # objective values equal at 0.01 percentage points are tied -> next tie-breaker
+  # tuning objective (inner OOF only): the HIGHEST threshold reaching >= 70% sensitivity, then minimise the share flagged; ties -> lower false-alert
+  # share -> lower share flagged -> higher AP -> lower Brier -> simpler model
+
+  modes:
+    quick:
+      lasso: {n_lambda: 10}
+      enet: {n_lambda: 8, l1_ratios: [0.2, 0.8]}
+      xgb: {n_trials: 4, n_startup_trials: 3}
+      bootstrap_n: 200
+      stability_linear: 5
+      stability_xgb: 3
+      permutation_repeats: 2
+      shap_rows: 2000
+    overnight:                                        # sized on a 48k-patient synthetic run (about 4-8 h on a workstation; see --estimate)
+      lasso: {n_lambda: 60}
+      enet: {n_lambda: 40, l1_ratios: [0.1, 0.25, 0.5, 0.75, 0.9]}
+      xgb: {n_trials: 100, n_startup_trials: 20}
+      bootstrap_n: 2000
+      stability_linear: 100
+      stability_xgb: 30
+      permutation_repeats: 10
+      shap_rows: 20000
+
+  # the Phase 1-3 proximal-Newton / coordinate-descent solver (falls_ml.phase2.enet: glmnet penalty on standardised columns, unpenalised
+  # intercept, warm-started path); the logarithmic lambda grid runs from lambda_max of the outer-training rows down to lambda_min_ratio x lambda_max
+  lasso: {lambda_min_ratio: 1.0e-3, tol: 1.0e-7, max_iter: 10000}
+  enet: {lambda_min_ratio: 1.0e-3, tol: 1.0e-7, max_iter: 10000}
+  xgb:
+    fixed: {objective: "binary:logistic", eval_metric: logloss, tree_method: hist, max_bin: 256, scale_pos_weight: 1.0}
+    # scale_pos_weight stays 1: re-weighting the classes distorts the predicted probabilities (Brier, calibration) and the operating point is set by
+    # the inner-OOF sensitivity threshold anyway; it is therefore not searched
+    n_estimators_max: 2000                            # n_estimators is chosen by early stopping (inner fit / inner early-stopping split only)
+    early_stopping_rounds: 50
+    early_stopping_fraction: 0.15
+    space:
+      max_depth: {type: int, low: 2, high: 8}
+      learning_rate: {type: float, low: 0.01, high: 0.3, log: true}
+      min_child_weight: {type: float, low: 1.0, high: 100.0, log: true}
+      subsample: {type: float, low: 0.5, high: 1.0}
+      colsample_bytree: {type: float, low: 0.4, high: 1.0}
+      reg_alpha: {type: float, low: 1.0e-3, high: 10.0, log: true}
+      reg_lambda: {type: float, low: 1.0e-2, high: 100.0, log: true}
+      gamma: {type: float, low: 0.0, high: 5.0}
+
+  # ------------------------------------------------------------------ the management decision rule (pre-declared; no minimum delta invented)
+  decision:
+    calibration_slope_range: [0.80, 1.25]             # = Phase 3 selection.calibration_slope_range
+    max_abs_calibration_intercept: 0.20               # = Phase 3 selection.max_abs_citl
+    rule: >-
+      NEW_FEATURES_OPERATIONALLY_USEFUL for a model family only if (1) OLD_PLUS_NEW_SAFE has a lower false-alert share than OLD at the nested,
+      inner-selected 70%-sensitivity operating rule AND at the descriptive pooled-OOF 70% point; (2) the paired patient-bootstrap 95% interval of the
+      difference in false-alert share lies entirely below 0 AND the false-alert share is lower in EVERY outer fold (the bootstrap holds the fitted
+      models fixed, so it cannot see training-to-training variation; fold consistency guards against a gain that is model noise); (3) the improvement keeps its direction in OLD_PLUS_NEW_VERIFIED_ONLY and
+      OLD_PLUS_NEW_LOW_AVAILABILITY_RISK (not dependent on attested / bounded / high-availability-risk predictors); (4) calibration does not
+      materially degrade: OLD_PLUS_NEW_SAFE's calibration slope and intercept lie in the Phase 3 ranges or are no further from ideal than OLD's,
+      and the Brier-difference interval is not entirely above 0. Point improvement without (2), or (2) without (3)/(4): PROMISING BUT NOT ROBUST.
+      Otherwise NO ROBUST OPERATIONAL GAIN. Overall answer: YES when at least 2 of the 3 families are USEFUL; NO when no family is USEFUL or
+      PROMISING; otherwise UNCERTAIN.
+
+  subgroups:
+    min_events: 50                                     # AUROC / AP / rates only with >= 50 events and >= 50 non-events (descriptive)
+    min_nonevents: 50
+    mefi_min_coverage: 0.20                            # MEFI-group subgroups only when >= 20% of the cohort has a group
+  privacy:
+    min_cell: 10
+    threshold_grid_step: 0.005                         # share THRESHOLD_TRADEOFF.csv on a 0.5%-of-population grid (never one row per patient)
+
+  resources:
+    default_core_share: 0.6                            # default --jobs = 60% of the logical cores (never all), at least 1
+    max_default_jobs: 12
+    heartbeat_seconds: 30

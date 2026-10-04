@@ -1,0 +1,68 @@
+# Phase 5 - the PRE-DECLARED catalogue of candidate new V21 (2026) predictors.
+#
+# Written from the Phase 5 brief only (column names and expected meaning) - no 2026 value, no outcome and no result was used. A column of the
+# 2026 extract becomes a NEW candidate only when (a) it is NOT in the 2025 contract (configs/meuhedet/wide_v1_columns.yaml) and is not an input of
+# the Phase 3 feature universe, and (b) it matches an entry below (exact name, an alias, or the same name tokens ignoring case, "_", "Ind", "Dx",
+# "Flag"; ambiguous matches are refused). Every other new column is catalogued as INELIGIBLE_SEMANTICS ("semantics not verified") and listed in
+# preflight/V21_UNDECLARED_COLUMNS.csv (names and aggregate profile only) for review; it is never a predictor in this run.
+# Brief entries that turn out to be 2025 columns (e.g. the MEFI fields, already in the Phase 3 catalogue) are OLD, not new: they are reported as such.
+#
+# kind:     binary | count | days | ordinal | categorical | continuous
+# timing:   record_date  - a row-level record-date column (first found of record_date + the automatic candidates <stem>_Date, <stem>_Dx_Date,
+#                          Last_<stem>_Date, First_<stem>_Date): dated after Index_Date -> UNKNOWN cell (Phase 3 gates G2 / G3 decide)
+#           days_value   - the value itself counts days back from Index_Date: a negative value is a post-index record -> UNKNOWN cell
+#           attested     - no row-level date (registry status at Index_Date, ...): eligible only on the DWH attestation re-checked on 2026 (V3)
+#           forbidden    - a declared timing concern that cannot be checked: INELIGIBLE_TIMING
+#           (record_date without any date column found falls back to attested)
+# availability: the information-availability risk (Phase 3 time contract levels LOW / MEDIUM / HIGH / UNKNOWN); HIGH / UNKNOWN leave the
+#           LOW_AVAILABILITY_RISK sensitivity set
+# missing:  no_event (NULL = nothing recorded, a real state) | not_assessed | unexpected
+phase5_v21_features:
+  version: 1.0.0
+  status: "DECLARED FROM THE PHASE 5 BRIEF - names and meanings to be confirmed against the V21 DDL (preflight lists every match and every undeclared column)"
+  domains:
+    NEW_DIAGNOSIS: {label: "new diagnosis-derived predictors", label_he: "אבחנות חדשות", source: DIAGNOSES}
+    NEW_REGISTRY: {label: "new registry-derived predictors", label_he: "רשמים חדשים", source: REGISTRIES}
+    NEW_FRAILTY_MEFI: {label: "new frailty / MEFI predictors", label_he: "שבריריות / MEFI (חדש)", source: MEFI}
+    NEW_FUNCTION_MOBILITY: {label: "new function / mobility predictors", label_he: "תפקוד וניידות (חדש)", source: NURSE_FUNCTION_999_175}
+    NEW_COGNITION: {label: "new cognition predictors", label_he: "קוגניציה (חדש)", source: NURSE_COGNITION}
+    NEW_MEDICATION_SAFE: {label: "new medication predictors (timing-checked)", label_he: "תרופות (חדש, לאחר בדיקת תזמון)", source: MEDICATION_EXPOSURE}
+    NEW_UTILISATION_SAFE: {label: "new utilisation predictors (timing-checked)", label_he: "שימוש בשירותים (חדש, לאחר בדיקת תזמון)", source: VISITS}
+  availability:
+    DIAGNOSES: {risk: MEDIUM, assumption: "diagnoses are recorded at the visit; retrospective coding would move information after Index_Date (Phase 3 time contract)"}
+    REGISTRIES: {risk: HIGH, assumption: "registry memberships can be created after clinical review with an earlier start date (backdating) (Phase 3 time contract)"}
+    MEFI: {risk: MEDIUM, assumption: "periodically computed index; assumed computed by Index_Date (Phase 3 time contract)"}
+    NURSE_FUNCTION_999_175: {risk: MEDIUM, assumption: "nurse forms dated by the assessment (Phase 3 time contract)"}
+    NURSE_COGNITION: {risk: MEDIUM, assumption: "nurse forms dated by the assessment (Phase 3 time contract)"}
+    MEDICATION_EXPOSURE: {risk: MEDIUM, assumption: "exposure from dispensings dated on/before Index_Date; purchase counters may settle after it (brief concern 1-2)"}
+    VISITS: {risk: LOW, assumption: "visits recorded in real time; billing / opening / discharge information may become visible later (brief concern 3-4)"}
+  features:
+    # ---------------------------------------------------------------- diagnosis-derived
+    - {column: Dizziness_Ind, aliases: [Dizziness_Dx_Ind, Dizziness_Vertigo_Ind, Vertigo_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "dizziness / vertigo diagnosis on or before the index day", text_he: "אבחנת סחרחורת"}
+    - {column: Gait_Abnormality_Ind, aliases: [Gait_Abnormality_Dx_Ind, Abnormal_Gait_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "gait-abnormality diagnosis", text_he: "אבחנת הפרעת הליכה"}
+    - {column: Syncope_Ind, aliases: [Syncope_Dx_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "syncope diagnosis", text_he: "אבחנת התעלפות"}
+    - {column: Tremor_Ind, aliases: [Tremor_Dx_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "tremor diagnosis", text_he: "אבחנת רעד"}
+    - {column: Cataract_Ind, aliases: [Cataract_Dx_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "cataract diagnosis", text_he: "אבחנת קטרקט"}
+    - {column: Hearing_Loss_Dx_Ind, aliases: [Hearing_Loss_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "hearing-loss diagnosis", text_he: "אבחנת ירידה בשמיעה"}
+    - {column: Vision_Impairment_Dx_Ind, aliases: [Vision_Impairment_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "vision-impairment diagnosis", text_he: "אבחנת פגיעה בראייה"}
+    - {column: Osteoporosis_Ind, aliases: [Osteoporosis_Dx_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "osteoporosis diagnosis", text_he: "אבחנת אוסטאופורוזיס"}
+    - {column: Parkinsonism_Ind, aliases: [Parkinsonism_Dx_Ind, Parkinson_Ind, Parkinsons_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "parkinsonism diagnosis", text_he: "אבחנת פרקינסוניזם"}
+    - {column: Stroke_Dx_Ind, aliases: [Stroke_Ind, CVA_Ind], domain: NEW_DIAGNOSIS, kind: binary, timing: record_date, missing: no_event, text: "stroke diagnosis", text_he: "אבחנת שבץ"}
+    # ---------------------------------------------------------------- registry-derived (status at Index_Date; no row-level date -> attested)
+    - {column: Registry_Smoking_Ind, aliases: [Smoking_Registry_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "smoking registry active at the index date", text_he: "רשם עישון"}
+    - {column: Registry_Obesity_Ind, aliases: [Obesity_Registry_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "obesity registry", text_he: "רשם השמנה"}
+    - {column: Registry_Oncology_Ind, aliases: [Oncology_Registry_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "oncology registry", text_he: "רשם אונקולוגי"}
+    - {column: Registry_IBD_Ind, aliases: [IBD_Registry_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "inflammatory-bowel-disease registry", text_he: "רשם IBD"}
+    - {column: Registry_Opiate_Ind, aliases: [Opiate_Registry_Ind, Registry_Opioid_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "opiate registry", text_he: "רשם אופיאטים"}
+    - {column: Registry_Severe_Function_Ind, aliases: [Severe_Function_Registry_Ind], domain: NEW_REGISTRY, kind: binary, timing: attested, missing: no_event, text: "severe functional-limitation registry", text_he: "רשם מוגבלות תפקודית קשה"}
+    # ---------------------------------------------------------------- frailty / MEFI (the brief lists them; in the 2025 contract they are OLD - the
+    # entries are kept so a renamed V21 column is still recognised; an entry whose column is a 2025 / Phase 3 column is reported as OLD)
+    - {column: MEFI_Group_At_Index, aliases: [], domain: NEW_FRAILTY_MEFI, kind: ordinal, levels: [1, 2, 3, 4], timing: attested, missing: not_assessed, text: "MEFI frailty group at the index date", text_he: "קבוצת MEFI"}
+    - {column: MEFI_Assessed_Ind, aliases: [], domain: NEW_FRAILTY_MEFI, kind: binary, timing: attested, missing: no_event, process: true, text: "MEFI assessed", text_he: "בוצעה הערכת MEFI"}
+    - {column: Days_In_Current_MEFI_Group, aliases: [], domain: NEW_FRAILTY_MEFI, kind: days, timing: days_value, missing: not_assessed, text: "days in the current MEFI group", text_he: "ימים בקבוצת MEFI הנוכחית"}
+    - {column: Days_Since_MEFI_Assessment, aliases: [], domain: NEW_FRAILTY_MEFI, kind: days, timing: days_value, missing: not_assessed, process: true, text: "days since the last MEFI assessment", text_he: "ימים מאז הערכת MEFI"}
+    - {column: MEFI_Assessment_Count, aliases: [], domain: NEW_FRAILTY_MEFI, kind: count, timing: attested, missing: unexpected, process: true, text: "number of MEFI assessments", text_he: "מספר הערכות MEFI"}
+    - {column: MEFI_Ever_Assessed_Ind, aliases: [], domain: NEW_FRAILTY_MEFI, kind: binary, timing: attested, missing: no_event, process: true, text: "MEFI ever assessed", text_he: "הוערך אי פעם ב-MEFI"}
+    - {column: MEFI_Prev_Group, aliases: [], domain: NEW_FRAILTY_MEFI, kind: ordinal, levels: [1, 2, 3, 4], timing: attested, missing: no_event, text: "previous MEFI group", text_he: "קבוצת MEFI קודמת"}
+    - {column: MEFI_Worsened_Ind, aliases: [], domain: NEW_FRAILTY_MEFI, kind: binary, timing: attested, missing: no_event, text: "MEFI group worsened", text_he: "החמרה בקבוצת MEFI"}
+    - {column: Frailty_Not_Assessed_Ind, aliases: [], domain: NEW_FRAILTY_MEFI, kind: binary, timing: attested, missing: no_event, process: true, text: "frailty not assessed", text_he: "לא בוצעה הערכת שבריריות"}
