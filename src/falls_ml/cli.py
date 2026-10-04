@@ -617,7 +617,7 @@ def _cmd_meuhedet_phase5(a: argparse.Namespace) -> int:
         from falls_ml.phase5.resources import default_jobs, limit_threads
 
         limit_threads()
-        cfg = load_phase5_config(a.config, mode=a.mode, v21_catalogue=a.v21_catalogue)
+        cfg = load_phase5_config(a.config, mode=a.mode, v21_schema=a.v21_schema)
         try:
             r = estimate(Path(a.input) if a.input else None, Path(a.out), cfg, int(a.jobs) if a.jobs else default_jobs(cfg))
         except (FallsMLError, ValueError) as exc:
@@ -629,14 +629,15 @@ def _cmd_meuhedet_phase5(a: argparse.Namespace) -> int:
     try:
         r = run_phase5(a.input, a.out, mode=a.mode, device=a.device, jobs=a.jobs, resume=a.resume, preflight_only=a.preflight_only,
                        report_only=a.report_only, accept_code_change=a.accept_code_change, allow_synced_folder=a.allow_synced_folder,
-                       config_path=a.config, v21_catalogue=a.v21_catalogue)
+                       config_path=a.config, v21_schema=a.v21_schema)
     except FallsMLError as exc:
         return _phase5_stop(exc)
     print(json.dumps({k: v for k, v in r.items() if k != "report"}, indent=2, ensure_ascii=False))
     if r["status"].startswith(("COMPLETE", "REPORT_COMPLETE")):
         print(f"SEND BACK ONLY: {Path(a.out) / 'share'}")
     elif r["status"] == "PREFLIGHT_COMPLETE":
-        print(f"preflight aggregate outputs: {Path(a.out) / 'preflight'}")
+        print(f"preflight aggregate outputs (read PHASE5_PREFLIGHT.md; send back this folder if anything is unclear): {Path(a.out) / 'preflight'}")
+        print("nothing was fitted. Next: the --estimate command, then the overnight command (same --input / --out).")
     return int(r["exit_code"])
 
 
@@ -664,24 +665,26 @@ def _cmd_meuhedet_phase5_synthetic(a: argparse.Namespace) -> int:
 
 
 def _add_phase5_parsers(sub: Any) -> None:
-    p = sub.add_parser("meuhedet-phase5", help="Phase 5 (2026 redevelopment + incremental value of the new V21 predictors): ONE resumable command - "
-                                               "preflight, nested CV of LASSO / elastic net / XGBoost on identical folds for OLD vs OLD+NEW_SAFE at >= 70% "
-                                               "sensitivity, domains, ablations, explanation, stability, aggregate-only share/. Also --preflight-only, "
-                                               "--estimate, --status, --report-only")
+    p = sub.add_parser("meuhedet-phase5", help="Phase 5 (2026 redevelopment + incremental value of the new V21 information): exact V1 -> V21 schema "
+                                               "diff, nested CV on identical folds of OLD vs OLD_PLUS_ALL_NEW_ELIGIBLE (primary: elastic net; secondary: "
+                                               "LASSO, XGBoost; stricter OLD_PLUS_NEW_SAFE) at >= 70%% sensitivity, domains, ablations, explanation, "
+                                               "stability, aggregate-only share/. On real data run --preflight-only FIRST; also --estimate, --status, "
+                                               "--report-only")
     p.add_argument("--input", help="the 2026 V21 extract (Index_Date 2026-01-01; .csv with NULL literals or .parquet)")
     p.add_argument("--out", required=True, help="NEW local folder for Phase 5 (never a Phase 2 / 3 / 4 folder; not OneDrive)")
     p.add_argument("--mode", choices=["quick", "overnight"], default="overnight", help="tuning budget (quick = daytime check; overnight = the real run)")
     p.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto", help="XGBoost device; auto = GPU only if it passes a smoke test, else CPU")
     p.add_argument("--jobs", type=int, help="parallel workers (default ~60%% of the logical cores, never all)")
     p.add_argument("--resume", action="store_true", help="continue this folder's run (verifies input / settings / mode / code; nothing finished is redone)")
-    p.add_argument("--preflight-only", action="store_true", help="only the preflight (ends with SAFE TO MODEL or STOP)")
+    p.add_argument("--preflight-only", action="store_true", help="only the preflight - the FIRST action on real data; fits nothing (ends with SAFE TO "
+                                                                 "MODEL or STOP - REVIEW REQUIRED)")
     p.add_argument("--estimate", action="store_true", help="runtime estimate from the file's shape only (no model fitted on the real data)")
     p.add_argument("--status", action="store_true", help="READ-ONLY progress of the folder")
     p.add_argument("--report-only", action="store_true", help="re-build share/ from the finished units only (no fitting)")
     p.add_argument("--accept-code-change", help="continue a run although the falls_ml code changed (reason recorded)")
     p.add_argument("--allow-synced-folder", action="store_true", help="allow --out inside OneDrive / a synced folder (not recommended)")
     p.add_argument("--config", default="configs/meuhedet/phase5.yaml", help="Phase 5 settings (pre-declared; hashed into the plan)")
-    p.add_argument("--v21-catalogue", help="the pre-declared V21 catalogue (default: the one named in the settings)")
+    p.add_argument("--v21-schema", help="the authoritative V21 schema (default: the one named in the settings)")
     p.set_defaults(func=_cmd_meuhedet_phase5)
     p = sub.add_parser("meuhedet-phase5-synthetic", help="Phase 5 SMOKE RUN on a generated SYNTHETIC V21 extract (software test only, no real data)")
     p.add_argument("--out", required=True, help="output folder for the synthetic run (the synthetic input is written next to it)")

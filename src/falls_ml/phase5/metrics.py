@@ -86,7 +86,7 @@ class _Sorted:
         return out
 
 
-OP_KEYS = ("sensitivity", "ppv", "false_alert_share", "flagged_share", "fpr", "specificity", "false_alerts_per_10000", "flagged_per_10000",
+OP_KEYS = ("sensitivity", "ppv", "false_alert_share", "flagged_share", "fpr", "specificity", "false_alerts_per_10000", "flagged_per_10000", "flagged", "fn",
            "captured_per_10000", "tp", "fp")
 
 

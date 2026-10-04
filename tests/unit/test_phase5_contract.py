@@ -1,15 +1,18 @@
 """Phase 5 contract tests (fast, synthetic data only).
 
-Brief AB proofs covered here (the rest in tests/unit/test_phase5_e2e.py):
- 1  outcome / future fields cannot enter X                      test_outcome_and_future_fields_never_enter_x
- 2  post-index predictor leakage hard-stops                     test_post_index_or_ineligible_feature_in_x_hard_stops
- 3  an unsafe new feature is excluded                           test_unsafe_leaky_and_undeclared_new_features_are_excluded
- 5-8 inner selection never sees the outer labels                test_unit_choices_do_not_depend_on_outer_labels (LASSO, ENET, XGB)
- 7  the 70% threshold comes from inner OOF only                 test_threshold_is_the_highest_reaching_the_target / ..._outer_labels
- 11 the paired patient bootstrap works                          test_paired_bootstrap_*
- 13 a GPU failure falls back to CPU                             test_gpu_failure_falls_back_to_cpu
- 15 Windows paths                                               test_windows_paths_are_detected_in_share_text / CLI help (utf-8)
- 18 Phase 2 / 3 / 4 files unchanged                             test_phase2_3_4_files_are_unchanged
+Brief section 22 acceptance proofs covered here (the rest in tests/unit/test_phase5_e2e.py):
+ 1  the exact V1 -> V21 schema diff works                         test_schema_diff_is_exact_and_programmatic / ..._recomputed_from_the_real_header
+ 2  a known new feature is classified NEW                         test_known_new_features_are_new_and_mefi_stays_old
+ 3  the old MEFI feature remains OLD                              test_known_new_features_are_new_and_mefi_stays_old
+ 4  an unknown-but-valid new clinical feature is not dropped      test_unknown_clinical_column_stops_the_preflight
+ 5  an identifier is excluded                                     test_identifiers_and_outcome_fields_never_enter_x
+ 6  an outcome / future field is excluded                         test_identifiers_and_outcome_fields_never_enter_x
+ 7  post-index leakage hard-stops                                 test_post_index_or_ineligible_feature_in_x_hard_stops (+ post-index records / leaky)
+ 9-10 inner selection / threshold never see the outer labels      test_unit_choices_do_not_depend_on_outer_labels (LASSO, ENET, XGB)
+ 13 USEFUL needs an improvement in every outer fold               test_decision_rule_enet_primary_and_every_fold
+ 15 the privacy scan blocks patient-level outputs                 test_share_publication_fails_closed_on_an_identifier
+ 16 Phase 2 / 3 / 4 unchanged                                     test_phase2_3_4_files_are_unchanged
+ +  the first real-data action is the preflight alone             test_real_data_modelling_requires_a_preflight_first
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -30,26 +34,30 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 # ============================================================================ fixtures
-@pytest.fixture(scope="module")
-def prepared(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+def _prepare(d: Path, traps: tuple[str, ...] = (), n: int = 2500, scenario: str = "planted") -> dict[str, Any]:
     from falls_ml.phase3.runner import load_all
     from falls_ml.phase4 import sealed
     from falls_ml.phase4.common import input_identity
     from falls_ml.phase5.config import load_phase5_config
     from falls_ml.phase5.data import prepare
-    from falls_ml.phase5.runner import build_sets
     from falls_ml.phase5.synthetic import make_v21, write_v21_csv
 
-    d = tmp_path_factory.mktemp("p5c")
-    df, facts = make_v21(2500, scenario="planted", seed=31)
+    df, facts = make_v21(n, scenario=scenario, seed=31, traps=traps)
     csv = write_v21_csv(df, d / "v21.csv")
     cfg = load_phase5_config(mode="quick", overrides={"eligibility": {"min_known_observed_rows": 20}})
     L = load_all(cfg["phase3_config"])
     sealed.READ_LOG.clear()
     P = prepare(csv, cfg, L, input_info=input_identity(csv))
-    reads = list(sealed.READ_LOG)
-    S = build_sets(P.registry, P.meta, cfg)
-    return {"P": P, "cfg": cfg, "L": L, "csv": csv, "df": df, "reads": reads, "S": S, "dir": d}
+    return {"P": P, "cfg": cfg, "L": L, "csv": csv, "df": df, "facts": facts, "reads": list(sealed.READ_LOG), "dir": d}
+
+
+@pytest.fixture(scope="module")
+def prepared(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+    from falls_ml.phase5.runner import build_sets
+
+    r = _prepare(tmp_path_factory.mktemp("p5c"), traps=("future_column", "leaky_new"))
+    r["S"] = build_sets(r["P"].registry, r["P"].meta, r["cfg"])
+    return r
 
 
 def _small_ctx(prepared: dict[str, Any], out: Path, y: np.ndarray | None = None, overrides: dict[str, Any] | None = None) -> Any:
@@ -64,31 +72,130 @@ def _small_ctx(prepared: dict[str, Any], out: Path, y: np.ndarray | None = None,
     order = np.argsort(P.frame["row_key"].to_numpy(), kind="mergesort")
     frame = P.frame.iloc[order].reset_index(drop=True)
     yy = P.y[order].astype(int) if y is None else y
-    sets = {k: v for k, v in S["sets"].items() if k in ("OLD", "OLD_PLUS_NEW_SAFE")}
+    sets = {k: v for k, v in S["sets"].items() if k in ("OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE")}
     folds = outer_folds(P.y[order].astype(int), cfg.outer_folds, 7)
     return Ctx(out=out, frame=frame, y=yy, meta=P.meta, sets=sets, outer=folds, cfg=cfg, seed=99, jobs=2, state=DeviceState("cpu"))
 
 
-# ============================================================================ 1-3 X sealing and eligibility
-def test_outcome_and_future_fields_never_enter_x(prepared: dict[str, Any]) -> None:
+def _patterns() -> list[str]:
+    import yaml
+
+    return yaml.safe_load((ROOT / "configs/meuhedet/phase5.yaml").read_text(encoding="utf-8"))["phase5"]["x_sealing"]["name_patterns"]
+
+
+# ============================================================================ 1-3 the exact V1 -> V21 schema diff
+def test_schema_diff_is_exact_and_programmatic() -> None:
+    from falls_ml.phase3.runner import load_all
+    from falls_ml.phase5.data import universe_inputs
+    from falls_ml.phase5.schema import CLASSES, load_v21_schema, parse_definition, schema_diff
+
+    s = load_v21_schema("configs/meuhedet/phase5_v21_schema.yaml")
+    hdr, meaning = parse_definition((ROOT / "configs/meuhedet/phase5_v21_view_definition.txt").read_text(encoding="utf-8"))
+    assert list(s.header) == hdr == list(meaning) and len(hdr) == 224 and len(set(hdr)) == 224
+    L = load_all("configs/meuhedet/phase3.yaml")
+    v1 = list(L["contract"].names)
+    d = schema_diff(hdr, s, L["contract"], L["dictionary"], sealed_patterns=_patterns(), feature_inputs=universe_inputs(L))
+    # the name-level diff is plain set arithmetic on the V1 contract and the V21 header
+    assert d.counts["v1_columns"] == len(v1) == 221
+    assert sorted(d.removed["column"]) == sorted(c for c in v1 if c not in hdr) and len(d.removed) == 20
+    assert d.counts["new_columns"] == len([c for c in hdr if c not in v1]) == 23
+    assert d.counts["shared_names"] == len([c for c in hdr if c in v1]) == 201
+    assert set(d.classes) == set(hdr) and set(d.classes.values()) <= set(CLASSES) and not d.unresolved and d.header_matches
+    assert len(d.table) == len(set(v1) | set(hdr)) and len(d.classification) == 224
+    rc = d.renamed_changed.set_index("v21_column")
+    assert rc.loc["Registry_Corona_Ind", "v1_column"] == "Registry_Blood_Pressure_Ind"
+    assert rc.loc["Registry_Dialysis_Ind", "v1_column"] == "Registry_Chronic_Renal_Failure_Ind"
+    assert rc.loc["Registry_Immunosuppressant_Ind", "v1_column"] == "Registry_Transplant_Ind"
+    assert set(rc.index[rc["change"] == "OLD_CHANGED_DEFINITION"]) == {"Last_Hosp_Length", "Fall_Self_Report_Value"}
+    rm = d.removed.set_index("column")
+    assert "hypertension" in rm.loc["Registry_Blood_Pressure_Ind", "phase3_features_affected"]
+    assert bool(rm.loc["Prior_Fall_Missing_Ind", "bridged"])
+
+
+def test_schema_diff_is_recomputed_from_the_real_header(tmp_path: Path) -> None:
+    from falls_ml.errors import ConfigError
+    from falls_ml.phase3.runner import load_all
+    from falls_ml.phase5.data import universe_inputs
+    from falls_ml.phase5.schema import REVIEW, load_v21_schema, schema_diff
+
+    s = load_v21_schema("configs/meuhedet/phase5_v21_schema.yaml")
+    L = load_all("configs/meuhedet/phase3.yaml")
+    hdr = [c for c in s.header if c != "Tremor_Ind"] + ["Balance_Clinic_Referral_Ind", "Fall_Next_365D_Ind", "Registry_Blood_Pressure_Ind"]
+    d = schema_diff(hdr, s, L["contract"], L["dictionary"], sealed_patterns=_patterns(), feature_inputs=universe_inputs(L))
+    assert d.missing_from_extract == ["Tremor_Ind"] and not d.header_matches
+    assert d.classes["Balance_Clinic_Referral_Ind"] == REVIEW                    # undefined clinical-looking column: never silently dropped
+    assert d.classes["Fall_Next_365D_Ind"] == "OUTCOME_OR_FUTURE_FORBIDDEN"      # future-looking name: sealed
+    assert d.classes["Registry_Blood_Pressure_Ind"] == REVIEW                    # a V1 predictor V21 does not define: review, not OLD
+    assert d.classes["Registry_Corona_Ind"] == "NEW_CANDIDATE_PREDICTOR"         # its predecessor is present: no longer a rename
+    assert set(d.unresolved) == {"Balance_Clinic_Referral_Ind", "Registry_Blood_Pressure_Ind"}
+    # the reviewed schema must cover exactly the embedded definition file, whose content is pinned by sha256
+    bad = tmp_path / "schema.yaml"
+    bad.write_text((ROOT / "configs/meuhedet/phase5_v21_schema.yaml").read_text(encoding="utf-8").replace("    Tremor_Ind:", "    Tremor_Typo_Ind:"),
+                   encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_v21_schema(bad)
+    defn = tmp_path / "def.txt"
+    shutil.copyfile(ROOT / "configs/meuhedet/phase5_v21_view_definition.txt", defn)
+    defn.write_text(defn.read_text(encoding="utf-8") + "\n-- edited\n", encoding="utf-8")
+    bad2 = tmp_path / "schema2.yaml"
+    bad2.write_text((ROOT / "configs/meuhedet/phase5_v21_schema.yaml").read_text(encoding="utf-8").replace(
+        "definition_file: configs/meuhedet/phase5_v21_view_definition.txt", f"definition_file: {defn.as_posix()}"), encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_v21_schema(bad2)
+
+
+def test_known_new_features_are_new_and_mefi_stays_old(prepared: dict[str, Any]) -> None:
+    P, S = prepared["P"], prepared["S"]
+    cls = P.diff.classes
+    for c in ("Dizziness_Ind", "Gait_Abnormality_Ind", "Syncope_Ind", "Tremor_Ind", "Cataract_Ind", "Hearing_Loss_Dx_Ind", "Vision_Impairment_Dx_Ind",
+              "Osteoporosis_Ind", "Parkinsonism_Ind", "Stroke_Dx_Ind", "Registry_Smoking_Ind", "Registry_Obesity_Ind", "Registry_Oncology_Ind",
+              "Registry_IBD_Ind", "Registry_Opiate_Ind", "Registry_Severe_Function_Ind", "Registry_Smoking_SubCode", "Registry_Obesity_SubCode",
+              "Deficit_Count_Proxy"):
+        assert cls[c] == "NEW_CANDIDATE_PREDICTOR", c
+    for c in ("Registry_Dialysis_Ind", "Registry_Corona_Ind", "Registry_Immunosuppressant_Ind"):
+        assert cls[c] == "RENAMED_OR_REPLACED", c
+    for c in ("MEFI_Group_At_Index", "MEFI_Assessed_Ind", "Days_In_Current_MEFI_Group", "MEFI_Worsened_Ind", "Frailty_Not_Assessed_Ind"):
+        assert cls[c] == "OLD_UNCHANGED", c                                     # MEFI is NOT new
+    assert "frail_mefi_group" in S["sets"]["OLD"] and not any(f.startswith("new_mefi") for f in P.meta)
+    reg = P.registry.set_index("feature")
+    assert "new_dizziness_ind" in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and "new_dizziness_ind" in S["sets"]["OLD_PLUS_NEW_SAFE"]
+    assert "new_dizziness_ind" not in S["sets"]["OLD"] and reg.loc["new_dizziness_ind", "class"] == "SAFE_VERIFIED"
+    # OLD under V21: 'falls' kept (removed validation input bridged); the three relabelled-registry features are not reproducible
+    assert "falls" in S["sets"]["OLD"]
+    for f in ("hypertension", "chronic_kidney_disease", "com_registry_transplant"):
+        assert reg.loc[f, "class"] == "INELIGIBLE_DATA" and f not in S["sets"]["OLD"]
+    # every genuine new predictor is in a set or excluded, always with a reason
+    nw = P.registry[P.registry["origin"] == "NEW_V21"]
+    assert len(nw) == 22 and nw["set_reason"].str.len().gt(10).all()
+    for c in ("Registry_Corona_Ind", "Registry_Smoking_SubCode"):
+        f = "new_" + c.lower()
+        assert f in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and f not in S["sets"]["OLD_PLUS_NEW_SAFE"], c
+    assert "Diagnosis_Source_Absent_Ind" not in " ".join(P.registry["raw_columns"]) and cls["Diagnosis_Source_Absent_Ind"] == "METADATA_OR_ADMIN"
+    cat = P.catalogue.set_index("raw_column")
+    assert set(cat.index) >= {c for c in P.diff.classes if c not in set(prepared["L"]["contract"].names)}
+    assert (cat["inclusion_or_exclusion_reason"].astype(str).str.len() > 5).all()
+
+
+# ============================================================================ 4-7 sealing, unknown columns, leakage
+def test_identifiers_and_outcome_fields_never_enter_x(prepared: dict[str, Any]) -> None:
     P, S = prepared["P"], prepared["S"]
     sealed = P.sealed
-    for c in ("Fall_Next_180D_Ind", "Next_Fall_Date_180D", "Days_To_Next_Fall_180D", "Followup_End_Date", "Is_Censored_180D", "Fall_Next_365D_Ind",
-              "Hospital_Discharge_Date", "Label_Reason_180D", "Fall_Next_30D_Ind"):
+    for c in ("Fall_Next_180D_Ind", "Next_Fall_Date_180D", "Days_To_Next_Fall_180D", "Next_Fall_Event_ID_180D", "Label_Reason_180D", "Followup_End_Date",
+              "Is_Censored_180D", "Fall_Next_30D_Ind", "Fall_Next_180D_HighConf_Ind", "Fall_Next_365D_Ind", "Snapshot_Key", "External_Care_Count_365D",
+              "Max_Invoice_Lag_365D", "Abroad_Ind"):
         assert c in sealed, c
+    assert P.diff.classes["Customer_Full_ID"] == "IDENTIFIER" and P.diff.classes["Snapshot_Key"] == "IDENTIFIER"
     x_reads = [cols for name, cols in prepared["reads"] if "Customer_Full_ID" in cols and "Is_Eligible_Cohort" in cols and len(cols) > 10]
     assert x_reads, "the X reader was not used"
     for cols in x_reads:
-        assert not set(cols) & set(sealed), "a sealed outcome / future column was requested by the X reader"
-    assert not set(P.frame.columns) & set(sealed)
+        assert not set(cols) & set(sealed), "a sealed outcome / future / identifier column was requested by the X reader"
+    assert not set(P.frame.columns) & (set(sealed) | {"Customer_Full_ID"})
     reg = P.registry.set_index("feature")
     for name, feats in S["sets"].items():
         for f in feats:
             raw = [c.strip() for c in str(reg.loc[f, "raw_columns"]).split(";")]
             assert not set(raw) & set(sealed), (name, f)
-    cat = P.catalogue.set_index("raw_column")
-    assert cat.loc["Fall_Next_365D_Ind", "eligibility"] == "INELIGIBLE_LEAKAGE"
-    assert cat.loc["Hospital_Discharge_Date", "eligibility"] == "INELIGIBLE_LEAKAGE"
+            assert not set(raw) & {"Customer_Full_ID", "Snapshot_Key"}, (name, f)
 
 
 def test_sealed_reader_refuses_an_outcome_column(prepared: dict[str, Any]) -> None:
@@ -100,31 +207,39 @@ def test_sealed_reader_refuses_an_outcome_column(prepared: dict[str, Any]) -> No
     assert e.value.gate == "SEALED_COLUMN_REQUESTED"
 
 
-def test_unsafe_leaky_and_undeclared_new_features_are_excluded(prepared: dict[str, Any]) -> None:
-    P, S = prepared["P"], prepared["S"]
-    reg = P.registry.set_index("feature")
-    assert reg.loc["new_syncope_ind", "class"] == "INELIGIBLE_TIMING"            # post-index records (outcome-related) beyond the gates
-    assert reg.loc["new_gait_abnormality_ind", "class"] == "INELIGIBLE_LEAKAGE"   # single-feature AUROC >= 0.80
-    assert reg.loc["new_dizziness_ind", "class"] == "SAFE_VERIFIED"
-    allx = {f for v in S["sets"].values() for f in v}
-    assert "new_syncope_ind" not in allx and "new_gait_abnormality_ind" not in allx
-    und = set(P.undeclared["column"])
-    assert "Mystery_Score_V21" in und and "Mystery_Score_V21" not in " ".join(allx)
-    assert S["sets"]["OLD"] == [f for f in S["sets"]["OLD"] if P.meta[f]["origin"] == "OLD"]
-    assert "new_dizziness_ind" in S["sets"]["OLD_PLUS_NEW_SAFE"] and "new_dizziness_ind" not in S["sets"]["OLD"]
-    # MEFI columns of the brief are 2025 contract columns -> OLD, never NEW
-    olds = P.catalogue[P.catalogue["old_or_new"] == "OLD_2025_CONTRACT"]["raw_column"].tolist()
-    assert "MEFI_Group_At_Index" in olds
+def test_unknown_clinical_column_stops_the_preflight(tmp_path: Path) -> None:
+    from falls_ml.phase5.runner import STOP_LINE, run_phase5
+    from falls_ml.phase5.synthetic import make_v21, write_v21_csv
+
+    df, facts = make_v21(1500, scenario="null", seed=5, traps=("unknown_column",))
+    (tmp_path / "in").mkdir()
+    src = write_v21_csv(df, tmp_path / "in" / "v21.csv")
+    out = tmp_path / "out"
+    r = run_phase5(src, out, mode="quick", preflight_only=True, overrides={"eligibility": {"min_known_observed_rows": 20}})
+    assert r["status"] == "STOPPED_PREFLIGHT" and r["exit_code"] == 2
+    pf = out / "preflight"
+    assert (pf / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8").rstrip().endswith(STOP_LINE) and STOP_LINE == "STOP - REVIEW REQUIRED"
+    und = pd.read_csv(pf / "V21_UNDECLARED_COLUMNS.csv")
+    assert list(und["column"]) == ["Balance_Clinic_Referral_Ind"] and (und["class"] == "REQUIRES_SEMANTIC_REVIEW").all()
+    cl = pd.read_csv(pf / "ALL_V21_COLUMN_CLASSIFICATION.csv").set_index("column")
+    assert cl.loc["Balance_Clinic_Referral_Ind", "class"] == "REQUIRES_SEMANTIC_REVIEW"
+    for name in ("SCHEMA_DIFF_V1_V21.csv", "REMOVED_V1_COLUMNS.csv", "RENAMED_OR_CHANGED_COLUMNS.csv", "PREFLIGHT_RESULT.json"):
+        assert (pf / name).is_file(), name
+    assert not (out / "work" / "PLAN.json").exists() and not (out / "work" / "units").exists()       # nothing fitted
 
 
-def test_registry_attested_and_low_risk_sets(prepared: dict[str, Any]) -> None:
+def test_post_index_records_and_a_leaky_new_feature_are_excluded(prepared: dict[str, Any], tmp_path: Path) -> None:
     P, S = prepared["P"], prepared["S"]
     reg = P.registry.set_index("feature")
-    assert reg.loc["new_registry_opiate_ind", "class"] == "SAFE_ATTESTED"
-    assert reg.loc["new_registry_opiate_ind", "availability_risk"] == "HIGH"
-    assert "new_registry_opiate_ind" in S["sets"]["OLD_PLUS_NEW_SAFE"]
-    assert "new_registry_opiate_ind" not in S["sets"]["OLD_PLUS_NEW_VERIFIED_ONLY"]
-    assert "new_registry_opiate_ind" not in S["sets"]["OLD_PLUS_NEW_LOW_AVAILABILITY_RISK"]
+    assert reg.loc["new_deficit_count_proxy", "class"] == "INELIGIBLE_LEAKAGE"          # single-feature AUROC >= 0.80 (trap)
+    assert "new_deficit_count_proxy" not in {f for v in S["sets"].values() for f in v}
+    r = _prepare(tmp_path, traps=("post_index_dx",), n=2000)
+    reg2 = r["P"].registry.set_index("feature")
+    dx = [f for f in reg2.index if f.startswith("new_") and reg2.loc[f, "domain"] in ("NEW_DIAGNOSIS", "NEW_VISION_HEARING")]
+    assert dx and all(reg2.loc[f, "class"] in ("INELIGIBLE_TIMING", "SAFE_BOUNDED") for f in dx)
+    assert any(reg2.loc[f, "class"] == "INELIGIBLE_TIMING" for f in dx)
+    assert not r["P"].facts["v3_attestation"]["passed"]                                  # Last_Dx_Date after the index day withdraws V3
+    assert "SAFE_ATTESTED" not in set(reg2["class"])
 
 
 def test_post_index_or_ineligible_feature_in_x_hard_stops(prepared: dict[str, Any]) -> None:
@@ -133,15 +248,29 @@ def test_post_index_or_ineligible_feature_in_x_hard_stops(prepared: dict[str, An
 
     P, S, cfg = prepared["P"], prepared["S"], prepared["cfg"]
     x_guard(S["sets"], P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)          # the real sets pass
-    bad = {**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_syncope_ind"]}
-    with pytest.raises(Phase2Stop) as e:
-        x_guard(bad, P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)
-    assert e.value.gate == "X_LEAKAGE"
+    for bad in ({**S["sets"], "OLD_PLUS_ALL_NEW_ELIGIBLE": [*S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"], "new_deficit_count_proxy"]},     # leaky
+                {**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_registry_corona_ind"]},                     # not SAFE
+                {**S["sets"], "OLD": [*S["sets"]["OLD"], "new_dizziness_ind"]},                                                      # NEW in OLD
+                {**S["sets"], "OLD": [*S["sets"]["OLD"], "hypertension"]}):                                                          # removed in V21
+        with pytest.raises(Phase2Stop) as e:
+            x_guard(bad, P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)
+        assert e.value.gate == "X_LEAKAGE"
     with pytest.raises(Phase2Stop):
         x_guard(S["sets"], P.registry, S["kinds"], P.sealed, [*P.frame.columns, "Fall_Next_180D_Ind"], cfg)
-    old_with_new = {**S["sets"], "OLD": [*S["sets"]["OLD"], "new_dizziness_ind"]}
-    with pytest.raises(Phase2Stop):
-        x_guard(old_with_new, P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)
+
+
+def test_real_data_modelling_requires_a_preflight_first(tmp_path: Path) -> None:
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase4 import sealed
+    from falls_ml.phase5.runner import run_phase5
+
+    src = tmp_path / "in" / "extract.csv"
+    src.parent.mkdir()
+    src.write_text("Customer_Full_ID\n", encoding="utf-8")
+    sealed.READ_LOG.clear()
+    with pytest.raises(Phase2Stop) as e:
+        run_phase5(src, tmp_path / "out", mode="overnight")
+    assert e.value.gate == "PREFLIGHT_REQUIRED" and not sealed.READ_LOG
 
 
 def test_unknown_cells_take_the_no_record_state() -> None:
@@ -152,6 +281,16 @@ def test_unknown_cells_take_the_no_record_state() -> None:
     assert math.isnan(_no_record_state("days", "not_assessed"))
     assert math.isnan(_no_record_state("binary", "no_event"))
     assert _no_record_state("binary", "no_event", op="present") == 0.0
+
+
+def test_raw_codes_learn_their_levels_on_training_rows_only() -> None:
+    from falls_ml.phase5.design import LinearDesign
+
+    meta = {"c": {"kind": "categorical", "linear": "onehot", "levels": None}}
+    tr = pd.DataFrame({"c": [1.0] * 30 + [2.0] * 30 + [7.0] * 3 + [np.nan] * 37})
+    d = LinearDesign(["c"], meta).fit(tr)
+    assert d.levels_["c"] == [1.0, 2.0] and any(c.startswith("c__eq2") for c in d.columns_)
+    assert d.transform(pd.DataFrame({"c": [9.0, 2.0, np.nan]})).shape == (3, len(d.columns_))
 
 
 # ============================================================================ thresholds, objective, decision rule
@@ -182,33 +321,43 @@ def test_objective_prefers_fewer_flagged_then_fewer_false_alerts() -> None:
     assert all(math.isfinite(v) for v in og["key"])
 
 
-def test_decision_rule() -> None:
+def test_decision_rule_enet_primary_and_every_fold() -> None:
     from falls_ml.phase5.analysis import decide, overall
-    from falls_ml.phase5.config import load_phase5_config
+    from falls_ml.phase5.config import PRIMARY_FAMILY, load_phase5_config
 
     cfg = load_phase5_config()
+    assert PRIMARY_FAMILY == "ENET" and cfg["primary_family"] == "ENET"
 
     def cmp(d: float, hi: float, slope: float = 1.0, b_lo: float = -0.001, folds: list[float] | None = None) -> dict[str, Any]:
         m = {"calibration_slope": slope, "calibration_intercept": 0.05}
-        return {"delta_op_false_alert_share": d, "delta_op_false_alert_share_ci_high": hi, "delta_desc_fas_0.70": d, "delta_brier_ci_low": b_lo,
-                "a": {"calibration_slope": 1.0, "calibration_intercept": 0.05}, "b": m, "fold_delta_false_alert_share": folds or [d] * 5}
+        return {"delta_op_false_alert_share": d, "delta_op_false_alert_share_ci_high": hi, "delta_desc_fas_0.70": d, "delta_desc_fas_0.70_ci_high": hi,
+                "delta_brier_ci_low": b_lo, "a": {"calibration_slope": 1.0, "calibration_intercept": 0.05}, "b": m,
+                "fold_delta_false_alert_share": folds or [d] * 5}
 
-    assert decide(cmp(-0.05, -0.01), cmp(-0.04, 0.01), cmp(-0.03, 0.01), no_new=False, ver_same=False, low_same=False, cfg=cfg)["verdict"] == \
-        "NEW_FEATURES_OPERATIONALLY_USEFUL"
-    assert decide(cmp(-0.05, 0.01), None, None, no_new=False, ver_same=True, low_same=True, cfg=cfg)["verdict"] == "PROMISING_BUT_NOT_ROBUST"
-    # a "significant" bootstrap interval that one outer fold contradicts is model noise, not a robust gain
-    assert decide(cmp(-0.05, -0.01, folds=[-0.06, -0.07, 0.01, -0.05, -0.04]), None, None, no_new=False, ver_same=True, low_same=True,
-                  cfg=cfg)["verdict"] == "PROMISING_BUT_NOT_ROBUST"
-    # the gain disappears without the attested / high-risk predictors -> not robust
-    assert decide(cmp(-0.05, -0.01), cmp(0.0, 0.02), cmp(-0.02, 0.0), no_new=False, ver_same=False, low_same=False, cfg=cfg)["verdict"] == \
-        "PROMISING_BUT_NOT_ROBUST"
-    assert decide(cmp(-0.05, -0.01, slope=0.5), None, None, no_new=False, ver_same=True, low_same=True, cfg=cfg)["verdict"] == "PROMISING_BUT_NOT_ROBUST"
-    assert decide(cmp(0.01, 0.03), None, None, no_new=False, ver_same=True, low_same=True, cfg=cfg)["verdict"] == "NO_ROBUST_OPERATIONAL_GAIN"
-    assert decide(None, None, None, no_new=True, ver_same=True, low_same=True, cfg=cfg)["verdict"] == "NO_ELIGIBLE_NEW_FEATURES"
     U, P_, N = "NEW_FEATURES_OPERATIONALLY_USEFUL", "PROMISING_BUT_NOT_ROBUST", "NO_ROBUST_OPERATIONAL_GAIN"
+    # a nested interval below 0 that the equal-sensitivity interval does not confirm (threshold placement) is not enough
+    c = cmp(-0.05, -0.01)
+    c["delta_desc_fas_0.70_ci_high"] = 0.004
+    r = decide(c, None, no_new=False, safe_same=True, cfg=cfg)
+    assert r["verdict"] == P_ and not r["criteria"]["2_paired_ci_below_zero_nested_and_at_equal_sensitivity"]
+    assert decide(cmp(-0.05, -0.01), cmp(-0.04, -0.01), no_new=False, safe_same=False, cfg=cfg)["verdict"] == U
+    assert decide(cmp(-0.05, -0.01), None, no_new=False, safe_same=True, cfg=cfg)["verdict"] == U
+    # 13: a "significant" bootstrap interval that ONE outer fold contradicts is not USEFUL
+    r = decide(cmp(-0.05, -0.01, folds=[-0.06, -0.07, 0.01, -0.05, -0.04]), None, no_new=False, safe_same=True, cfg=cfg)
+    assert r["verdict"] == P_ and not r["criteria"]["3_every_outer_fold_improves"]
+    # interval crossing 0 but every fold improves -> promising; interval crossing 0 and folds mixed -> unstable = no robust gain
+    assert decide(cmp(-0.05, 0.01), None, no_new=False, safe_same=True, cfg=cfg)["verdict"] == P_
+    assert decide(cmp(-0.05, 0.01, folds=[-0.06, 0.02, -0.05, 0.01, -0.04]), None, no_new=False, safe_same=True, cfg=cfg)["verdict"] == N
+    # the gain disappears without the timing / provenance-questionable predictors (NEW_SAFE) -> not robust
+    assert decide(cmp(-0.05, -0.01), cmp(0.002, 0.02), no_new=False, safe_same=False, cfg=cfg)["verdict"] == P_
+    assert decide(cmp(-0.05, -0.01), None, no_new=False, safe_same=False, cfg=cfg)["verdict"] == P_       # NEW_SAFE = OLD: no safe gain
+    assert decide(cmp(-0.05, -0.01, slope=0.5), None, no_new=False, safe_same=True, cfg=cfg)["verdict"] == P_
+    assert decide(cmp(0.01, 0.03), None, no_new=False, safe_same=True, cfg=cfg)["verdict"] == N
+    assert decide(None, None, no_new=True, safe_same=True, cfg=cfg)["verdict"] == "NO_ELIGIBLE_NEW_FEATURES"
+    # the answer is the PRIMARY (ENET) verdict only - never the best-looking family
     assert overall({"LASSO": U, "ENET": U, "XGB": N}) == "YES"
-    assert overall({"LASSO": U, "ENET": P_, "XGB": N}) == "UNCERTAIN"
-    assert overall({"LASSO": N, "ENET": N, "XGB": N}) == "NO"
+    assert overall({"LASSO": U, "ENET": N, "XGB": U}) == "NO"
+    assert overall({"LASSO": N, "ENET": P_, "XGB": N}) == "UNCERTAIN"
 
 
 # ============================================================================ 11 paired bootstrap
@@ -255,7 +404,7 @@ def test_unit_choices_do_not_depend_on_outer_labels(prepared: dict[str, Any], tm
 
     assert "y_te" not in inspect.signature(tune_and_fit).parameters        # the unit never receives the holdout outcome
     c1 = _small_ctx(prepared, tmp_path / "a")
-    spec = UnitSpec(uid=f"PRIMARY|{family}|OLD_PLUS_NEW_SAFE|outer0", stage="PRIMARY", family=family, setname="OLD_PLUS_NEW_SAFE", outer=0)
+    spec = UnitSpec(uid=f"PRIMARY|{family}|OLD_PLUS_ALL_NEW_ELIGIBLE|outer0", stage="PRIMARY", family=family, setname="OLD_PLUS_ALL_NEW_ELIGIBLE", outer=0)
     r1 = run_unit(c1, spec)
     y2 = c1.y.copy()
     te = c1.outer == 0
@@ -340,8 +489,13 @@ def test_config_is_validated_and_predeclared() -> None:
     cfg = load_phase5_config()
     assert cfg["families"] == ["LASSO", "ENET", "XGB"] and cfg.primary_sensitivity == 0.70 and cfg.outer_folds == 5 and cfg.inner_folds == 5
     assert cfg["xgb"]["fixed"]["scale_pos_weight"] == 1.0
-    with pytest.raises(ConfigError):
-        load_phase5_config(overrides={"families": ["LASSO", "ENET", "XGB", "RF"]})
+    assert cfg["sets"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"] and cfg["primary_comparison"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE"]
+    b = cfg.budget
+    assert (b["xgb"]["n_trials"], b["lasso"]["n_lambda"], b["enet"]["n_lambda"], b["bootstrap_n"], b["stability_linear"], b["stability_xgb"]) == \
+        (100, 60, 40, 2000, 100, 30)
+    for bad in ({"families": ["LASSO", "ENET", "XGB", "RF"]}, {"primary_family": "XGB"}, {"sets": ["OLD", "OLD_PLUS_NEW_SAFE"]}):
+        with pytest.raises(ConfigError):
+            load_phase5_config(overrides=bad)
     with pytest.raises(ConfigError):
         load_phase5_config(overrides={"operating": {"primary_sensitivity": 0.6}})
     assert load_phase5_config(overrides={"cv": {"outer_folds": 3}}).sha256 != cfg.sha256

@@ -1,17 +1,22 @@
-"""The 2026 analysis data: cohort, outcome, the OLD (Phase 3) feature universe and the NEW (V21) candidates with their eligibility classes.
+"""The 2026 analysis data: the exact V1 -> V21 schema diff, cohort, outcome, the OLD (Phase 3) feature universe and every NEW V21 predictor with its
+timing class and feature-set membership.
 
 X and the outcome are read SEPARATELY. X columns come only through the sealed reader (``falls_ml.phase4.sealed.read_columns``), which refuses any
-sealed column (outcome / label / follow-up / censoring / death / future-looking names); the outcome columns are read by the outcome reader and only
-ever become ``y`` and the outcome-contract audit. Nothing here fits a model.
+sealed column (outcome / label / follow-up / censoring / identifier / future-looking names, and every column the schema diff classifies as
+OUTCOME_OR_FUTURE_FORBIDDEN or IDENTIFIER); the outcome columns are read by the outcome reader and only ever become ``y`` and the outcome-contract
+audit. Nothing here fits a model.
 
 OLD    the Phase 3 universe (the 93-feature catalogue + BASELINE_15) rebuilt with the UNCHANGED Phase 1-3 code (adapter, ``phase2.engineer.compute``,
-       ``phase3.recovery.build_recovery`` under the corrected END-OF-INDEX-DAY contract, attestation re-checked on 2026 by V3).
-NEW    a 2026 column that is not in the 2025 contract and matches the pre-declared V21 catalogue; timing from its record date / day count / the
-       attestation; semantics from its declared type; coverage; the univariate leakage screen.
-Classes (brief §D): SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, INELIGIBLE_TIMING, INELIGIBLE_SEMANTICS, INELIGIBLE_DATA, INELIGIBLE_LEAKAGE.
-A cell whose record is dated AFTER Index_Date (UNKNOWN at prediction time) or that cannot be read takes the feature's NO-RECORD state (0 for
-indicators / counts that have no NULL state, NULL otherwise): the post-index record is never used, and such rows look exactly like patients with
-nothing recorded (no missingness pattern can carry the future record).
+       ``phase3.recovery.build_recovery`` under the END-OF-INDEX-DAY contract, attestation re-checked on 2026 by V3). A feature whose V1 input was
+       removed in V21 is not reproducible (INELIGIBLE_DATA); a removed VALIDATION-only input is bridged as the schema declares (Prior_Fall_Missing_Ind).
+NEW    every V21 column the schema diff classes NEW_CANDIDATE_PREDICTOR or RENAMED_OR_REPLACED - exact names from the authoritative schema, never a
+       hand-written short list: timing from its declared basis (row-level record date / attestation / uncertain), semantics from its declared type,
+       coverage, the univariate leakage safety screen.
+Timing classes: SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING, INELIGIBLE_TIMING, INELIGIBLE_SEMANTICS, INELIGIBLE_DATA, INELIGIBLE_LEAKAGE.
+Sets: OLD = OLD features with a SAFE class; OLD_PLUS_ALL_NEW_ELIGIBLE adds every new predictor with a SAFE class or UNCERTAIN_TIMING (plausibly
+known at the index day, not future-derived); OLD_PLUS_NEW_SAFE adds only SAFE-class new predictors with a DEFENSIBLE provenance.
+A cell whose record is dated AFTER Index_Date (UNKNOWN at prediction time) or that cannot be read takes the feature's NO-RECORD state, so no
+missingness pattern can carry the future record.
 """
 
 from __future__ import annotations
@@ -27,18 +32,21 @@ import numpy as np
 import pandas as pd
 
 from falls_ml.phase2.state import Phase2Stop
+from falls_ml.phase5.schema import FORBIDDEN, IDENT, NEW_CAND, OLD_CHANGED, RENAMED, REVIEW, SchemaDiff, schema_diff
 
 ID_COL = "Customer_Full_ID"
-ID_COLS = ("Customer_Full_ID", "Snapshot_Key", "Index_Date", "Is_Eligible_Cohort")
-QA_COLS = ("Leakage_Check_Ind", "Definition_Version")
+ID_COLS = ("Customer_Full_ID", "Index_Date", "Is_Eligible_Cohort")      # read for the key, cohort and duplicate checks only - never a feature
+QA_COLS = ("Leakage_Check_Ind",)
 UNREADABLE_PREFIX = "__unreadable__"
-STOPWORDS = {"ind", "dx", "flag"}
 
 SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED = "SAFE_VERIFIED", "SAFE_BOUNDED", "SAFE_ATTESTED"
+UNCERTAIN = "UNCERTAIN_TIMING"
 I_TIMING, I_SEMANTICS, I_DATA, I_LEAKAGE = "INELIGIBLE_TIMING", "INELIGIBLE_SEMANTICS", "INELIGIBLE_DATA", "INELIGIBLE_LEAKAGE"
+SAFE = (SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED)
 P3_TO_BRIEF = {"SAFE_VERIFIED": SAFE_VERIFIED, "SAFE_VERIFIED_BOUNDED": SAFE_BOUNDED, "SAFE_ATTESTED": SAFE_ATTESTED,
                "NOT_RECOVERABLE_FUTURE_RECORDS": I_TIMING, "UNRESOLVED": I_TIMING, "NOT_RECOVERABLE_FORBIDDEN": I_LEAKAGE, "INELIGIBLE_DATA": I_DATA}
 BASELINE_KIND = {"age_years": ("continuous", "none"), "polypharmacy_count_120d": ("count", "log1p")}
+LINEAR_OF_KIND = {"binary": "none", "count": "log1p", "days": "log1p", "ordinal": "thermometer", "categorical": "onehot", "continuous": "none"}
 
 
 def row_key(member_id: str) -> str:
@@ -46,28 +54,31 @@ def row_key(member_id: str) -> str:
     return hashlib.sha256(f"phase5-row|{member_id}".encode("utf-8")).hexdigest()[:24]
 
 
-def tokens(name: str) -> frozenset[str]:
-    return frozenset(t for t in re.split(r"[_\W]+", name.lower()) if t and t not in STOPWORDS)
+def feature_name(col: str) -> str:
+    return "new_" + re.sub(r"[^0-9a-z]+", "_", col.lower()).strip("_")
 
 
 # ============================================================================ sealing (X side)
-def x_sealed_map(header: list[str], contract: Any, cfg: Any) -> dict[str, str]:
+def x_sealed_map(header: list[str], contract: Any, cfg: Any, diff: SchemaDiff | None = None) -> dict[str, str]:
     """column -> why it can never enter X (and is never requested by the X reader)."""
     xs = cfg["x_sealing"]
     roles = set(xs["contract_roles"])
     pats = [re.compile(p, re.IGNORECASE) for p in xs["name_patterns"]]
+    sch = set(xs.get("schema_classes") or [])
     names = set(contract.names)
     out: dict[str, str] = {}
     for c in header:
         if c in set(xs["columns"]):
             out[c] = "BRIEF_OUTCOME_OR_FOLLOWUP_COLUMN"
+        elif diff is not None and diff.classes.get(c) in sch and c not in ID_COLS:
+            out[c] = f"V21_SCHEMA_CLASS_{diff.classes[c]}"
         elif c in names:
             cc = contract.get(c)
             if cc.role in roles:
                 out[c] = f"CONTRACT_ROLE_{cc.role}"
             elif cc.timing == "post_index":
                 out[c] = "CONTRACT_TIMING_POST_INDEX"
-        elif any(p.search(c) for p in pats):
+        elif (diff is None or c not in diff.classes or diff.classes[c] == REVIEW) and any(p.search(c) for p in pats):
             out[c] = "NEW_COLUMN_NAME_LOOKS_LIKE_OUTCOME_OR_FUTURE"
     return out
 
@@ -77,11 +88,12 @@ def x_sealed_map(header: list[str], contract: Any, cfg: Any) -> dict[str, str]:
 class Prepared:
     frame: pd.DataFrame                       # usable cohort rows: row_key + every candidate feature value (float) + subgroup columns
     y: np.ndarray
-    registry: pd.DataFrame                    # one row per candidate feature (OLD universe + NEW V21) with its class
-    catalogue: pd.DataFrame                   # NEW_FEATURE_CATALOGUE rows (every 2026 column outside the Phase 3 universe)
-    undeclared: pd.DataFrame
+    registry: pd.DataFrame                    # one row per candidate feature (OLD universe + NEW V21) with its class and set membership
+    catalogue: pd.DataFrame                   # NEW_FEATURE_CATALOGUE rows (every extract column the V1 contract does not have)
+    undeclared: pd.DataFrame                  # REQUIRES_SEMANTIC_REVIEW columns (aggregate profile)
     meta: dict[str, dict[str, Any]]           # feature -> encoding / domain / class / availability / origin
     sealed: dict[str, str]
+    diff: SchemaDiff | None = None
     checks: list[dict[str, Any]] = field(default_factory=list)
     facts: dict[str, Any] = field(default_factory=dict)
     outcome: dict[str, Any] = field(default_factory=dict)
@@ -100,13 +112,29 @@ def baseline_names(mapping: Any) -> list[str]:
 
 
 def universe_inputs(L: dict[str, Any]) -> dict[str, list[str]]:
+    """Every raw column a Phase 3 universe feature reads (value + validation)."""
     from falls_ml.phase4.features import feature_inputs
 
     cat, mapping = L["cat"], L["mapping"]
     return {n: feature_inputs(n, cat, mapping) for n in [*cat.names, *baseline_names(mapping)]}
 
 
+def value_inputs(L: dict[str, Any]) -> dict[str, list[str]]:
+    """The raw columns a Phase 3 universe feature's VALUE is computed from (an absent indicator counts only where the adapter needs it: op count)."""
+    from falls_ml.data.meuhedet_wide import feature_input_columns
+
+    cat, mapping = L["cat"], L["mapping"]
+    out = {n: list(cat.get(n).inputs) for n in cat.names}
+    for f in mapping.features:
+        if f.include_in_baseline:
+            i = feature_input_columns(f)
+            out[f.canonical] = [*i["value"], *(i["validation"] if f.op == "count" else ())]
+    return out
+
+
 def _parse_dates(s: pd.Series, formats: tuple[str, ...]) -> tuple[pd.Series, np.ndarray]:
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s, np.zeros(len(s), dtype=bool)
     raw = s.astype("string").str.strip()
     out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[us]")
     todo = raw.notna() & (raw != "")
@@ -141,28 +169,53 @@ def _univariate_auroc(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any]) -> Prepared:
-    from falls_ml.phase3.timecontract import availability_of, predictor_date_columns
+    from falls_ml.phase3.timecontract import predictor_date_columns
     from falls_ml.phase4.evaluate import outcome_contract, read_outcomes
     from falls_ml.phase4.sealed import read_columns, read_header
 
-    contract, mapping, dictionary, cat = L["contract"], L["mapping"], L["dictionary"], L["cat"]
+    contract, dictionary, cat = L["contract"], L["dictionary"], L["cat"]
+    schema = cfg.schema
     idx = pd.Timestamp(cfg["index_date"])
     header = read_header(src)
-    sealed = x_sealed_map(header, contract, cfg)
+    uinp = universe_inputs(L)
+    vinp = value_inputs(L)
+    diff = schema_diff(header, schema, contract, dictionary, sealed_patterns=list(cfg["x_sealing"]["name_patterns"]), feature_inputs=uinp)
+    sealed = x_sealed_map(header, contract, cfg, diff)
     P = Prepared(frame=pd.DataFrame(), y=np.array([]), registry=pd.DataFrame(), catalogue=pd.DataFrame(), undeclared=pd.DataFrame(), meta={},
-                 sealed=sealed, input=input_info)
+                 sealed=sealed, diff=diff, input=input_info)
+    P.facts["schema"] = {**diff.counts, "header_matches_authoritative_v21": diff.header_matches, "missing_from_extract": diff.missing_from_extract,
+                         "extra_in_extract": diff.extra_in_extract, "unresolved": diff.unresolved, "v21_schema_sha256": schema.sha256,
+                         "v21_definition_sha256": schema.definition_sha256}
     P.facts["sealed"] = {"n_sealed": len(sealed), "by_reason": pd.Series(list(sealed.values())).value_counts().to_dict() if sealed else {},
                          "columns": sorted(sealed)}
+    # ---- P0: the exact V1 -> V21 schema diff (STOP when a column's meaning is unresolved)
+    c = diff.counts
+    det = [f"V1 contract {c['v1_columns']} columns; authoritative V21 schema {c['v21_authoritative_columns']}; this extract {c['extract_columns']}"
+           + (" (header IDENTICAL to the authoritative V21 header)" if diff.header_matches else " (header DIFFERS from the authoritative V21 header)"),
+           f"unchanged {c['unchanged_columns']}; removed {c['removed_v1_columns']}; new {c['new_columns']}; renamed / replaced {c['renamed_or_replaced']}; "
+           f"changed definition {c['changed_definition']}; new candidate predictors {c['new_candidate_predictors']}",
+           f"classes: {c['by_class']}"]
+    if diff.missing_from_extract:
+        det.append(f"authoritative V21 columns absent from the extract: {diff.missing_from_extract[:15]} (features reading them are INELIGIBLE_DATA)")
+    if diff.unresolved:
+        det.append(f"REQUIRES_SEMANTIC_REVIEW: {diff.unresolved[:20]} - columns whose meaning / timing / provenance the authoritative schema does not "
+                   "define; no clinical column may be ignored silently: review them and add them to configs/meuhedet/phase5_v21_schema.yaml")
+    P.add("P0", "exact V1 -> V21 schema diff (every extract column classified)", "STOP" if diff.unresolved else ("OK" if diff.header_matches else "WARN"), det)
+    P.undeclared = _undeclared(diff)
+    P.catalogue = _catalogue(diff, pd.DataFrame(), schema)
+    if diff.unresolved:
+        return P
     oc = cfg["outcome_contract"]
-    miss = [c for c in (*ID_COLS[:1], "Index_Date", "Is_Eligible_Cohort", oc["label_column"]) if c not in header]
+    miss = [c for c in (ID_COL, "Index_Date", "Is_Eligible_Cohort", oc["label_column"]) if c not in header]
     P.add("P1", "required identifier / eligibility / label columns present", "STOP" if miss else "OK",
           [f"absent: {miss}"] if miss else ["Customer_Full_ID, Index_Date, Is_Eligible_Cohort and the label column are present"])
     if miss:
         return P
 
     # ---- the OLD universe: which features are reproducible under the 2026 schema
-    uinp = universe_inputs(L)
-    absent = {f: [c for c in ins if c not in header] for f, ins in uinp.items()}
+    bridges = {b: s for b, s in schema.bridges.items() if b not in header}
+    present = set(header) | set(bridges)
+    absent = {f: [c for c in ins if c not in present] for f, ins in vinp.items()}
     absent = {f: v for f, v in absent.items() if v}
     sealed_in = {f: [c for c in ins if c in sealed] for f, ins in uinp.items()}
     sealed_in = {f: v for f, v in sealed_in.items() if v}
@@ -170,37 +223,41 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
         P.add("P2", "no Phase 3 universe feature reads an outcome / future column", "STOP",
               [f"{f}: reads sealed {v}" for f, v in list(sealed_in.items())[:20]])
         return P
-    P.add("P2", "no Phase 3 universe feature reads an outcome / future column", "OK",
-          [f"{len(sealed)} columns sealed from X: {P.facts['sealed']['by_reason']}", "no universe feature reads a sealed column"])
-    base_all = baseline_names(mapping)
-    base_ok = [b for b in base_all if b not in absent]
-    cat_ok = tuple(f for f in cat.features if f.name not in absent)
+    changed_in = {f: [c for c in ins if diff.classes.get(c) == OLD_CHANGED] for f, ins in uinp.items()}
+    changed_in = {f: v for f, v in changed_in.items() if v}
+    policy = cfg["eligibility"]["old_changed_definition_policy"]
+    P.add("P2", "Phase 3 universe under V21: no outcome / future input; removed / changed inputs handled explicitly", "OK",
+          [f"{len(sealed)} columns sealed from X: {P.facts['sealed']['by_reason']}", "no universe feature reads a sealed column",
+           f"not reproducible (V1 input removed in V21): {sorted(absent)}",
+           f"bridged removed validation inputs: {sorted(bridges)}",
+           f"inputs with a CHANGED V21 definition: {changed_in or 'none'} (policy {policy})"])
+    base_all = baseline_names(L["mapping"])
+    base_ok = [b for b in base_all if b not in absent and not (policy == "exclude" and b in changed_in)]
+    cat_ok = tuple(f for f in cat.features if f.name not in absent and not (policy == "exclude" and f.name in changed_in))
 
-    # ---- the V21 matches (columns outside the 2025 contract)
-    names = set(contract.names)
-    new_cols = [c for c in header if c not in names]
-    matches, ambiguous, v21_old = _match_v21(cfg.v21, header, names, new_cols)
-    # ---- columns read for X: universe inputs, their record dates, V3 dates, QA, ids, every non-sealed new column (profiled)
+    # ---- NEW V21 predictors: exact columns of the authoritative schema present in the extract
+    new_cols = [c for c in header if diff.classes.get(c) in (NEW_CAND, RENAMED)]
+    # ---- columns read for X: universe inputs, their record dates, V3 dates, QA, ids, new predictors and their record dates, unresolved-free extras
     cols: list[str] = [c for c in ID_COLS if c in header]
     for f, ins in uinp.items():
         if f in absent:
             continue
         for c in ins:
-            if c not in cols:
+            if c in header and c not in cols:
                 cols.append(c)
             rd = dictionary.record_date(c) if c in dictionary.columns else None
             if rd and rd in header and rd not in sealed and rd not in cols:
                 cols.append(rd)
     v3_cols = [c for c in predictor_date_columns(dictionary, L["d00"], L["tc"], header) if c not in sealed]
-    for c in [*v3_cols, *QA_COLS, *[c for c in new_cols if c not in sealed]]:
-        if c in header and c not in cols:
+    rec_cols = [schema.predictors[c].record_date for c in new_cols if schema.predictors[c].timing == "record_date"]
+    for c in [*v3_cols, *QA_COLS, *new_cols, *rec_cols]:
+        if c and c in header and c not in sealed and c not in cols:
             cols.append(c)
-    purchase_cols = [c for c in cfg["eligibility"]["medication_purchase_date_columns"] if c in header and c not in sealed]
-    for c in purchase_cols:
-        if c not in cols:
-            cols.append(c)
+    P.facts["timing_check_columns"] = sorted({c for c in [*v3_cols, *rec_cols] if c in header})
     read = read_columns(src, cols, sealed, contract)
     fr = read.frame
+    for b, spec in bridges.items():
+        fr[b] = pd.array([spec["value"]] * len(fr), dtype="Int64")
     # ---- cohort
     elig = ((fr["Index_Date"].dt.normalize() == idx).fillna(False) & (pd.to_numeric(fr["Is_Eligible_Cohort"], errors="coerce") == 1).fillna(False)).to_numpy()
     n_el = int(elig.sum())
@@ -214,36 +271,26 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     st = "STOP" if n_el < int(ccfg["min_eligible_rows"]) or ((dup or n_null_id) and ccfg["stop_if_duplicate_ids"]) else "OK"
     P.add("P3", f"cohort on Index_Date {cfg['index_date']}: eligible rows, one snapshot per patient", st,
           [f"{len(fr)} extract rows; {n_el} eligible on {cfg['index_date']} (Is_Eligible_Cohort = 1)",
-           f"{dup} duplicated Customer_Full_ID and {n_null_id} NULL ids among them (any -> STOP: one row per patient is required; with repeated rows a "
-           "grouped split would be needed)"])
-    # ---- QA: definition version and the VIEW's own leakage flag (not sufficient on its own)
+           f"{dup} duplicated Customer_Full_ID and {n_null_id} NULL ids among them (any -> HARD STOP: one row per patient at the index date)"])
+    if dup or n_null_id:
+        return P
+    # ---- QA: the VIEW's own leakage flag (partial by definition - never taken as proof of safety)
     qa, qst = [], "OK"
-    if "Definition_Version" in fr.columns:
-        vals = fr.loc[elig, "Definition_Version"].astype("string").fillna("NULL").value_counts().to_dict()
-        P.facts["definition_version"] = {str(k): int(v) for k, v in vals.items()}
-        want = cfg["expected_definition_version"]
-        if set(vals) != {want}:
-            qa.append(f"Definition_Version on eligible rows {vals}: expected only {want!r} - the extracted object is NOT the intended V21 definition")
-            qst = "STOP"
-        else:
-            qa.append(f"Definition_Version = {want!r} on every eligible row (the extracted object matches the intended definition)")
-    else:
-        qa.append("Definition_Version absent: the extracted VIEW definition cannot be confirmed")
-        qst = "STOP"
     if "Leakage_Check_Ind" in fr.columns:
         nl = int((pd.to_numeric(fr.loc[elig, "Leakage_Check_Ind"], errors="coerce").fillna(0) != 0).sum())
-        qa.append(f"Leakage_Check_Ind non-zero on {nl} eligible rows (the VIEW's own partial check - never taken as proof of safety)")
+        qa.append(f"Leakage_Check_Ind non-zero on {nl} eligible rows (the VIEW checks four latest dates only - never taken as proof of safety)")
         qst = "STOP" if nl else qst
     else:
-        qa.append("Leakage_Check_Ind absent (the VIEW's partial check cannot be confirmed; Phase 5 relies on its own sealing and timing gates)")
-    P.add("P4", "extract definition (V21) and the VIEW's leakage flag", qst, qa)
+        qa.append("Leakage_Check_Ind absent (Phase 5 relies on its own sealing and timing gates)")
+    qa.append("Definition_Version is not a V21 column: the extract is identified by its exact header against the authoritative V21 schema (P0)")
+    P.add("P4", "the VIEW's own leakage flag", qst, qa)
     if not P.safe:
         return P
 
     # ---- outcome: read separately, audited by the contract, never part of X
     ocfg = {"outcome_contract": oc, "index_date": cfg["index_date"]}
     O = read_outcomes(src, contract, ocfg)
-    if len(O) != len(fr) or not (O[ID_COL].astype("string").fillna("") .to_numpy() == fr[ID_COL].astype("string").fillna("").to_numpy()).all():
+    if len(O) != len(fr) or not (O[ID_COL].astype("string").fillna("").to_numpy() == fr[ID_COL].astype("string").fillna("").to_numpy()).all():
         raise Phase2Stop("OUTCOME_ALIGNMENT", "the outcome rows do not align with the predictor rows (file read twice gave different rows)")
     Oe = O.loc[elig].reset_index(drop=True)
     contract_res = outcome_contract(Oe, ocfg)
@@ -252,8 +299,9 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     yv = pd.to_numeric(Oe[oc["label_column"]], errors="coerce").to_numpy(dtype=float)
     usable = np.isin(yv, (0.0, 1.0))
     P.add("P5", "2026 outcome contract (before any model is fitted)", "OK" if contract_res["passed"] else "STOP",
-          [*(contract_res["hard_failures"] or ["O1-O6 passed: outcome strictly after the index day, within Index_Date + 180, consistent dates, enough usable events"]),
-           f"usable labelled patients {int(usable.sum())}, events {int((yv == 1).sum())}, censored / unlabelled {int((~usable).sum())}"])
+          [*(contract_res["hard_failures"] or ["O1-O6 passed: outcome strictly after the index day, within Index_Date + 180, consistent dates, enough usable "
+                                              "events; positives after the personal follow-up end within the declared limit"]),
+           f"usable labelled patients {int(usable.sum())}, events {int((yv == 1).sum())}, censored / unlabelled {int((~usable).sum())} (labels never rewritten)"])
     if not contract_res["passed"]:
         return P
 
@@ -261,37 +309,19 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     y = yv[usable].astype(int)
     unr = read.unreadable.loc[elig].reset_index(drop=True).loc[usable].reset_index(drop=True) if read.unreadable is not None else pd.DataFrame(index=fe.index)
     n = len(fe)
-    # ---- V3 attestation on 2026 (record dates only, the unchanged Phase 3 rule over the Phase 3 predictor record dates). A V21 record date never
-    # withdraws the attestation of the OLD universe: its post-index records make ITS OWN feature UNKNOWN / INELIGIBLE_TIMING (gates G2 / G3), and
-    # the attested V21 features additionally require that no declared V21 record date holds a post-index record.
-    v21_dates: dict[str, tuple[str, pd.Series, np.ndarray]] = {}
-    for col, (f, _) in matches.items():
-        for dc in _date_candidates(f, col):
-            if dc in fe.columns and dc not in sealed and dc not in names:
-                d, bad = _parse_dates(fe[dc], tuple(contract.date_formats))
-                v21_dates[col] = (dc, d, bad)
-                break
+    # ---- V3 attestation on 2026 (record dates only, the unchanged Phase 3 rule over the Phase 3 predictor record dates)
     from falls_ml.phase4.features import v3_check
 
     v3 = v3_check(fe, v3_cols, cfg["index_date"])
-    v21_post = {}
-    for col, (dc, d, _) in v21_dates.items():
-        off = (d.dt.normalize() - idx).dt.days
-        after = (off > 0).fillna(False).to_numpy()
-        v21_post[dc] = {"n_after_index": int(after.sum()), "n_on_index": int((off == 0).fillna(False).sum()), "max_days_after": int(off[after].max()) if after.any() else 0}
-    post_domains = sorted({matches[col][0].domain for col, (dc, _, _) in v21_dates.items() if v21_post[dc]["n_after_index"]})
-    v21_ok = not post_domains
     P.facts["v3_attestation"] = {"passed": bool(v3["passed"]), "rows_with_any_post_index_record": int(v3["rows_with_any_post_index_record"]),
                                  "columns_checked": len(v3["by_column"]),
-                                 "columns_with_post_index_records": sorted(c for c, v in v3["by_column"].items() if v["n_after_index"]),
-                                 "v21_record_dates": v21_post, "v21_domains_with_post_index_dates": post_domains}
-    P.add("P6", "V3: no predictor record dated after Index_Date (the DWH attestation, re-checked on 2026)", "OK" if v3["passed"] and v21_ok else "WARN",
-          [f"{len(v3['by_column'])} Phase 3 record-date columns checked; rows with any post-index record: {v3['rows_with_any_post_index_record']}",
-           "attestation HOLDS for the Phase 3 universe: its attested features may be SAFE_ATTESTED" if v3["passed"] else
-           f"attestation WITHDRAWN: every attested OLD feature becomes INELIGIBLE_TIMING (post-index records in {P.facts['v3_attestation']['columns_with_post_index_records'][:8]})",
-           f"V21 record dates: {len(v21_post)} found; post-index records in {sorted(k for k, v in v21_post.items() if v['n_after_index'])} -> "
-           + ("attested V21 features stay eligible" if v3["passed"] and v21_ok else
-              f"attested V21 features of the domains {post_domains} (or of every domain, if V3 failed) become INELIGIBLE_TIMING")])
+                                 "columns_with_post_index_records": sorted(c for c, v in v3["by_column"].items() if v["n_after_index"])}
+    P.add("P6", "V3: no predictor record dated after Index_Date (the DWH attestation, re-checked on 2026)", "OK" if v3["passed"] else "WARN",
+          [f"{len(v3['by_column'])} record-date columns checked; rows with any post-index record: {v3['rows_with_any_post_index_record']}",
+           "attestation HOLDS: attested features (OLD and NEW) may be SAFE_ATTESTED; uncertain-timing NEW predictors may be UNCERTAIN_TIMING"
+           if v3["passed"] else
+           f"attestation WITHDRAWN: every attested / uncertain feature becomes INELIGIBLE_TIMING (post-index records in "
+           f"{P.facts['v3_attestation']['columns_with_post_index_records'][:8]})"])
 
     # ---- OLD universe values + Phase 3 classes
     old_vals, old_reg = _old_universe(fe, unr, L, base_ok, cat_ok, cfg, v3_passed=bool(v3["passed"]))
@@ -300,38 +330,41 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     for _, r in old_reg.iterrows():
         f = str(r["feature"])
         kind, lin, lev, miss_sem, op, dom = _old_encoding(f, cat, r)
+        chg = changed_in.get(f, [])
         reg_rows.append({"feature": f, "raw_columns": "; ".join(uinp[f]), "origin": "OLD_PHASE3_UNIVERSE", "domain": dom, "kind": kind,
-                         "class": r["class"], "reason": r["reason"], "availability_risk": r.get("availability_risk", "UNKNOWN"),
-                         "availability_assumption": r.get("availability_assumption", ""), "n_unknown_cells": int(r.get("n_unknown", 0)),
-                         "phase3_class": r.get("phase3_class", ""), "provenance": r.get("provenance", "")})
-        meta[f] = {"kind": kind, "linear": lin, "levels": lev, "missing": miss_sem, "op": op, "domain": dom, "origin": "OLD",
-                   "process": bool(op == "present" or f in set(cfg["ablations"]["NO_ASSESSMENT_PROCESS"]["features"]))}
+                         "v21_class": OLD_CHANGED if chg else "OLD_UNCHANGED", "class": r["class"],
+                         "reason": r["reason"] + (f"; V21 CHANGED the definition of {chg}: kept with the V21 definition (policy {policy})" if chg else ""),
+                         "availability_risk": r.get("availability_risk", "UNKNOWN"), "availability_assumption": r.get("availability_assumption", ""),
+                         "n_unknown_cells": int(r.get("n_unknown", 0)), "phase3_class": r.get("phase3_class", ""), "provenance": r.get("provenance", ""),
+                         "new_provenance": ""})
+        meta[f] = {"kind": kind, "linear": lin, "levels": lev, "missing": miss_sem, "op": op, "domain": dom, "origin": "OLD"}
     for f, cs in absent.items():
         dom = cat.get(f).domain if f in cat.names else "BASELINE_15"
-        reg_rows.append({"feature": f, "raw_columns": "; ".join(uinp[f]), "origin": "OLD_PHASE3_UNIVERSE", "domain": dom, "kind": "",
-                         "class": I_DATA, "reason": f"input column(s) absent from the 2026 extract: {cs} (not reproducible under the 2026 schema)",
-                         "availability_risk": "", "availability_assumption": "", "n_unknown_cells": 0, "phase3_class": "", "provenance": ""})
+        succ = [diff.table.loc[diff.table["column"] == c, "successor_in_v21"].iloc[0] for c in cs if (diff.table["column"] == c).any()]
+        succ = [s for s in succ if s]
+        reg_rows.append({"feature": f, "raw_columns": "; ".join(uinp[f]), "origin": "OLD_PHASE3_UNIVERSE", "domain": dom, "kind": "", "v21_class": "REMOVED_IN_V21",
+                         "class": I_DATA, "reason": f"V1 input column(s) {cs} removed in V21: not reproducible with an equivalent meaning"
+                         + (f" (V21 successor {succ} has a corrected, different meaning: a NEW candidate, never relabelled as this OLD feature)" if succ else ""),
+                         "availability_risk": "", "availability_assumption": "", "n_unknown_cells": 0, "phase3_class": "", "provenance": "", "new_provenance": ""})
 
-    # ---- NEW V21 candidates
-    new_vals, new_reg, cat_rows, undeclared = _new_candidates(fe, unr, cfg, contract, uinp, sealed, header, new_cols, matches, ambiguous, v21_old,
-                                                              v21_dates, v3_passed=bool(v3["passed"]), post_domains=set(post_domains), purchase_cols=purchase_cols, idx=idx,
-                                                              availability_of=availability_of, L=L)
+    # ---- NEW V21 predictors
+    new_vals, new_reg = _new_candidates(fe, cfg, new_cols, diff, idx=idx, v3_passed=bool(v3["passed"]), gates=L["rules"].gates,
+                                        date_formats=tuple(contract.date_formats))
     for r in new_reg:
+        m = r.pop("_meta")
         reg_rows.append(r)
-        if r["feature"] in new_vals:
-            m = r.pop("_meta")
-            meta[r["feature"]] = m
-        else:
-            r.pop("_meta", None)
+        meta[r["feature"]] = m
     values = pd.concat([old_vals, new_vals], axis=1)
-    # ---- leakage screen + coverage (usable cohort; the screen can only EXCLUDE)
-    lim_auc = float(cfg["eligibility"]["leakage_univariate_auroc"])
+    # ---- coverage + the leakage safety screen (usable cohort; the screen can only EXCLUDE)
+    el = cfg["eligibility"]
+    lim_auc = float(el["leakage_univariate_auroc"])
+    screened = set(el["all_new_classes"]) | set(el["safe_classes"])
     reg = pd.DataFrame(reg_rows)
     reg["univariate_auroc"] = np.nan
     reg["n_known_observed"] = 0
     reg["missing_pct"] = np.nan
     reg["prevalence_or_median"] = ""
-    minobs = int(cfg["eligibility"]["min_known_observed_rows"])
+    minobs = int(el["min_known_observed_rows"])
     for i, r in reg.iterrows():
         f = r["feature"]
         if f not in values.columns:
@@ -342,7 +375,7 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
         nm = int((~obs).sum())
         reg.at[i, "missing_pct"] = round(100.0 * float((~obs).mean()), 2) if not (0 < nm < 10 or 0 < int(obs.sum()) < 10) else np.nan
         reg.at[i, "prevalence_or_median"] = _dist_text(x, meta[f]["kind"])
-        if r["class"] in (SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED):
+        if r["class"] in screened:
             if int(obs.sum()) < minobs or len(np.unique(x[obs])) <= 1:
                 reg.at[i, "class"] = I_DATA
                 reg.at[i, "reason"] = f"{int(obs.sum())} KNOWN non-NULL rows (< {minobs}) or constant"
@@ -353,9 +386,22 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
                 reg.at[i, "class"] = I_LEAKAGE
                 reg.at[i, "reason"] = (f"single-feature AUROC {a:.3f} >= {lim_auc:g}: implausibly strong alone (future / outcome-derived information "
                                        "suspected) - excluded, DWH review required")
+    # ---- set membership with a reason for every inclusion / exclusion
+    reg["in_OLD"], reg["in_OLD_PLUS_ALL_NEW_ELIGIBLE"], reg["in_OLD_PLUS_NEW_SAFE"], reg["set_reason"] = False, False, False, ""
+    for i, r in reg.iterrows():
+        a, s, why = _membership(r, el)
+        if r["origin"] == "OLD_PHASE3_UNIVERSE":
+            reg.at[i, "in_OLD"] = a
+            reg.at[i, "in_OLD_PLUS_ALL_NEW_ELIGIBLE"] = a
+            reg.at[i, "in_OLD_PLUS_NEW_SAFE"] = a
+        else:
+            reg.at[i, "in_OLD_PLUS_ALL_NEW_ELIGIBLE"] = a
+            reg.at[i, "in_OLD_PLUS_NEW_SAFE"] = s
+        reg.at[i, "set_reason"] = why
     for f in list(meta):
-        meta[f]["class"] = str(reg.loc[reg["feature"] == f, "class"].iloc[0])
-        meta[f]["availability_risk"] = str(reg.loc[reg["feature"] == f, "availability_risk"].iloc[0])
+        rr = reg.loc[reg["feature"] == f].iloc[0]
+        meta[f]["class"] = str(rr["class"])
+        meta[f]["availability_risk"] = str(rr["availability_risk"])
     P.registry = reg
     # ---- local analysis frame (row-level, never shared)
     keys = fe[ID_COL].astype("string").map(row_key)
@@ -364,73 +410,48 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     frame = pd.concat([frame, values[keep].reset_index(drop=True)], axis=1)
     frame = pd.concat([frame, _subgroups(fe, values, meta)], axis=1)
     P.frame, P.y, P.meta = frame, y, {f: meta[f] for f in keep}
-    if len(cat_rows):
-        cat_rows = cat_rows.copy()
-        for i, r in cat_rows.iterrows():
-            f = r["engineered_feature"]
-            if f and f in set(reg["feature"]):
-                rr = reg.loc[reg["feature"] == f].iloc[0]
-                cat_rows.at[i, "eligibility"] = rr["class"]
-                cat_rows.at[i, "exclusion_reason"] = "" if rr["class"] in (SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED) else rr["reason"]
-                cat_rows.at[i, "missingness"] = f"{rr['missing_pct']}%" if pd.notna(rr["missing_pct"]) else ""
-                cat_rows.at[i, "prevalence_or_distribution"] = rr["prevalence_or_median"]
-    P.catalogue, P.undeclared = cat_rows, undeclared
+    P.catalogue = _catalogue(diff, reg, schema)
     P.facts["usable"] = {"n": int(n), "events": int(y.sum()), "non_events": int(n - y.sum()), "prevalence": float(y.mean()) if n else 0.0}
-    n_old_ok = int(((reg["origin"] == "OLD_PHASE3_UNIVERSE") & reg["class"].isin(cfg["eligibility"]["primary_classes"])).sum())
-    n_new_ok = int(((reg["origin"] == "NEW_V21") & reg["class"].isin(cfg["eligibility"]["primary_classes"])).sum())
-    P.add("P7", "feature eligibility (timing, provenance, semantics, coverage, leakage)", "OK",
-          [f"OLD (Phase 3 universe) eligible under the Phase 3 primary rule: {n_old_ok} of {int((reg['origin'] == 'OLD_PHASE3_UNIVERSE').sum())}",
-           f"NEW V21 candidates eligible: {n_new_ok} of {int((reg['origin'] == 'NEW_V21').sum())} declared matches; "
-           f"{len(undeclared)} undeclared new columns (INELIGIBLE_SEMANTICS, listed for review)",
+    nw = reg[reg["origin"] == "NEW_V21"]
+    n_old_ok = int(reg["in_OLD"].sum())
+    P.facts["new_predictors"] = {"genuine_new_predictors": int(len(nw)), "all_new_eligible": int(nw["in_OLD_PLUS_ALL_NEW_ELIGIBLE"].sum()),
+                                 "new_safe": int(nw["in_OLD_PLUS_NEW_SAFE"].sum()),
+                                 "excluded_from_all_new": nw.loc[~nw["in_OLD_PLUS_ALL_NEW_ELIGIBLE"].astype(bool), ["raw_columns", "class", "set_reason"]]
+                                 .rename(columns={"raw_columns": "column"}).to_dict("records"),
+                                 "all_new_only": nw.loc[nw["in_OLD_PLUS_ALL_NEW_ELIGIBLE"].astype(bool) & ~nw["in_OLD_PLUS_NEW_SAFE"].astype(bool),
+                                                        ["raw_columns", "class", "set_reason"]].rename(columns={"raw_columns": "column"}).to_dict("records"),
+                                 "new_non_predictor_columns": [{"column": c, "class": k, "reason": diff.reasons[c]} for c, k in diff.classes.items()
+                                                               if c not in set(contract.names) and k not in (NEW_CAND, RENAMED)]}
+    P.add("P7", "feature eligibility (timing, provenance, semantics, coverage, leakage) and set membership", "OK",
+          [f"OLD (Phase 3 universe) eligible: {n_old_ok} of {int((reg['origin'] == 'OLD_PHASE3_UNIVERSE').sum())}",
+           f"genuine new V21 predictors: {len(nw)}; in OLD_PLUS_ALL_NEW_ELIGIBLE {int(nw['in_OLD_PLUS_ALL_NEW_ELIGIBLE'].sum())}; in OLD_PLUS_NEW_SAFE "
+           f"{int(nw['in_OLD_PLUS_NEW_SAFE'].sum())}; every exclusion has a reason (FEATURE_ELIGIBILITY.csv, NEW_FEATURE_CATALOGUE.csv)",
            f"classes: {reg['class'].value_counts().to_dict()}"])
     return P
 
 
+def _membership(r: Any, el: dict[str, Any]) -> tuple[bool, bool, str]:
+    """(in the ALL_NEW-style set, in the SAFE set, reason). OLD features: the first flag is OLD membership (all three sets)."""
+    k = str(r["class"])
+    safe, alln = set(el["safe_classes"]), set(el["all_new_classes"])
+    if r["origin"] == "OLD_PHASE3_UNIVERSE":
+        if k in safe:
+            return True, True, f"OLD: Phase 3 universe feature, class {k} (in all three feature sets)"
+        return False, False, f"excluded from OLD (and therefore from every set): {k} - {r['reason']}"
+    prov = str(r.get("new_provenance", ""))
+    if k in alln:
+        if k in safe and prov in set(el["safe_provenance"]):
+            return True, True, f"NEW: {k}, provenance {prov} -> OLD_PLUS_ALL_NEW_ELIGIBLE and OLD_PLUS_NEW_SAFE"
+        why = ("timing uncertain at the index day" if k == UNCERTAIN else f"provenance {prov} (not verifiably new / validated information)")
+        return True, False, f"NEW: {k} -> OLD_PLUS_ALL_NEW_ELIGIBLE only; excluded from OLD_PLUS_NEW_SAFE: {why}"
+    return False, False, f"NEW predictor excluded from every set: {k} - {r['reason']}"
+
+
 # ============================================================================ helpers
-def _match_v21(v21: Any, header: list[str], contract_names: set[str], new_cols: list[str]) -> tuple[dict[str, tuple[Any, str]], dict[str, list[str]], dict[str, str]]:
-    """column -> (declared entry, how it matched); ambiguous entries; entries whose column is a 2025 contract column (OLD)."""
-    lower = {c.lower(): c for c in header}
-    by_tok: dict[frozenset[str], list[str]] = {}
-    for c in new_cols:
-        by_tok.setdefault(tokens(c), []).append(c)
-    out: dict[str, tuple[Any, str]] = {}
-    amb: dict[str, list[str]] = {}
-    old: dict[str, str] = {}
-    for f in v21.features:
-        found = None
-        how = ""
-        for nm in (f.column, *f.aliases):
-            if nm.lower() in lower:
-                found, how = lower[nm.lower()], ("exact name" if nm == f.column else f"declared alias {nm}")
-                break
-        if found is None:
-            cands = sorted({c for nm in (f.column, *f.aliases) for c in by_tok.get(tokens(nm), [])})
-            if len(cands) == 1:
-                found, how = cands[0], "same name tokens (case / '_' / Ind / Dx ignored) - CONFIRM"
-            elif len(cands) > 1:
-                amb[f.column] = cands
-        if found is None:
-            continue
-        if found in contract_names:
-            old[f.column] = found
-            continue
-        if found in out:
-            amb[f.column] = [found]
-            continue
-        out[found] = (f, how)
-    return out, amb, old
-
-
-def _date_candidates(f: Any, col: str) -> list[str]:
-    stem = re.sub(r"(_Dx)?_Ind$", "", col)
-    return list(dict.fromkeys([*f.record_date, f"{stem}_Date", f"{stem}_Dx_Date", f"Last_{stem}_Date", f"First_{stem}_Date", f"{stem}_Diagnosis_Date"]))
-
-
 def _old_encoding(f: str, cat: Any, r: Any) -> tuple[str, str, list[float] | None, str, str, str]:
     if f in cat.names:
         d = cat.get(f)
-        lin = d.linear
-        return d.kind, lin, list(d.levels) if d.levels else None, d.missing, d.op, d.domain
+        return d.kind, d.linear, list(d.levels) if d.levels else None, d.missing, d.op, d.domain
     kind, lin = BASELINE_KIND.get(f, ("binary", "none"))
     return kind, lin, None, "unexpected", "copy", "BASELINE_15"
 
@@ -481,7 +502,7 @@ def _old_universe(fe: pd.DataFrame, unr: pd.DataFrame, L: dict[str, Any], base: 
         cols_out[f] = x
         klass = P3_TO_BRIEF.get(str(r["phase3_class"]), I_TIMING)
         reason = str(r["phase3_reason"])
-        if bad.mean() > lim and klass in (SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED):
+        if bad.mean() > lim and klass in SAFE:
             klass, reason = I_DATA, f"{100 * bad.mean():.2f}% unreadable / not-allowed input cells (> {100 * lim:g}%)"
         rows.append({"feature": f, "class": klass, "reason": reason, "phase3_class": r["phase3_class"], "availability_risk": r["availability_risk"],
                      "availability_assumption": r["availability_assumption"], "n_unknown": int(mask.sum()),
@@ -489,139 +510,110 @@ def _old_universe(fe: pd.DataFrame, unr: pd.DataFrame, L: dict[str, Any], base: 
     return pd.DataFrame(cols_out, index=frame.index), pd.DataFrame(rows)
 
 
-def _new_candidates(fe: pd.DataFrame, unr: pd.DataFrame, cfg: Any, contract: Any, uinp: dict[str, list[str]], sealed: dict[str, str], header: list[str],
-                    new_cols: list[str], matches: dict[str, tuple[Any, str]], ambiguous: dict[str, list[str]], v21_old: dict[str, str],
-                    v21_dates: dict[str, tuple[str, pd.Series, np.ndarray]], *, v3_passed: bool, post_domains: set[str], purchase_cols: list[str], idx: pd.Timestamp,
-                    availability_of: Any, L: dict[str, Any]) -> tuple[pd.DataFrame, list[dict[str, Any]], pd.DataFrame, pd.DataFrame]:
-    v21 = cfg.v21
-    gates = L["rules"].gates
+def _new_candidates(fe: pd.DataFrame, cfg: Any, new_cols: list[str], diff: SchemaDiff, *, idx: pd.Timestamp, v3_passed: bool, gates: dict[str, Any],
+                    date_formats: tuple[str, ...]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    schema = cfg.schema
     lim_unr = float(cfg["eligibility"]["max_unreadable_share"])
+    fmts = date_formats
     n = len(fe)
     vals = pd.DataFrame(index=fe.index)
     reg: list[dict[str, Any]] = []
-    cat_rows: list[dict[str, Any]] = []
-    universe_cols = {c for ins in uinp.values() for c in ins}
-    date_cols_used = {dc for dc, _, _ in v21_dates.values()}
-    purchase_after = 0
-    for c in purchase_cols:
-        d, _ = _parse_dates(fe[c].astype("string"), tuple(contract.date_formats)) if not pd.api.types.is_datetime64_any_dtype(fe[c]) else (fe[c], None)
-        purchase_after += int(((d.dt.normalize() - idx).dt.days > 0).fillna(False).sum())
-    for col, (f, how) in matches.items():
-        name = "new_" + re.sub(r"[^0-9a-z]+", "_", col.lower()).strip("_")
-        risk, assumption = v21.risk_of(f)
+    for col in new_cols:
+        p = schema.predictors[col]
+        name = feature_name(col)
+        risk, assumption = schema.risk_of(p)
         raw = fe[col].astype("string") if col in fe.columns else pd.Series(pd.NA, index=fe.index, dtype="string")
         num = pd.to_numeric(raw.str.strip(), errors="coerce").to_numpy(dtype=float)
         present = (raw.notna() & (raw.str.strip() != "")).to_numpy()
         unreadable = present & ~np.isfinite(num)
-        if f.kind == "binary":
+        if p.kind == "binary":
             unreadable |= np.isfinite(num) & ~np.isin(num, (0.0, 1.0))
-        elif f.kind in ("ordinal", "categorical") and f.levels:
-            unreadable |= np.isfinite(num) & ~np.isin(num, np.asarray(f.levels, dtype=float))
-        elif f.kind == "count":
+        elif p.kind == "ordinal" and p.levels:
+            unreadable |= np.isfinite(num) & ~np.isin(num, np.asarray(p.levels, dtype=float))
+        elif p.kind == "count":
             unreadable |= np.isfinite(num) & ((num < 0) | (num != np.floor(num)))
         x = np.where(unreadable, np.nan, num)
         unknown = np.zeros(n, dtype=bool)
-        klass, reason, tbasis = SAFE_VERIFIED, "", f.timing
-        dom_meta = {"kind": f.kind, "linear": {"binary": "none", "count": "log1p", "days": "log1p", "ordinal": "thermometer", "categorical": "onehot",
-                                               "continuous": "none"}[f.kind],
-                    "levels": list(f.levels) if f.levels else None, "missing": f.missing, "op": "copy", "domain": f.domain, "origin": "NEW",
-                    "process": f.process}
-        timing_status = ""
+        tbasis = p.timing
+        meta = {"kind": p.kind, "linear": LINEAR_OF_KIND[p.kind], "levels": list(p.levels) if p.levels else None, "missing": p.missing, "op": "copy",
+                "domain": p.domain, "origin": "NEW", "provenance": p.provenance, "v21_class": diff.classes[col]}
         if unreadable.mean() > lim_unr:
-            klass, reason = I_SEMANTICS, f"{100 * unreadable.mean():.2f}% of the cells do not fit the declared type {f.kind} (> {100 * lim_unr:g}%): semantics not as declared"
-            timing_status = "NOT_ASSESSED"
-        elif f.timing == "forbidden":
-            klass, reason, timing_status = I_TIMING, "declared timing concern that cannot be checked", "FORBIDDEN_BY_DECLARATION"
-        else:
-            if f.timing == "record_date" and col in v21_dates:
-                dc, d, dbad = v21_dates[col]
+            klass, reason = I_SEMANTICS, (f"{100 * unreadable.mean():.2f}% of the cells do not fit the declared type {p.kind} (> {100 * lim_unr:g}%): "
+                                          "semantics not as the V21 schema declares")
+        elif p.timing == "record_date":
+            rd = p.record_date
+            if rd in fe.columns:
+                d, dbad = _parse_dates(fe[rd], fmts)
                 off = (d.dt.normalize() - idx).dt.days
                 rec = present & np.isfinite(num) & (num != 0)
                 unknown = (off > 0).fillna(False).to_numpy() | (rec & d.isna().to_numpy()) | dbad
-                tbasis = f"record_date {dc}"
-            elif f.timing == "days_value":
-                unknown = np.isfinite(x) & (x < 0)
-                tbasis = "days_value (negative = post-index record)"
-            elif f.timing == "record_date":
-                tbasis = "record_date declared but no date column found -> attested"
-            if tbasis.startswith("record_date ") or f.timing == "days_value":
+                tbasis = f"record_date {rd} (latest record of the source, row-level)"
                 inf = int((np.isfinite(x) & (x != 0) & ~unknown).sum())
                 nu = int(unknown.sum())
                 sp, si = nu / max(1, n), nu / max(1, nu + inf)
                 if sp > float(gates["max_unknown_share_population"]) or si > float(gates["max_unknown_share_informative"]):
                     klass = I_TIMING
-                    reason = f"post-index / undated records on {nu} rows ({100 * sp:.2f}% of the cohort, {100 * si:.1f}% of informative rows): Phase 3 gates G2 / G3"
-                    timing_status = "POST_INDEX_RECORDS"
+                    reason = f"post-index / undated source records on {nu} rows ({100 * sp:.2f}% of the cohort, {100 * si:.1f}% of informative rows): Phase 3 gates G2 / G3"
                 elif nu:
-                    klass, reason, timing_status = SAFE_BOUNDED, f"{nu} rows with a post-index / undated record take the no-record state (within the Phase 3 gates)", "ROW_VERIFIED_BOUNDED"
+                    klass, reason = SAFE_BOUNDED, f"{nu} rows with a post-index / undated source record take the no-record state (within the Phase 3 gates)"
                 else:
-                    klass, reason, timing_status = SAFE_VERIFIED, "every row verified on or before the index day", "ROW_VERIFIED"
+                    klass, reason = SAFE_VERIFIED, f"every row verified on or before the index day ({rd})"
             else:
-                if v3_passed and f.domain not in post_domains:
-                    klass, reason, timing_status = SAFE_ATTESTED, "no row-level date: eligible on the DWH attestation, re-checked on 2026 by V3", "ATTESTED_V3_PASSED"
-                else:
-                    klass, reason, timing_status = I_TIMING, ("no row-level date and the attestation is withdrawn: " + ("V3 found post-index records"
-                                                               if not v3_passed else f"post-index V21 record dates in its domain {f.domain}")), "ATTESTATION_WITHDRAWN"
-            if f.domain == "NEW_MEDICATION_SAFE" and purchase_after:
-                klass, reason, timing_status = I_TIMING, f"medication purchase dates after Index_Date on {purchase_after} rows (brief concern 1-2)", "PURCHASE_AFTER_INDEX"
-        x = np.where(unknown | unreadable, _no_record_state(f.kind, f.missing), x)
+                klass, reason = (SAFE_ATTESTED, f"record date {rd} absent from the extract: eligible on the DWH attestation (V3 passed)") if v3_passed else \
+                    (I_TIMING, f"record date {rd} absent and the attestation is withdrawn (V3)")
+        elif p.timing == "attested":
+            klass, reason = ((SAFE_ATTESTED, "status at the index day without a row-level date: eligible on the DWH attestation, re-checked on 2026 by V3")
+                             if v3_passed else (I_TIMING, "no row-level date and the attestation is withdrawn: V3 found post-index records"))
+        else:
+            klass, reason = ((UNCERTAIN, f"plausibly known at the index day and not future-derived, but timing not bounded: {p.timing_reason}")
+                             if v3_passed else (I_TIMING, f"uncertain timing ({p.timing_reason}) and the attestation is withdrawn (V3)"))
+        x = np.where(unknown | unreadable, _no_record_state(p.kind, p.missing), x)
         vals[name] = x
-        dom_meta["timing_basis"] = tbasis
-        reg.append({"feature": name, "raw_columns": col, "origin": "NEW_V21", "domain": f.domain, "kind": f.kind, "class": klass, "reason": reason,
-                    "availability_risk": risk, "availability_assumption": assumption, "n_unknown_cells": int((unknown | unreadable).sum()), "phase3_class": "",
-                    "provenance": f"V21 catalogue entry {f.column} ({how}); timing {tbasis}", "_meta": dom_meta})
-        cat_rows.append({"raw_column": col, "engineered_feature": name, "domain": f.domain, "old_or_new": "NEW_V21", "semantic_status":
-                         ("DECLARED_TYPE_MISMATCH" if klass == I_SEMANTICS else f"DECLARED ({how})"), "timing_status": timing_status or tbasis,
-                         "availability_status": f"{risk}: {assumption}", "missingness": "", "prevalence_or_distribution": "", "eligibility": klass,
-                         "exclusion_reason": "" if klass in (SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED) else reason,
-                         "provenance": f"2026 column outside the 2025 contract; matched to the V21 catalogue ({how})", "notes": f.text})
-    # ---- every other 2026 column outside the Phase 3 universe (catalogued, never a predictor)
-    und = []
-    for c in header:
-        if c in matches or c in universe_cols or c in ID_COLS or c in QA_COLS or c in date_cols_used:
-            continue
-        in25 = c in set(contract.names)
-        if c in sealed:
-            cat_rows.append({"raw_column": c, "engineered_feature": "", "domain": "SEALED_OUTCOME_OR_FUTURE", "old_or_new": "2025_CONTRACT" if in25 else "NEW_2026",
-                             "semantic_status": sealed[c], "timing_status": "SEALED", "availability_status": "", "missingness": "", "prevalence_or_distribution": "",
-                             "eligibility": I_LEAKAGE, "exclusion_reason": f"outcome / follow-up / future column ({sealed[c]}): never read into X",
-                             "provenance": "x_sealing", "notes": ""})
-            continue
-        if in25:
-            continue          # a 2025 contract column outside the Phase 3 universe: documented in the Phase 2/3 dispositions (not a V21 addition)
-        s = fe[c].astype("string") if c in fe.columns else pd.Series(pd.NA, index=fe.index, dtype="string")
-        num = pd.to_numeric(s.str.strip(), errors="coerce")
-        nn = int(s.notna().sum())
-        small = 0 < nn < 10 or 0 < n - nn < 10
-        prof = {"missing_pct": (round(100.0 * float(s.isna().mean()), 2) if not small else "suppressed") if n else None,
-                "numeric_share": round(float(num.notna().sum() / max(1, nn)), 3) if not small else "suppressed",
-                "n_distinct": int(s.nunique(dropna=True)) if not small else "suppressed"}
-        amb = next((k for k, v in ambiguous.items() if c in v), "")
-        why = (f"ambiguous match for the V21 entry {amb} ({ambiguous[amb]})" if amb else "not in the pre-declared V21 catalogue: semantics not verified")
-        und.append({"column": c, "suggested_domain": _suggest_domain(c), **prof, "reason": why})
-        cat_rows.append({"raw_column": c, "engineered_feature": "", "domain": _suggest_domain(c), "old_or_new": "NEW_2026", "semantic_status": "UNDECLARED",
-                         "timing_status": "NOT_ASSESSED", "availability_status": "UNKNOWN", "missingness": f"{prof['missing_pct']}%",
-                         "prevalence_or_distribution": "suppressed" if small else (f"{prof['n_distinct']} distinct values" if prof["n_distinct"] >= 10
-                                                                                   else "fewer than 10 distinct values"), "eligibility": I_SEMANTICS,
-                         "exclusion_reason": why, "provenance": "2026 column outside the 2025 contract", "notes": "never a predictor in this run"})
-    for fcol, c25 in v21_old.items():
-        cat_rows.append({"raw_column": c25, "engineered_feature": "", "domain": "OLD", "old_or_new": "OLD_2025_CONTRACT", "semantic_status": "2025 contract column",
-                         "timing_status": "Phase 3 rules", "availability_status": "", "missingness": "", "prevalence_or_distribution": "",
-                         "eligibility": "SEE_FEATURE_ELIGIBILITY" if c25 in universe_cols else "OUTSIDE_PHASE3_UNIVERSE",
-                         "exclusion_reason": "" if c25 in universe_cols else "2025 column represented by another Phase 3 feature or not a predictor role",
-                         "provenance": f"V21 catalogue entry {fcol} is a 2025 column: OLD, not new", "notes": "the brief listed it as new; it belongs to the Phase 3 universe"})
-    return vals, reg, pd.DataFrame(cat_rows), pd.DataFrame(und, columns=["column", "suggested_domain", "missing_pct", "numeric_share", "n_distinct", "reason"])
+        meta["timing_basis"] = tbasis
+        reg.append({"feature": name, "raw_columns": col, "origin": "NEW_V21", "domain": p.domain, "kind": p.kind, "v21_class": diff.classes[col],
+                    "class": klass, "reason": reason, "availability_risk": risk, "availability_assumption": assumption,
+                    "n_unknown_cells": int((unknown | unreadable).sum()), "phase3_class": "", "new_provenance": p.provenance,
+                    "provenance": f"V21 schema {col}: {p.definition}" + (f" (replaces V1 {p.replaces})" if diff.classes[col] == RENAMED else "")
+                    + f"; timing {tbasis}", "_meta": meta})
+    return vals, reg
 
 
-def _suggest_domain(c: str) -> str:
-    s = c.lower()
-    for key, dom in (("mefi", "NEW_FRAILTY_MEFI"), ("frail", "NEW_FRAILTY_MEFI"), ("registry", "NEW_REGISTRY"), ("dx", "NEW_DIAGNOSIS"),
-                     ("diag", "NEW_DIAGNOSIS"), ("purchas", "NEW_MEDICATION_SAFE"), ("drug", "NEW_MEDICATION_SAFE"), ("med", "NEW_MEDICATION_SAFE"),
-                     ("visit", "NEW_UTILISATION_SAFE"), ("admis", "NEW_UTILISATION_SAFE"), ("cogn", "NEW_COGNITION"), ("gait", "NEW_FUNCTION_MOBILITY"),
-                     ("mobil", "NEW_FUNCTION_MOBILITY"), ("adl", "NEW_FUNCTION_MOBILITY")):
-        if key in s:
-            return dom
-    return "UNASSIGNED"
+def _catalogue(diff: SchemaDiff, reg: pd.DataFrame, schema: Any) -> pd.DataFrame:
+    """NEW_FEATURE_CATALOGUE: one row per extract column the V1 contract does not have (+ every removed V1 column, for completeness)."""
+    rows = []
+    byraw = {str(r["raw_columns"]): r for _, r in reg.iterrows() if r["origin"] == "NEW_V21"} if len(reg) else {}
+    for c, cls in diff.classes.items():
+        if bool(diff.table.loc[diff.table["column"] == c, "in_v1_contract"].iloc[0]):
+            continue
+        p = schema.predictors.get(c)
+        r = byraw.get(c)
+        e = (schema.columns.get(c) or {}).get("new") or {}
+        rows.append({"raw_column": c, "v21_class": cls, "engineered_feature": r["feature"] if r is not None else "", "domain": p.domain if p else "",
+                     "old_or_new": "NEW_V21" if cls != RENAMED else f"RENAMED_FROM_V1 {p.replaces}",
+                     "semantic_status": (f"DEFINED BY THE V21 SCHEMA ({p.provenance})" if p else (e.get("reason") or diff.reasons[c])),
+                     "timing_status": (r["class"] if r is not None else ("SEALED" if cls in (FORBIDDEN, IDENT) else "NOT_A_PREDICTOR")),
+                     "availability_status": f"{r['availability_risk']}: {r['availability_assumption']}" if r is not None else "",
+                     "missingness": (f"{r['missing_pct']}%" if r is not None and pd.notna(r["missing_pct"]) else ""),
+                     "prevalence_or_distribution": r["prevalence_or_median"] if r is not None else "",
+                     "eligibility": r["class"] if r is not None else cls,
+                     "in_OLD_PLUS_ALL_NEW_ELIGIBLE": bool(r["in_OLD_PLUS_ALL_NEW_ELIGIBLE"]) if r is not None else False,
+                     "in_OLD_PLUS_NEW_SAFE": bool(r["in_OLD_PLUS_NEW_SAFE"]) if r is not None else False,
+                     "inclusion_or_exclusion_reason": r["set_reason"] if r is not None else diff.reasons[c],
+                     "provenance": r["provenance"] if r is not None else "V21 schema", "v21_definition_he": schema.meaning_he.get(c, ""),
+                     "notes": p.text if p else ""})
+    for _, r in diff.removed.iterrows():
+        rows.append({"raw_column": r["column"], "v21_class": "REMOVED_IN_V21", "engineered_feature": "", "domain": "", "old_or_new": "V1_ONLY",
+                     "semantic_status": r["v1_meaning"], "timing_status": "", "availability_status": "", "missingness": "", "prevalence_or_distribution": "",
+                     "eligibility": "NOT_IN_EXTRACT", "in_OLD_PLUS_ALL_NEW_ELIGIBLE": False, "in_OLD_PLUS_NEW_SAFE": False,
+                     "inclusion_or_exclusion_reason": r["consequence"], "provenance": "V1 contract", "v21_definition_he": "", "notes": ""})
+    return pd.DataFrame(rows)
+
+
+def _undeclared(diff: SchemaDiff) -> pd.DataFrame:
+    rows = []
+    for c in diff.unresolved:
+        rows.append({"column": c, "class": REVIEW, "reason": diff.reasons[c]})
+    return pd.DataFrame(rows, columns=["column", "class", "reason"])
 
 
 def _dist_text(x: np.ndarray, kind: str) -> str:
@@ -635,18 +627,19 @@ def _dist_text(x: np.ndarray, kind: str) -> str:
         if 0 < k < 10 or 0 < len(obs) - k < 10:
             return "suppressed (a cell < 10)"
         return f"{100 * float((obs == 1).mean()):.1f}% = 1 among observed"
+    if kind == "categorical":
+        return f"{len(np.unique(obs))} distinct codes"
     q = np.percentile(obs, [25, 50, 75])
     return f"median {q[1]:g} (IQR {q[0]:g}-{q[2]:g})"
 
 
 def _outcome_extra(o: pd.DataFrame, oc: dict[str, Any], idx: pd.Timestamp) -> dict[str, Any]:
-    """Aggregate audit items of brief §E not covered by O1-O7: events on/before the index day among all labels, beyond the nominal horizon,
-    class balance."""
+    """Aggregate audit items not covered by O1-O7: events on/before the index day among all labels, beyond the nominal horizon, class balance."""
     y = pd.to_numeric(o[oc["label_column"]], errors="coerce")
     ev = o[oc["event_date_column"]].dt.normalize() if oc["event_date_column"] in o else pd.Series(pd.NaT, index=o.index)
     dte = (ev - idx).dt.days
     n = int(y.isin([0, 1]).sum())
-    return {"labelled_rows": n, "events": int((y == 1).sum()), "non_events": int((y == 0).sum()),
+    return {"labelled_rows": n, "events": int((y == 1).sum()), "non_events": int((y == 0).sum()), "censored_or_unlabelled": int((~y.isin([0, 1])).sum()),
             "event_dates_on_or_before_index_any_label": int((dte <= 0).fillna(False).sum()),
             "event_dates_beyond_nominal_horizon_any_label": int((dte > int(oc["window_days"])).fillna(False).sum()),
             "prevalence": float((y == 1).sum() / n) if n else None}

@@ -1,10 +1,12 @@
 """``falls_ml meuhedet-phase5``: one resumable overnight command.
 
-    PREFLIGHT   schema, X sealing, cohort, V21 definition, the 2026 outcome contract, feature eligibility, feature sets, the fixed fold
-                assignment -> preflight/ (aggregate) and work/ (local, row-level) + the frozen PLAN.json; ends with SAFE TO MODEL or STOP
-    PRIMARY     nested CV: 3 families x {OLD, OLD_PLUS_NEW_SAFE, the two sensitivity sets} x outer folds   (then an INTERIM report)
-    FINAL       each family tuned on every patient for OLD and OLD_PLUS_NEW_SAFE (development models for coefficients / stability)
-    DOMAIN      OLD + each new domain;   ABLATION   OLD_PLUS_NEW_SAFE minus each pre-declared block
+    PREFLIGHT   the exact V1 -> V21 schema diff, X sealing, cohort, the 2026 outcome contract, feature eligibility, the three feature sets, the
+                fixed fold assignment -> preflight/ (aggregate) and work/ (local, row-level) + the frozen PLAN.json; ends with SAFE TO MODEL or
+                STOP - REVIEW REQUIRED. On real data the preflight is run ALONE first (--preflight-only): the modelling command refuses a folder
+                without a SAFE preflight, and --preflight-only never fits anything
+    PRIMARY     nested CV: 3 families x {OLD, OLD_PLUS_ALL_NEW_ELIGIBLE, OLD_PLUS_NEW_SAFE} x outer folds   (then an INTERIM report)
+    FINAL       each family tuned on every patient for OLD and OLD_PLUS_ALL_NEW_ELIGIBLE (development models for coefficients / stability)
+    DOMAIN      OLD + each new domain (all families);   ABLATION   OLD_PLUS_ALL_NEW_ELIGIBLE minus each pre-declared block (ENET, the primary family)
     EXPLAIN     permutation importance (+ XGBoost SHAP) of the outer-fold models;   STABILITY   bootstrap refits of the final process
     REPORT      aggregate-only share/ (management + scientific summaries, tables, figures, privacy scan)
 
@@ -31,13 +33,13 @@ from falls_ml.artifacts import utc_now
 from falls_ml.phase2 import durable as D
 from falls_ml.phase2.state import Phase2Stop
 from falls_ml.phase5 import DESIGN_LABEL, PHASE5_VERSION
-from falls_ml.phase5.config import FAMILIES, SET_LOWRISK, SET_NEW, SET_OLD, SET_VERIFIED, load_phase5_config
+from falls_ml.phase5.config import FAMILIES, PRIMARY_FAMILY, SET_ALL, SET_OLD, SET_SAFE, load_phase5_config
 from falls_ml.phase5.engine import Ctx, UnitSpec, is_complete, outer_folds, run_unit
 from falls_ml.phase5.models import DeviceState
 
 PLAN = "PLAN.json"
 SAFE_LINE = "SAFE TO MODEL"
-STOP_LINE = "STOP - 2026 REDEVELOPMENT NOT DEFENSIBLE"
+STOP_LINE = "STOP - REVIEW REQUIRED"
 STAGE_ORDER = ("PREFLIGHT", "PRIMARY", "INTERIM_REPORT", "FINAL", "DOMAIN", "ABLATION", "EXPLAIN", "STABILITY", "REPORT")
 EARLIER_PHASE_MARKERS = ("PHASE2_PLAN.json", "PHASE3_PLAN.json", "PHASE4_PLAN.json")
 
@@ -185,33 +187,39 @@ def code_sha() -> str:
 
 
 def build_sets(reg: pd.DataFrame, meta: dict[str, Any], cfg: Any) -> dict[str, Any]:
-    el = cfg["eligibility"]
-    prim, ver, low = set(el["primary_classes"]), set(el["verified_only_classes"]), set(el["low_availability_risk_levels"])
+    """OLD / OLD_PLUS_ALL_NEW_ELIGIBLE / OLD_PLUS_NEW_SAFE from the registry's set membership (every inclusion / exclusion carries its reason there),
+    the OLD + domain sets and the ablations of OLD_PLUS_ALL_NEW_ELIGIBLE. Identical sets share one canonical name (fitted once)."""
     r = reg[reg["feature"].isin(meta)]
-    old = [f for f in r.loc[(r["origin"] == "OLD_PHASE3_UNIVERSE") & r["class"].isin(prim), "feature"]]
-    newr = r[(r["origin"] == "NEW_V21") & r["class"].isin(prim)]
-    new_safe = list(newr["feature"])
-    new_ver = list(newr.loc[newr["class"].isin(ver), "feature"])
-    new_low = list(newr.loc[newr["availability_risk"].isin(low), "feature"])
-    sets: dict[str, list[str]] = {SET_OLD: old, SET_NEW: old + new_safe, SET_VERIFIED: old + new_ver, SET_LOWRISK: old + new_low}
-    kinds = {SET_OLD: "PRIMARY", SET_NEW: "PRIMARY", SET_VERIFIED: "SENSITIVITY", SET_LOWRISK: "SENSITIVITY"}
+    b = lambda s: s.astype(str).str.lower().isin(["true", "1"])  # noqa: E731  (robust to a CSV round trip)
+    old = list(r.loc[(r["origin"] == "OLD_PHASE3_UNIVERSE") & b(r["in_OLD"]), "feature"])
+    nw = r[r["origin"] == "NEW_V21"]
+    all_new = list(nw.loc[b(nw["in_OLD_PLUS_ALL_NEW_ELIGIBLE"]), "feature"])
+    safe_new = list(nw.loc[b(nw["in_OLD_PLUS_NEW_SAFE"]), "feature"])
+    sets: dict[str, list[str]] = {SET_OLD: old, SET_ALL: old + all_new, SET_SAFE: old + safe_new}
+    kinds = {SET_OLD: "PRIMARY", SET_ALL: "PRIMARY", SET_SAFE: "PRIMARY"}
     domains, ablations = {}, {}
     for dom in cfg["domains"]:
-        add = list(newr.loc[newr["domain"] == dom, "feature"])
+        add = [f for f in all_new if meta[f]["domain"] == dom]
         domains[dom] = {"name": f"OLD_PLUS_{dom}", "added": add}
         if add:
             sets[f"OLD_PLUS_{dom}"] = old + add
             kinds[f"OLD_PLUS_{dom}"] = "DOMAIN"
-    for ab, spec in cfg["ablations"].items():
+    ab = cfg["ablations"]
+    specs: dict[str, set[str]] = {}
+    if ab.get("remove_each_domain"):
+        for dom in cfg["domains"]:
+            specs[f"NO_{dom}"] = {f for f in all_new if meta[f]["domain"] == dom}
+    klass = dict(zip(r["feature"], r["class"]))
+    for name, spec in (ab.get("blocks") or {}).items():
         drop = set(spec.get("features") or [])
-        drop |= {f for f in sets[SET_NEW] if meta[f]["domain"] in set(spec.get("domains") or [])}
-        if spec.get("process_flag"):
-            drop |= {f for f in sets[SET_NEW] if meta[f].get("process")}
-        removed = [f for f in sets[SET_NEW] if f in drop]
-        ablations[ab] = {"name": f"{SET_NEW}__{ab}", "removed": removed}
+        drop |= {f for f in all_new if klass.get(f) in set(spec.get("classes") or [])}
+        specs[name] = drop
+    for name, drop in specs.items():
+        removed = [f for f in sets[SET_ALL] if f in drop]
+        ablations[name] = {"name": f"{SET_ALL}__{name}", "removed": removed}
         if removed:
-            sets[f"{SET_NEW}__{ab}"] = [f for f in sets[SET_NEW] if f not in drop]
-            kinds[f"{SET_NEW}__{ab}"] = "ABLATION"
+            sets[f"{SET_ALL}__{name}"] = [f for f in sets[SET_ALL] if f not in drop]
+            kinds[f"{SET_ALL}__{name}"] = "ABLATION"
     canon: dict[tuple[str, ...], str] = {}
     alias: dict[str, str] = {}
     for name, feats in sets.items():
@@ -221,16 +229,19 @@ def build_sets(reg: pd.DataFrame, meta: dict[str, Any], cfg: Any) -> dict[str, A
         else:
             canon[key] = name
             alias[name] = name
-    return {"sets": sets, "kinds": kinds, "alias": alias, "domains": domains, "ablations": ablations,
-            "n_new_safe": len(new_safe), "n_new_verified": len(new_ver), "n_new_lowrisk": len(new_low), "n_old": len(old)}
+    return {"sets": sets, "kinds": kinds, "alias": alias, "domains": domains, "ablations": ablations, "n_old": len(old), "n_all_new": len(all_new),
+            "n_new_safe": len(safe_new), "primary_family": cfg["primary_family"], "domain_families": list(cfg["domain_families"]),
+            "ablation_families": list(ab.get("families") or [])}
 
 
 def x_guard(sets: dict[str, list[str]], reg: pd.DataFrame, kinds: dict[str, str], sealed: dict[str, str], frame_cols: list[str], cfg: Any) -> None:
-    """HARD STOP if anything outcome / future / ineligible could reach X (checked at the preflight and again before every resumed run)."""
+    """HARD STOP if anything outcome / future / identifier / ineligible could reach X (checked at the preflight and again before every resumed run)."""
     el = cfg["eligibility"]
-    prim, ver, low = set(el["primary_classes"]), set(el["verified_only_classes"]), set(el["low_availability_risk_levels"])
+    safe, alln, prov = set(el["safe_classes"]), set(el["all_new_classes"]), set(el["safe_provenance"])
     info = reg.set_index("feature")
-    bad = [c for c in frame_cols if c in sealed]
+    bad = [f"analysis frame holds the sealed column {c}" for c in frame_cols if c in sealed]
+    tf = lambda v: str(v).lower() in ("true", "1")  # noqa: E731
+    old = set(sets.get(SET_OLD, []))
     for name, feats in sets.items():
         for f in feats:
             if f not in info.index:
@@ -239,17 +250,21 @@ def x_guard(sets: dict[str, list[str]], reg: pd.DataFrame, kinds: dict[str, str]
             r = info.loc[f]
             raw = [c.strip() for c in str(r["raw_columns"]).split(";") if c.strip()]
             if any(c in sealed for c in raw):
-                bad.append(f"{name}: {f} reads a sealed outcome / future column")
-            if r["class"] not in prim:
-                bad.append(f"{name}: {f} has class {r['class']} (only {sorted(prim)} may enter X)")
-            if r["origin"] == "NEW_V21" and name == SET_VERIFIED and r["class"] not in ver:
-                bad.append(f"{name}: {f} is not {sorted(ver)}")
-            if r["origin"] == "NEW_V21" and name == SET_LOWRISK and r["availability_risk"] not in low:
-                bad.append(f"{name}: {f} has availability risk {r['availability_risk']}")
-            if r["origin"] == "NEW_V21" and name == SET_OLD:
+                bad.append(f"{name}: {f} reads a sealed outcome / future / identifier column")
+            if r["origin"] == "OLD_PHASE3_UNIVERSE":
+                if r["class"] not in safe or not tf(r["in_OLD"]):
+                    bad.append(f"{name}: OLD feature {f} has class {r['class']} (only {sorted(safe)} may enter X)")
+                continue
+            if name == SET_OLD:
                 bad.append(f"{name}: the OLD set holds the new feature {f}")
+            if r["class"] not in alln or not tf(r["in_OLD_PLUS_ALL_NEW_ELIGIBLE"]):
+                bad.append(f"{name}: {f} has class {r['class']} / is not ALL_NEW eligible")
+            if name == SET_SAFE and (r["class"] not in safe or str(r.get("new_provenance", "")) not in prov or not tf(r["in_OLD_PLUS_NEW_SAFE"])):
+                bad.append(f"{name}: {f} ({r['class']}, provenance {r.get('new_provenance')}) is not NEW_SAFE")
+        if name != SET_OLD and not old <= set(feats) and kinds.get(name) != "ABLATION":
+            bad.append(f"{name}: does not contain the whole OLD set")
     if bad:
-        raise Phase2Stop("X_LEAKAGE", "an outcome / future / ineligible field would enter X: modelling refused", bad[:30])
+        raise Phase2Stop("X_LEAKAGE", "an outcome / future / identifier / ineligible field would enter X: modelling refused", bad[:30])
 
 
 # ============================================================================ preflight
@@ -265,7 +280,7 @@ def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monito
     for k in ("preflight", "work"):
         d[k].mkdir(parents=True, exist_ok=True)
     mon.update(status="RUNNING", stage="PREFLIGHT")
-    mon.log(f"PREFLIGHT: reading {src.name} (X and outcome separately; outcome / future columns never enter X)")
+    mon.log(f"PREFLIGHT: reading {src.name} (exact V1 -> V21 schema diff; X and outcome read separately; outcome / future columns never enter X)")
     ident = input_identity(src)
     P = prepare(src, cfg, L, input_info=ident)
     res: dict[str, Any] = {"safe": P.safe, "checks": P.checks, "facts": P.facts, "input": {"name": ident["name"], "sha256": ident["sha256"], "bytes": ident["bytes"]}}
@@ -274,14 +289,14 @@ def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monito
         sets_info = build_sets(P.registry, P.meta, cfg)
         try:
             x_guard(sets_info["sets"], P.registry, sets_info["kinds"], P.sealed, list(P.frame.columns), cfg)
-            P.add("P8", "X guard: no outcome / future / ineligible field in any feature set (HARD)", "OK",
-                  [f"{len(sets_info['sets'])} feature sets checked; OLD {sets_info['n_old']} features; new eligible: {sets_info['n_new_safe']} "
-                   f"(verified-only {sets_info['n_new_verified']}, low availability risk {sets_info['n_new_lowrisk']})"])
+            P.add("P8", "X guard: no outcome / future / identifier / ineligible field in any feature set (HARD)", "OK",
+                  [f"{len(sets_info['sets'])} feature sets checked; OLD {sets_info['n_old']} features; +{sets_info['n_all_new']} new in "
+                   f"{SET_ALL}; +{sets_info['n_new_safe']} new in {SET_SAFE}"])
         except Phase2Stop as exc:
-            P.add("P8", "X guard: no outcome / future / ineligible field in any feature set (HARD)", "STOP", exc.details)
-        if P.safe and sets_info["n_new_safe"] == 0:
-            P.add("P9", "eligible new V21 predictors", "WARN", ["no new V21 predictor is eligible: OLD_PLUS_NEW_SAFE = OLD; the run reports "
-                                                                "NO ELIGIBLE NEW FEATURES (see NEW_FEATURE_CATALOGUE.csv / V21_UNDECLARED_COLUMNS.csv)"])
+            P.add("P8", "X guard: no outcome / future / identifier / ineligible field in any feature set (HARD)", "STOP", exc.details)
+        if P.safe and sets_info["n_all_new"] == 0:
+            P.add("P9", "eligible new V21 predictors", "WARN", [f"no new V21 predictor is eligible: {SET_ALL} = OLD; the run reports NO ELIGIBLE NEW "
+                                                                "FEATURES (see NEW_FEATURE_CATALOGUE.csv / FEATURE_ELIGIBILITY.csv)"])
     res["safe"], res["checks"] = P.safe, P.checks
     _write_preflight(out, P, res, sets_info, cfg)
     if not P.safe:
@@ -297,15 +312,36 @@ def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monito
     D.write_csv(d["work"] / "REGISTRY.csv", P.registry)
     D.write_json(d["work"] / "SEALED.json", P.sealed)
     plan = {"phase5_version": PHASE5_VERSION, "synthetic": bool(synthetic), "falls_ml_version": __import__("falls_ml").__version__, "design": DESIGN_LABEL, "mode": cfg.mode,
-            "config_sha256": cfg.sha256, "config_path": Path(cfg.path).name, "v21_catalogue_sha256": cfg.v21.sha256, "overrides": cfg.overrides,
+            "config_sha256": cfg.sha256, "config_path": Path(cfg.path).name, "v21_schema_sha256": cfg.schema.sha256,
+            "v21_definition_sha256": cfg.schema.definition_sha256, "overrides": cfg.overrides,
             "phase3_definitions": {"catalogue_sha256": L["cat"].sha256, "contract_sha256": L["contract"].content_sha256, "mapping_sha256": L["mapping"].content_sha256},
             "input": res["input"], "code_sha256": code_sha(), "seed": int(cfg["seed"]), "created_at": utc_now(), "n": int(len(y)), "events": int(y.sum()),
             "cv": {"outer_folds": cfg.outer_folds, "inner_folds": cfg.inner_folds}, "families": list(FAMILIES),
+            "schema_counts": P.facts.get("schema", {}), "new_predictors": P.facts.get("new_predictors", {}),
             "frame_sha256": D.sha256_file(d["work"] / "ANALYSIS_FRAME.parquet"), "folds_sha256": D.sha256_file(d["work"] / "FOLDS.parquet"),
             "fold_sizes": {str(k): int((folds == k).sum()) for k in range(cfg.outer_folds)},
             "fold_events": {str(k): int(y[folds == k].sum()) for k in range(cfg.outer_folds)}, **{k: v for k, v in sets_info.items()}}
     D.write_json(d["work"] / PLAN, plan)
     return res
+
+
+def _x_use(P: Any, sets_info: dict[str, Any]) -> dict[str, str]:
+    """extract column -> how it is used in X (the features that read it and their sets), or why it never enters X."""
+    out: dict[str, str] = {}
+    reg = P.registry
+    if not len(reg):
+        return out
+    mem: dict[str, list[str]] = {}
+    for name, feats in sets_info.get("sets", {}).items():
+        if sets_info.get("kinds", {}).get(name) == "PRIMARY":
+            for f in feats:
+                mem.setdefault(f, []).append(name)
+    for _, r in reg.iterrows():
+        for c in [c.strip() for c in str(r["raw_columns"]).split(";") if c.strip()]:
+            s = mem.get(r["feature"], [])
+            out.setdefault(c, "")
+            out[c] += ("; " if out[c] else "") + f"{r['feature']} ({r['class']}: {', '.join(s) if s else 'in no feature set'})"
+    return out
 
 
 def _write_preflight(out: Path, P: Any, res: dict[str, Any], sets_info: dict[str, Any], cfg: Any) -> None:
@@ -316,11 +352,27 @@ def _write_preflight(out: Path, P: Any, res: dict[str, Any], sets_info: dict[str
     D.write_json(d / "PREFLIGHT_RESULT.json", suppress_obj({**res, "verdict": verdict}))
     if P.outcome:
         D.write_json(d / "OUTCOME_CONTRACT_2026.json", suppress_obj(P.outcome))
-    cf = {"index_date": cfg["index_date"], "design": DESIGN_LABEL, **P.facts.get("cohort", {}), "usable": P.facts.get("usable", {}),
-          "definition_version": P.facts.get("definition_version", {}), "sealed_columns_count": P.facts.get("sealed", {}).get("n_sealed"),
-          "sealed_by_reason": P.facts.get("sealed", {}).get("by_reason", {}), "v3_attestation": P.facts.get("v3_attestation", {}),
-          "outcome_extra_audit": (P.outcome or {}).get("extra_audit", {})}
+    np_ = P.facts.get("new_predictors", {})
+    cf = {"index_date": cfg["index_date"], "prediction_point": "end of the index day (outcome strictly after 2026-01-01)", "design": DESIGN_LABEL,
+          **P.facts.get("cohort", {}), "usable": P.facts.get("usable", {}), "schema": P.facts.get("schema", {}),
+          "new_predictors": {k: v for k, v in np_.items() if k in ("genuine_new_predictors", "all_new_eligible", "new_safe")},
+          "sealed_columns_count": P.facts.get("sealed", {}).get("n_sealed"), "sealed_by_reason": P.facts.get("sealed", {}).get("by_reason", {}),
+          "v3_attestation": P.facts.get("v3_attestation", {}), "outcome_extra_audit": (P.outcome or {}).get("extra_audit", {})}
     D.write_json(d / "COHORT_FACTS_2026.json", suppress_obj(cf))
+    if P.diff is not None:
+        cl = P.diff.classification.copy()
+        xu = _x_use(P, sets_info)
+        tc = set(P.facts.get("timing_check_columns", []))
+        xu = {**{c: "TIMING CHECK ONLY: record date used to verify that no source record is after the index day; never a predictor value"
+                 for c in tc}, **xu}
+        cl["x_use"] = cl["column"].map(lambda c: xu.get(c) or ("NOT_IN_X: " + P.diff.reasons[c] if P.diff.classes[c] not in ("OLD_UNCHANGED",
+                                                                "OLD_CHANGED_DEFINITION") else ("NOT_IN_X: V1 column outside the Phase 3 feature universe "
+                                                                "(Phase 2 / 3 disposition)" if len(P.registry) else "not assessed (preflight stopped)")))
+        cl["sealed_from_x"] = cl["column"].map(lambda c: P.sealed.get(c, ""))
+        D.write_csv(d / "ALL_V21_COLUMN_CLASSIFICATION.csv", cl)
+        D.write_csv(d / "SCHEMA_DIFF_V1_V21.csv", P.diff.table)
+        D.write_csv(d / "REMOVED_V1_COLUMNS.csv", P.diff.removed)
+        D.write_csv(d / "RENAMED_OR_CHANGED_COLUMNS.csv", P.diff.renamed_changed)
     if len(P.registry):
         reg = P.registry.copy()
         mem = {f: [] for f in reg["feature"]}
@@ -333,19 +385,37 @@ def _write_preflight(out: Path, P: Any, res: dict[str, Any], sets_info: dict[str
         D.write_csv(d / "FEATURE_ELIGIBILITY.csv", reg)
     if len(P.catalogue):
         D.write_csv(d / "NEW_FEATURE_CATALOGUE.csv", P.catalogue)
-    D.write_csv(d / "V21_UNDECLARED_COLUMNS.csv", P.undeclared if len(P.undeclared) else
-                pd.DataFrame(columns=["column", "suggested_domain", "missing_pct", "numeric_share", "n_distinct", "reason"]))
+    D.write_csv(d / "V21_UNDECLARED_COLUMNS.csv", P.undeclared if len(P.undeclared) else pd.DataFrame(columns=["column", "class", "reason"]))
     if sets_info:
         D.write_json(d / "FEATURE_SETS.json", {"sets": {k: {"n_features": len(v), "kind": sets_info["kinds"].get(k), "alias_of": sets_info["alias"].get(k),
                                                             "features": v} for k, v in sets_info["sets"].items()},
-                                               "domains": sets_info["domains"], "ablations": sets_info["ablations"]})
-    lines = [f"# Phase 5 preflight - {DESIGN_LABEL}", "", f"Input: `{res['input']['name']}` (sha256 {res['input']['sha256'][:16]}…)", "",
-             "| check | status | details |", "|---|---|---|"]
+                                               "domains": sets_info["domains"], "ablations": sets_info["ablations"],
+                                               "primary_comparison": [SET_OLD, SET_ALL], "secondary_comparison": [SET_OLD, SET_SAFE],
+                                               "primary_family": cfg["primary_family"]})
+    sc = P.facts.get("schema", {})
+    lines = [f"# Phase 5 preflight - {DESIGN_LABEL}", "", f"Input: `{res['input']['name']}` (sha256 {res['input']['sha256'][:16]}…)", ""]
+    if sc:
+        nw = P.registry[P.registry["origin"] == "NEW_V21"] if len(P.registry) else pd.DataFrame()
+        tf = (lambda s: s.astype(str).str.lower().isin(["true", "1"])) if len(nw) else None
+        lines += ["## V1 -> V21 schema (exact, programmatic)", "", "| item | count |", "|---|---|",
+                  f"| total V1 columns (contract) | {sc.get('v1_columns')} |", f"| total V21 columns (this extract) | {sc.get('extract_columns')} "
+                  f"(authoritative {sc.get('v21_authoritative_columns')}; header {'identical' if sc.get('header_matches_authoritative_v21') else 'DIFFERENT'}) |",
+                  f"| unchanged columns | {sc.get('unchanged_columns')} |", f"| removed V1 columns | {sc.get('removed_v1_columns')} |",
+                  f"| new columns | {sc.get('new_columns')} |", f"| changed definition / renamed or replaced | {sc.get('changed_definition')} / {sc.get('renamed_or_replaced')} |",
+                  f"| genuine new predictors (NEW_CANDIDATE + RENAMED) | {len(nw) if len(nw) else sc.get('new_candidate_predictors', 0) + sc.get('renamed_or_replaced', 0)} |",
+                  f"| eligible new predictors: {SET_ALL} / {SET_SAFE} | {int(tf(nw['in_OLD_PLUS_ALL_NEW_ELIGIBLE']).sum()) if len(nw) else '—'} / "
+                  f"{int(tf(nw['in_OLD_PLUS_NEW_SAFE']).sum()) if len(nw) else '—'} |",
+                  f"| unsafe / excluded new predictors (not in {SET_ALL}) | {int((~tf(nw['in_OLD_PLUS_ALL_NEW_ELIGIBLE'])).sum()) if len(nw) else '—'} |",
+                  f"| unresolved fields (REQUIRES_SEMANTIC_REVIEW) | {sc.get('unresolved_requires_semantic_review')} |", ""]
+    lines += ["## Checks", "", "| check | status | details |", "|---|---|---|"]
     for c in P.checks:
         lines.append(f"| {c['id']} {c['title']} | **{c['status']}** | " + "<br>".join(str(x).replace("|", "/") for x in c["details"]) + " |")
-    lines += ["", "Outcome / future / follow-up columns are read only as the label and for the outcome-contract audit; they never enter X.",
-              "Feature classes: SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED (eligible under the Phase 3 rule) / INELIGIBLE_TIMING, _SEMANTICS, _DATA, "
-              "_LEAKAGE. See FEATURE_ELIGIBILITY.csv, NEW_FEATURE_CATALOGUE.csv, V21_UNDECLARED_COLUMNS.csv.", "", verdict, ""]
+    lines += ["", "Outcome / future / follow-up / identifier columns are read only as the label and for the outcome-contract audit; they never enter X.",
+              "Timing classes: SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING / INELIGIBLE_TIMING, _SEMANTICS, _DATA, _LEAKAGE. Files: "
+              "SCHEMA_DIFF_V1_V21.csv, ALL_V21_COLUMN_CLASSIFICATION.csv, REMOVED_V1_COLUMNS.csv, RENAMED_OR_CHANGED_COLUMNS.csv, NEW_FEATURE_CATALOGUE.csv, "
+              "FEATURE_ELIGIBILITY.csv, V21_UNDECLARED_COLUMNS.csv, OUTCOME_CONTRACT_2026.json, COHORT_FACTS_2026.json.",
+              "Nothing is fitted by --preflight-only. If the verdict below is SAFE TO MODEL, the overnight command can be started; if it is STOP, nothing "
+              "may be fitted until the reported items are reviewed.", "", verdict, ""]
     D.write_str(d / "PHASE5_PREFLIGHT.md", "\n".join(lines))
 
 
@@ -367,17 +437,17 @@ def plan_units(plan: dict[str, Any], cfg: Any) -> dict[str, list[UnitSpec]]:
     canon = [s for s in plan["sets"] if alias[s] == s]
     tun = cfg["derived_tuning"]
     out: dict[str, list[UnitSpec]] = {"PRIMARY": [], "FINAL": [], "DOMAIN": [], "ABLATION": []}
-    prim = [s for s in canon if kinds.get(s) in ("PRIMARY", "SENSITIVITY")]
-    for s in prim:
+    for s in [s for s in canon if kinds.get(s) == "PRIMARY"]:
         for fam in FAMILIES:
             for k in range(K):
                 out["PRIMARY"].append(UnitSpec(uid=f"PRIMARY|{fam}|{s}|outer{k}", stage="PRIMARY", family=fam, setname=s, outer=k))
     for fam in FAMILIES:
-        for s in dict.fromkeys([alias[SET_OLD], alias[SET_NEW]]):
+        for s in dict.fromkeys([alias[SET_OLD], alias[SET_ALL]]):
             out["FINAL"].append(UnitSpec(uid=f"FINAL|{fam}|{s}|all", stage="FINAL", family=fam, setname=s, outer=-1))
-    for stage, ref_set in (("DOMAIN", alias[SET_OLD]), ("ABLATION", alias[SET_NEW])):
+    for stage, ref_set, fams in (("DOMAIN", alias[SET_OLD], plan.get("domain_families", list(FAMILIES))),
+                                 ("ABLATION", alias[SET_ALL], plan.get("ablation_families", [PRIMARY_FAMILY]))):
         for s in [s for s in canon if kinds.get(s) == stage]:
-            for fam in FAMILIES:
+            for fam in [f for f in FAMILIES if f in fams]:
                 for k in range(K):
                     t = tun[fam]
                     out[stage].append(UnitSpec(uid=f"{stage}|{fam}|{s}|outer{k}", stage=stage, family=fam, setname=s, outer=k, tuning=t,
@@ -388,14 +458,17 @@ def plan_units(plan: dict[str, Any], cfg: Any) -> dict[str, list[UnitSpec]]:
 def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str = "overnight", device: str = "auto", jobs: int | None = None,
                resume: bool = False, preflight_only: bool = False, report_only: bool = False, accept_code_change: str | None = None,
                allow_synced_folder: bool = False, config_path: str | Path | None = None, overrides: dict[str, Any] | None = None,
-               v21_catalogue: str | Path | None = None, max_items: int | None = None, synthetic: bool = False) -> dict[str, Any]:
-    """Returns {"status": ..., "exit_code": ...}. ``max_items`` (tests only) stops after that many newly computed units / tasks."""
+               v21_schema: str | Path | None = None, max_items: int | None = None, synthetic: bool = False) -> dict[str, Any]:
+    """Returns {"status": ..., "exit_code": ...}. ``max_items`` (tests only) stops after that many newly computed units / tasks.
+
+    Real data: the first call on a folder must be ``preflight_only`` (nothing is fitted); a modelling call on a folder without a SAFE preflight plan
+    stops with PREFLIGHT_REQUIRED. A synthetic run (software test) may do both in one call."""
     from falls_ml.phase3.runner import load_all
     from falls_ml.phase5.resources import default_jobs, environment, limit_threads, resolve_device
 
     out = Path(out_dir)
     src = Path(input_path) if input_path else None
-    cfg = load_phase5_config(config_path or "configs/meuhedet/phase5.yaml", mode=mode, v21_catalogue=v21_catalogue, overrides=overrides)
+    cfg = load_phase5_config(config_path or "configs/meuhedet/phase5.yaml", mode=mode, v21_schema=v21_schema, overrides=overrides)
     guard_out(out, src, allow_synced_folder)
     out.mkdir(parents=True, exist_ok=True)
     d = dirs(out)
@@ -409,6 +482,10 @@ def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str 
         if not plan_path.is_file():
             if src is None:
                 raise Phase2Stop("NO_INPUT", "this folder has no Phase 5 plan yet: --input <2026 extract> is required")
+            if not (preflight_only or synthetic):
+                raise Phase2Stop("PREFLIGHT_REQUIRED", "the first action on real data is the preflight ALONE: run the same command with --preflight-only, "
+                                 "review preflight/PHASE5_PREFLIGHT.md (it must end with SAFE TO MODEL), then start the overnight run",
+                                 ["nothing was read or fitted by this call"])
             res = run_preflight(src, out, cfg, L, mon, synthetic=synthetic)
             line = SAFE_LINE if res["safe"] else STOP_LINE
             mon.log(f"PREFLIGHT finished: {line}")
@@ -471,8 +548,8 @@ def _verify_plan(plan: dict[str, Any], cfg: Any, src: Path | None, accept_code_c
     probs = []
     if plan["config_sha256"] != cfg.sha256:
         probs.append("configs/meuhedet/phase5.yaml (or the test overrides) differs from the settings frozen in the plan")
-    if plan.get("v21_catalogue_sha256") != cfg.v21.sha256:
-        probs.append("the V21 catalogue differs from the one frozen in the plan")
+    if plan.get("v21_schema_sha256") != cfg.schema.sha256 or plan.get("v21_definition_sha256") != cfg.schema.definition_sha256:
+        probs.append("the V21 schema / definition file differs from the one frozen in the plan")
     if plan["mode"] != cfg.mode:
         probs.append(f"the plan was made for --mode {plan['mode']}; this call asks for --mode {cfg.mode} (use a separate --out folder per mode)")
     if src is not None:
@@ -500,8 +577,8 @@ def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[Uni
     K = int(plan["cv"]["outer_folds"])
     computed = [0]
     alias = plan["alias"]
-    explain_tasks = [(fam, s) for fam in FAMILIES for s in dict.fromkeys([alias[SET_OLD], alias[SET_NEW]])]
-    stab_tasks = [(fam, alias[SET_NEW]) for fam in FAMILIES]
+    explain_tasks = [(fam, s) for fam in FAMILIES for s in dict.fromkeys([alias[SET_OLD], alias[SET_ALL]])]
+    stab_tasks = [(fam, alias[SET_ALL]) for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY])]
 
     def remaining() -> list[tuple[str, str]]:
         rem = [(u.stage, u.family) for st in ("PRIMARY", "FINAL", "DOMAIN", "ABLATION") for u in units[st] if not is_complete(ctx, u)]
@@ -570,7 +647,7 @@ def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[Uni
         refresh(status="PAUSED_TEST_LIMIT")
         return "PAUSED_TEST_LIMIT"
     if all(is_complete(ctx, u) for u in units["PRIMARY"]) and not (dirs(ctx.out)["work"] / "INTERIM_DONE").exists():
-        mon.log("INTERIM REPORT: the primary OLD vs OLD_PLUS_NEW_SAFE comparison is complete - writing share/ now (updated at the end)")
+        mon.log(f"INTERIM REPORT: the primary {SET_OLD} vs {SET_ALL} comparison ({PRIMARY_FAMILY} primary) is complete - writing share/ now (updated at the end)")
         refresh(stage="INTERIM_REPORT")
         build_reports(ctx, plan, cfg, src=src, interim=True, mon=mon)
         D.write_str(dirs(ctx.out)["work"] / "INTERIM_DONE", utc_now())

@@ -1,0 +1,346 @@
+# Phase 5 - the AUTHORITATIVE V21 / 2026 schema and its column-by-column review against the V1 contract (source of truth for the 2026 extract).
+# Generated from the review; every V21 column has exactly one entry. The loader verifies that the column list equals the header and the SELECT
+# list of the embedded definition file (sha256 below) and recomputes the V1 -> V21 diff programmatically from the V1 contract and the REAL
+# extract header at every preflight; this file only supplies the SEMANTIC conclusions (equivalence evidence, notes, new-column definitions).
+#   shared columns:  v1_equivalence DOCUMENTED_MATCH | CLARIFIED_NO_CONFLICT | CHANGED (+ note)
+#   new columns:     new.role PREDICTOR | METADATA_OR_ADMIN | IDENTIFIER | OUTCOME_OR_FUTURE_FORBIDDEN; a PREDICTOR declares domain, source, kind,
+#                    missing (no_event | not_assessed | unexpected), timing (record_date | attested | uncertain), provenance (DEFENSIBLE |
+#                    UNVALIDATED_CODES | PROBABLE_RENAME_OF_V1 | EXPERIMENTAL_COMPOSITE) and, for a renamed column, replaces: <V1 column>
+phase5_v21_schema:
+  version: 1.0.0
+  status: AUTHORITATIVE V21 SCHEMA (header + business definitions supplied by the user, 2026-10-04) + the Phase 5 column-by-column review against the V1 contract (configs/meuhedet/wide_v1_columns.yaml)
+    and data dictionary (wide_v1_data_dictionary.yaml). Written without any row of real data.
+  source_view: '[Meuhedet_DWH].[dbo].[V_Falls_Prediction_Wide_3] (definition V21; the definition file creates V_Falls_Prediction_Wide - the extracted object must implement the same definition)'
+  definition_file: configs/meuhedet/phase5_v21_view_definition.txt
+  definition_sha256: 7e2d87c8cdbe99627fcdfdd3db7fc4ea5b0825a1a30ebf7d317a853fb302b8aa
+  n_columns: 224
+  study: {study_start: '2022-01-01', index_date: '2026-01-01', study_end: '2026-08-01', history_window: date >= Index_Date - N and <= Index_Date (both ends inclusive), label_window: date > Index_Date and
+      <= Label_End (depends also on the source time of day)}
+  global_caveats: ['medication exposure is a proxy from prescription / purchase, not proof of intake; exposure starts at the prescription date; there is NO Last_Purchased_Date <= Index_Date filter', visit-row
+      counters update; billing / discharge information may leak from the future, Leakage_Check_Ind checks four dates only and does not rule out leakage, 'labels are not limited to the personal Followup_End_Date:
+      a positive can appear after the personal follow-up end; a negative requires full personal follow-up by the code, not full study coverage', fall / fracture = diagnosis records (code 888 or prefixes
+      820/821/813/812/808); repeated records may document follow-up of the same event, 'a diagnosis / registry flag 0 means no matching code was found, not proof of absence', registry flags use validity
+      dates without a STATUS filter]
+  equivalence_evidence: {DOCUMENTED_MATCH: the V1 contract / data dictionary DOCUMENTED the meaning and the V21 definition agrees with it, CLARIFIED_NO_CONFLICT: 'V1 had only a name-level (or unknown) meaning;
+      the V21 definition documents the computation and contradicts neither the V1 contract (type, allowed values, window, timing) nor a documented V1 meaning', CHANGED: 'the V21 definition is incompatible
+      with the V1 contract or redefines the quantity: OLD_CHANGED_DEFINITION'}
+  domains:
+    NEW_DIAGNOSIS: {label: new diagnosis-derived predictors (neurological / balance / bone), label_he: אבחנות חדשות (נוירולוגיה / שיווי משקל / עצם)}
+    NEW_VISION_HEARING: {label: new vision / hearing diagnoses, label_he: אבחנות ראייה / שמיעה חדשות}
+    NEW_REGISTRY: {label: new registry flags and sub-codes, label_he: רשמים חדשים}
+    NEW_REGISTRY_RELABELLED: {label: 'registry flags that replace a removed V1 registry column (probable rename, corrected meaning)', label_he: רשמים שהחליפו עמודת רשם של V1 (שינוי שם ומשמעות)}
+    NEW_FRAILTY_OR_RISK_PROXY: {label: experimental deficit-count proxy, label_he: מדד ליקויים ניסויי}
+  availability:
+    DIAGNOSES: {risk: MEDIUM, assumption: recorded at the visit; retrospective coding would move information after Index_Date (Phase 3 time contract)}
+    REGISTRIES: {risk: HIGH, assumption: memberships can be created after clinical review with an earlier start date (backdating) (Phase 3 time contract)}
+    COMPOSITE: {risk: HIGH, assumption: inherits the registry backdating risk and the unbounded medication purchase status}
+  bridges:
+    Prior_Fall_Missing_Ind: {value: 0, reason: 'removed in V21; it was only the VALIDATION input of the eFalls ''falls'' predictor (counted NULL -> 0 conversions, never part of the value). V21 has no fall-source-absence
+        state (COUNT = 0 without a record), so the indicator is 0 on every row and ''falls'' = Prior_Fall_Since_Study_Start_Ind exactly as in Phase 3'}
+  columns:
+    Customer_Full_ID: {pos: 1, v1_equivalence: DOCUMENTED_MATCH}
+    Index_Date: {pos: 2, v1_equivalence: DOCUMENTED_MATCH, note: 'V21: history windows include the index day, the label window starts strictly after it = the Phase 3 END-OF-INDEX-DAY contract (the V1 dictionary
+        said ''start of the day''; Phase 3 corrected it)'}
+    Snapshot_Key: {pos: 3, v1_equivalence: DOCUMENTED_MATCH, note: 'logical key, no uniqueness constraint in V21: uniqueness is checked on Customer_Full_ID'}
+    Observed_History_Days: {pos: 4, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Full_365D_Lookback: {pos: 5, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Full_30D_Label: {pos: 6, v1_equivalence: DOCUMENTED_MATCH}
+    Has_Full_180D_Label: {pos: 7, v1_equivalence: DOCUMENTED_MATCH}
+    Is_Eligible_Cohort: {pos: 8, v1_equivalence: DOCUMENTED_MATCH}
+    Exclusion_Reason: {pos: 9, v1_equivalence: DOCUMENTED_MATCH}
+    Population_Record_From_Date: {pos: 10, v1_equivalence: DOCUMENTED_MATCH}
+    Population_Record_To_Date: {pos: 11, v1_equivalence: DOCUMENTED_MATCH}
+    Population_Current_Ind: {pos: 12, v1_equivalence: DOCUMENTED_MATCH}
+    Obs_Window_Start: {pos: 13, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Label_End_30D: {pos: 14, v1_equivalence: DOCUMENTED_MATCH}
+    Label_End_180D: {pos: 15, v1_equivalence: DOCUMENTED_MATCH}
+    Age_At_Index: {pos: 16, v1_equivalence: DOCUMENTED_MATCH}
+    Age_Group: {pos: 17, v1_equivalence: DOCUMENTED_MATCH}
+    Birth_Date_Suspect_Ind: {pos: 18, v1_equivalence: DOCUMENTED_MATCH}
+    Gender_Code: {pos: 19, v1_equivalence: DOCUMENTED_MATCH}
+    Gender_Desc: {pos: 20, v1_equivalence: DOCUMENTED_MATCH}
+    Available_History_Days: {pos: 21, v1_equivalence: DOCUMENTED_MATCH}
+    Has_Minimum_History: {pos: 22, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    HMO_Seniority_Months: {pos: 23, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Followup_End_Date: {pos: 24, v1_equivalence: DOCUMENTED_MATCH, note: 'earliest post-index end candidate: derived death, cancellation, BTL leave, status end, abroad flag 1'}
+    Followup_End_Reason: {pos: 25, v1_equivalence: DOCUMENTED_MATCH}
+    Has_Full_Followup_30D: {pos: 26, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Full_Followup_180D: {pos: 27, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Is_Censored_30D: {pos: 28, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Is_Censored_180D: {pos: 29, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Leave_Join_Ind: {pos: 30, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Abroad_Ind: {pos: 31, v1_equivalence: DOCUMENTED_MATCH}
+    Prior_Fall_Count_30D: {pos: 32, v1_equivalence: DOCUMENTED_MATCH, note: 'V21: fall / fracture RECORDS (codes 888, 820/821/813/812/808), not distinct clinical events; may include follow-up records of
+        one event'}
+    Prior_Fall_Count_90D: {pos: 33, v1_equivalence: DOCUMENTED_MATCH, note: 'records, not events (may include follow-up records)'}
+    Prior_Fall_Count_180D: {pos: 34, v1_equivalence: DOCUMENTED_MATCH, note: 'records, not events (may include follow-up records)'}
+    Prior_Fall_Count_365D: {pos: 35, v1_equivalence: DOCUMENTED_MATCH, note: 'records, not events (may include follow-up records)'}
+    Prior_Fall_Since_Study_Start_Ind: {pos: 36, v1_equivalence: DOCUMENTED_MATCH}
+    Prior_Fall_Count_Since_Study_Start: {pos: 37, v1_equivalence: DOCUMENTED_MATCH, note: 'COUNT: 0 when no record (V21 never returns NULL; V1 declared NULL = no fall data)'}
+    Last_Fall_Date: {pos: 38, v1_equivalence: DOCUMENTED_MATCH, note: 'visit date of the latest fall record (may be a follow-up visit, not the event date)'}
+    Days_Since_Last_Fall: {pos: 39, v1_equivalence: DOCUMENTED_MATCH}
+    Last_Fall_Confidence: {pos: 40, v1_equivalence: DOCUMENTED_MATCH, note: textual MAX over all past records (not necessarily of the latest)}
+    Fall_On_Index_Date_Ind: {pos: 41, v1_equivalence: DOCUMENTED_MATCH, note: 'V21: latest fall record dated exactly on the index day; under the END-OF-INDEX-DAY contract this is history (already counted
+        in Prior_Fall_Count_30D); kept out of X as in V1 / Phase 3 and used by the outcome episode audit'}
+    Diagnosis_Source_Absent_Ind:
+      pos: 42
+      new: {role: METADATA_OR_ADMIN, reason: 'source-absence flag (1 = no filtered diagnosis since 2022-01-01 up to the index day), like the V1 QA_CONTROL flags Prior_Fall_Missing_Ind / Registry_Missing_Ind
+          / Medication_Missing_Ind; it equals the no-record state of Days_Since_Last_Diagnosis, which the OLD feature com_days_since_last_dx already carries (missing indicator) - not a clinical predictor'}
+    Diagnosis_Count_180D: {pos: 43, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Diagnosis_Count_365D: {pos: 44, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Distinct_Diagnosis_Codes_365D: {pos: 45, v1_equivalence: DOCUMENTED_MATCH}
+    Chronic_Diagnosis_Count_365D: {pos: 46, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Gait_Disorder_Since_Study_Start_Ind: {pos: 47, v1_equivalence: DOCUMENTED_MATCH}
+    Dizziness_Ind:
+      pos: 48
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefix
+          780.4 diagnosis record from 2022-01-01 up to the index day, else 0', text: dizziness diagnosis, text_he: אבחנת סחרחורת}
+    Gait_Abnormality_Ind:
+      pos: 49
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefix
+          781.2 (separate from 719.7) diagnosis record from 2022-01-01 up to the index day, else 0', text: abnormality of gait diagnosis, text_he: אבחנת חריגות הליכה}
+    Syncope_Ind:
+      pos: 50
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefix
+          780.2 diagnosis record from 2022-01-01 up to the index day, else 0', text: syncope diagnosis, text_he: אבחנת עילפון}
+    Tremor_Ind:
+      pos: 51
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefix
+          781.0 diagnosis record from 2022-01-01 up to the index day, else 0', text: tremor diagnosis, text_he: אבחנת רעד}
+    Cataract_Ind:
+      pos: 52
+      new: {role: PREDICTOR, domain: NEW_VISION_HEARING, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9
+          prefix 366 diagnosis record from 2022-01-01 up to the index day, else 0', text: cataract diagnosis, text_he: אבחנת קטרקט}
+    Hearing_Loss_Dx_Ind:
+      pos: 53
+      new: {role: PREDICTOR, domain: NEW_VISION_HEARING, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9
+          prefix 389 diagnosis record from 2022-01-01 up to the index day, else 0', text: hearing loss diagnosis, text_he: אבחנת ירידה בשמיעה}
+    Vision_Impairment_Dx_Ind:
+      pos: 54
+      new: {role: PREDICTOR, domain: NEW_VISION_HEARING, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9
+          prefixes 368 / 369 diagnosis record from 2022-01-01 up to the index day, else 0', text: visual disturbance / impairment diagnosis, text_he: אבחנת הפרעות / ליקויי ראייה}
+    Osteoporosis_Ind:
+      pos: 55
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefix
+          733.0 diagnosis record from 2022-01-01 up to the index day, else 0', text: osteoporosis diagnosis, text_he: אבחנת אוסטאופורוזיס}
+    Parkinsonism_Ind:
+      pos: 56
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 prefixes
+          332 / 333 (includes other movement disorders) diagnosis record from 2022-01-01 up to the index day, else 0', text: parkinsonism / movement disorders diagnosis, text_he: אבחנת פרקינסוניזם / הפרעות
+          תנועה}
+    Stroke_Dx_Ind:
+      pos: 57
+      new: {role: PREDICTOR, domain: NEW_DIAGNOSIS, source: DIAGNOSES, kind: binary, missing: unexpected, timing: record_date, record_date: Last_Dx_Date, provenance: DEFENSIBLE, definition: '1 = ICD-9 430-438
+          (cerebrovascular disease and late effects) diagnosis record from 2022-01-01 up to the index day, else 0', text: cerebrovascular disease diagnosis, text_he: אבחנת מחלה מוחית-וסקולרית}
+    Last_Dx_Date: {pos: 58, v1_equivalence: DOCUMENTED_MATCH}
+    Days_Since_Last_Diagnosis: {pos: 59, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Visit_Count_30D: {pos: 60, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Visit_Count_90D: {pos: 61, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Visit_Count_180D: {pos: 62, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Visit_Count_365D: {pos: 63, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Last_Visit_Date: {pos: 64, v1_equivalence: DOCUMENTED_MATCH}
+    Days_Since_Last_Visit: {pos: 65, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Rx_Written_365D: {pos: 66, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'visit-row counters; V21 header: counters may still update after Index_Date (Unsettled_Visit_Counter_Ind flags visits < 3 days
+        old)'}
+    Rx_Purchased_365D: {pos: 67, v1_equivalence: CLARIFIED_NO_CONFLICT, note: visit-row counters; may still update after Index_Date (V21 header caveat)}
+    Prescription_Fill_Ratio_365D: {pos: 68, v1_equivalence: CLARIFIED_NO_CONFLICT, note: ratio of visit-row counters; may still update after Index_Date}
+    Lab_Referred_365D: {pos: 69, v1_equivalence: CLARIFIED_NO_CONFLICT, note: visit-row counters; may still update after Index_Date}
+    Lab_Performed_365D: {pos: 70, v1_equivalence: CLARIFIED_NO_CONFLICT, note: visit-row counters; may still update after Index_Date}
+    Lab_Performed_Ratio_365D: {pos: 71, v1_equivalence: CLARIFIED_NO_CONFLICT, note: ratio of visit-row counters; may still update after Index_Date}
+    Unsettled_Visit_Counter_Ind: {pos: 72, v1_equivalence: DOCUMENTED_MATCH}
+    Falls_Risk_Assessment_Score: {pos: 73, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Falls_Risk_Assessment_Date: {pos: 74, v1_equivalence: DOCUMENTED_MATCH}
+    Fall_Self_Report_Value: {pos: 75, v1_equivalence: CHANGED, note: 'V1: categorical answer code with unconfirmed semantics (one-hot); V21: binary 1 = yes / 0 = no / NULL = missing or unmapped - the value
+        domain changed'}
+    Fall_Self_Report_Date: {pos: 76, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Fall_Required_Treatment_Ind: {pos: 77, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Instability_Dizziness_Ind: {pos: 78, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Fear_Of_Falling_Ind: {pos: 79, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Confined_To_Chair_Bed_Ind: {pos: 80, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Balance_Disorder_Ind: {pos: 81, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Shuffling_Gait_Ind: {pos: 82, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Hesitant_Gait_Ind: {pos: 83, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Uses_Walking_Aid_Ind: {pos: 84, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Prior_Falls_Nurse_Ind: {pos: 85, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Muscle_Weakness_Ind: {pos: 86, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Cognitive_Impairment_Nurse_Ind: {pos: 87, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    On_Medications_Nurse_Ind: {pos: 88, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Unsafe_Environment_Ind: {pos: 89, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Unsuitable_Footwear_Ind: {pos: 90, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Missing_Sensory_Aids_Ind: {pos: 91, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Unsuitable_Bed_Chair_Height_Ind: {pos: 92, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Vision_Impairment_Nurse_Ind: {pos: 93, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Orthostatic_Hypotension_Ind: {pos: 94, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Polypharmacy_Nurse_Ind: {pos: 95, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    No_Primary_Caregiver_Ind: {pos: 96, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Get_Up_And_Go_Date: {pos: 97, v1_equivalence: DOCUMENTED_MATCH}
+    ADL_Worst_Domain_Score: {pos: 98, v1_equivalence: DOCUMENTED_MATCH, note: 'V21 anchors 0-3 (V1 allowed 0-4): same order; a value 4 would be reported as not allowed'}
+    ADL_Domains_Assessed: {pos: 99, v1_equivalence: DOCUMENTED_MATCH}
+    Transfer_Dependency_Score: {pos: 100, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21 values 0, 1, 3, 4 (no 2)'}
+    Mobility_Score: {pos: 101, v1_equivalence: DOCUMENTED_MATCH}
+    Vision_Score: {pos: 102, v1_equivalence: DOCUMENTED_MATCH}
+    Hearing_Score: {pos: 103, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Mobility_Assessment_Date: {pos: 104, v1_equivalence: DOCUMENTED_MATCH}
+    MMSE_Date: {pos: 105, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    MiniCog_Score: {pos: 106, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21: numeric value of the latest answer, no range check in the VIEW (values outside 0-5 are unreadable for the contract)'}
+    MiniCog_Date: {pos: 107, v1_equivalence: DOCUMENTED_MATCH}
+    Fall_Location_At_Home_Ind: {pos: 108, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21: 1 = at home, 0 = outside, NULL = missing / unmapped (not a flag that a fall happened)'}
+    Fall_Count_Home_Safety: {pos: 109, v1_equivalence: DOCUMENTED_MATCH}
+    Orthostatic_BP_Measured_Ind: {pos: 110, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Slow_Rising_Ind: {pos: 111, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Vitamin_D_Ind: {pos: 112, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Home_Safety_Risk_Count: {pos: 113, v1_equivalence: CLARIFIED_NO_CONFLICT, note: count of latest 'yes' answers (a 'yes' is not necessarily a risk)}
+    Home_Safety_Questions_Answered: {pos: 114, v1_equivalence: DOCUMENTED_MATCH}
+    Home_Safety_Assessment_Date: {pos: 115, v1_equivalence: DOCUMENTED_MATCH}
+    Unmapped_Answer_Count: {pos: 116, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Assessment_Count_365D: {pos: 117, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21: number of QUESTION ROWS of the included assessments (not encounters); 0 when none'}
+    Last_Assessment_Date: {pos: 118, v1_equivalence: DOCUMENTED_MATCH}
+    Days_Since_Last_Assessment: {pos: 119, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Distinct_Assessment_Dates_365D: {pos: 120, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Repeat_Assessment_Ind: {pos: 121, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21: >= 2 distinct assessment dates in the WHOLE history up to the index day (not limited to 365 days)'}
+    Assessment_Not_Performed_Ind: {pos: 122, v1_equivalence: DOCUMENTED_MATCH}
+    Distinct_Active_Substance_Count: {pos: 123, v1_equivalence: DOCUMENTED_MATCH, note: 'TIMING CAVEAT (V21): exposure starts at the prescription date; purchase status is not bounded by Index_Date (no Last_Purchased_Date
+        <= Index_Date filter)'}
+    Polypharmacy_5Plus_Ind: {pos: 124, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'TIMING CAVEAT (V21): estimated exposure; purchase status not bounded by Index_Date'}
+    Polypharmacy_10Plus_Ind: {pos: 125, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'TIMING CAVEAT (V21): estimated exposure; purchase status not bounded by Index_Date'}
+    Narcotic_Drug_Count: {pos: 126, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'TIMING CAVEAT (V21): estimated exposure; purchase status not bounded by Index_Date'}
+    Prescribed_Not_Collected_365D: {pos: 127, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Credited_Prescriptions_365D: {pos: 128, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Approx_Matched_365D: {pos: 129, v1_equivalence: DOCUMENTED_MATCH}
+    Bought_Outside_Meuhedet_365D: {pos: 130, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Atc_Unmatched_365D: {pos: 131, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Future_Dated_365D: {pos: 132, v1_equivalence: DOCUMENTED_MATCH}
+    Fallback_Exposure_365D: {pos: 133, v1_equivalence: DOCUMENTED_MATCH}
+    Total_DDD_Amount: {pos: 134, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'dictionary maximum DDD per ATC5 in the estimated exposure (not a dose taken); TIMING CAVEAT: purchase status not bounded'}
+    Medication_Missing_Ind: {pos: 135, v1_equivalence: DOCUMENTED_MATCH, note: no matching estimated exposure at the index day (not proof of no treatment)}
+    External_Care_Count_30D: {pos: 136, v1_equivalence: DOCUMENTED_MATCH}
+    External_Care_Count_90D: {pos: 137, v1_equivalence: DOCUMENTED_MATCH}
+    External_Care_Count_180D: {pos: 138, v1_equivalence: DOCUMENTED_MATCH}
+    External_Care_Count_365D: {pos: 139, v1_equivalence: DOCUMENTED_MATCH, note: 'V21: includes invoices opened AFTER the index day'}
+    External_Care_Count_365D_Visible: {pos: 140, v1_equivalence: DOCUMENTED_MATCH, note: 'visibility proxy: events whose earliest invoice opening date is known and not after the index day'}
+    External_Care_Hidden_By_Billing_Lag_365D: {pos: 141, v1_equivalence: DOCUMENTED_MATCH}
+    Max_Invoice_Lag_365D: {pos: 142, v1_equivalence: DOCUMENTED_MATCH}
+    Last_Ext_Date: {pos: 143, v1_equivalence: DOCUMENTED_MATCH, note: no invoice-visibility condition}
+    Days_Since_Last_External_Care: {pos: 144, v1_equivalence: DOCUMENTED_MATCH}
+    Hospitalization_Count_180D: {pos: 145, v1_equivalence: DOCUMENTED_MATCH, note: invoice-grouped events; no invoice-visibility (billing lag) condition - timing as in V1 (unknown)}
+    Hospitalization_Count_365D: {pos: 146, v1_equivalence: DOCUMENTED_MATCH, note: invoice-grouped events; no invoice-visibility (billing lag) condition - timing as in V1 (unknown)}
+    Total_Hosp_Days_365D: {pos: 147, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'V21: LOS not truncated at the index day and overlaps not removed - may include post-index days'}
+    Last_Hosp_Length: {pos: 148, v1_equivalence: CHANGED, note: 'V1: length of the LAST hospitalisation (name / dictionary); V21: MAX length over ALL hospitalisations up to the index day (''not the length
+        of the last stay'') - a different quantity'}
+    Last_Hosp_Date: {pos: 149, v1_equivalence: DOCUMENTED_MATCH, note: start of the latest hospitalisation group (invoice-based)}
+    Days_Since_Last_Hospitalization: {pos: 150, v1_equivalence: CLARIFIED_NO_CONFLICT, note: from the start of the latest hospitalisation (not from discharge); invoice-based timing}
+    Invoice_Src_Rows_365D: {pos: 151, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    External_Care_Missing_Ind: {pos: 152, v1_equivalence: DOCUMENTED_MATCH}
+    Active_Registry_Count: {pos: 153, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Distinct_Registry_Type_Count: {pos: 154, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Registry_Dementia_Ind: {pos: 155, v1_equivalence: DOCUMENTED_MATCH, note: 'registry types 103 / 136 (validity dates, no STATUS filter); backdating not checkable'}
+    Registry_Home_Confined_Ind: {pos: 156, v1_equivalence: DOCUMENTED_MATCH, note: 'registry 117 (validity dates, no STATUS filter)'}
+    Registry_SMI_Level: {pos: 157, v1_equivalence: CLARIFIED_NO_CONFLICT, note: MAX numeric sub-sub-code of registry 128; levels 1-4 without a validated dictionary}
+    Registry_Suicide_Attempt_Ind: {pos: 158, v1_equivalence: DOCUMENTED_MATCH, note: registry 127}
+    Registry_Heart_Disease_Ind: {pos: 159, v1_equivalence: CLARIFIED_NO_CONFLICT, note: any registry 112 (no sub-type filter)}
+    Registry_Diabetes_T1_Ind: {pos: 160, v1_equivalence: DOCUMENTED_MATCH, note: registry 105 sub-type 91}
+    Registry_Diabetes_T2_Ind: {pos: 161, v1_equivalence: DOCUMENTED_MATCH, note: registry 105 sub-type 92}
+    Registry_Dialysis_Ind:
+      pos: 162
+      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Chronic_Renal_Failure_Ind,
+        definition: '1 = valid membership at the index day in registry 101 sub-type 1 (dialysis load), else 0; V21: not a flag for all kidney failure, does not verify treatment at the index day', text: dialysis
+          registry (101 / 1), text_he: רשם דיאליזה (101 / 1)}
+    Registry_Kidneys_Ind: {pos: 163, v1_equivalence: CLARIFIED_NO_CONFLICT, note: registry 122}
+    Registry_Liver_Ind: {pos: 164, v1_equivalence: DOCUMENTED_MATCH, note: registry 123}
+    Registry_COPD_Ind: {pos: 165, v1_equivalence: DOCUMENTED_MATCH, note: registry 110}
+    Registry_Asthma_Ind: {pos: 166, v1_equivalence: DOCUMENTED_MATCH, note: registry 109}
+    Registry_Corona_Ind:
+      pos: 167
+      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Blood_Pressure_Ind,
+        definition: '1 = valid membership at the index day in registries 116 / 118 (COVID-19 load), else 0; V21 states explicitly: not hypertension', text: COVID-19 registry (registries 116 / 118), text_he: רשם
+          קורונה (116 / 118)}
+    Registry_Immunosuppressant_Ind:
+      pos: 168
+      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Transplant_Ind,
+        definition: '1 = valid membership at the index day in registries 130 / 131 (immunosuppression), else 0; V21: not a transplant flag, not proof of drug intake', text: immunosuppression registry (130
+          / 131), text_he: רשם דיכוי חיסוני (130 / 131)}
+    Registry_Stoma_Ind: {pos: 169, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'registry type 11: its association with a stoma is NOT verified (V21) - do not read the column name clinically'}
+    Longest_Registry_Duration_Days: {pos: 170, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'record / ETL seniority, not disease duration'}
+    Registry_Distinct_Status_Values: {pos: 171, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Days_Since_First_Registry: {pos: 172, v1_equivalence: CLARIFIED_NO_CONFLICT, note: earliest validity start among registries valid at the index day (not disease onset)}
+    Registry_Unknown_Dictionary_Count: {pos: 173, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    New_Registry_30D: {pos: 174, v1_equivalence: DOCUMENTED_MATCH, note: 'V1 role FORBIDDEN_LEAKAGE (S2T: unreliable); recent registry starts are where backdating would show'}
+    New_Registry_90D: {pos: 175, v1_equivalence: DOCUMENTED_MATCH, note: 'V1 role FORBIDDEN_LEAKAGE (S2T: unreliable)'}
+    First_Registry_Date: {pos: 176, v1_equivalence: DOCUMENTED_MATCH, note: earliest validity start among registries valid at the index day only}
+    Registry_Missing_Ind: {pos: 177, v1_equivalence: DOCUMENTED_MATCH}
+    Registry_Smoking_Ind:
+      pos: 178
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registry 113 (validity dates, no STATUS filter), else 0', text: smoking registry, text_he: רשם עישון}
+    Registry_Obesity_Ind:
+      pos: 179
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registry 129 (validity dates, no STATUS filter), else 0', text: obesity registry, text_he: רשם השמנה}
+    Registry_Oncology_Ind:
+      pos: 180
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registry 115 (validity dates, no STATUS filter), else 0', text: oncology registry, text_he: רשם אונקולוגי}
+    Registry_IBD_Ind:
+      pos: 181
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registry 126 (validity dates, no STATUS filter), else 0', text: inflammatory bowel disease registry, text_he: רשם מחלות מעי דלקתיות}
+    Registry_Opiate_Ind:
+      pos: 182
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registry 121 (validity dates, no STATUS filter), else 0', text: opiate registry, text_he: רשם אופיאטים}
+    Registry_Severe_Function_Ind:
+      pos: 183
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE, definition: '1 = valid membership at the index day in
+          registries 134 / 999 (ventilation / confinement) (validity dates, no STATUS filter), else 0', text: severe-function registry, text_he: רשם תפקוד קשה}
+    Registry_Smoking_SubCode:
+      pos: 184
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: categorical, missing: no_event, timing: attested, provenance: UNVALIDATED_CODES, definition: MAX numeric raw sub-code of registry
+          113; NULL without a code; no validated clinical meaning of the values, text: smoking registry sub-code, text_he: תת-קוד רשם עישון}
+    Registry_Obesity_SubCode:
+      pos: 185
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: categorical, missing: no_event, timing: attested, provenance: UNVALIDATED_CODES, definition: MAX numeric raw sub-code of registry
+          129; NULL without a code; no validated clinical meaning of the values, text: obesity registry sub-code, text_he: תת-קוד רשם השמנה}
+    Deficit_Count_Proxy:
+      pos: 186
+      new: {role: PREDICTOR, domain: NEW_FRAILTY_OR_RISK_PROXY, source: COMPOSITE, kind: count, missing: unexpected, timing: uncertain, provenance: EXPERIMENTAL_COMPOSITE, timing_reason: 'composite of index-day
+          flags that include medication (ATC) exposure, whose purchase status is not bounded by Index_Date (V21 header caveat), and registry flags (backdating not checkable)', definition: 'experimental
+          sum 0-25 of 25 registry / diagnosis / ATC / fall flags (overlaps; NULL -> 0); not eFI / MEFI, not validated', text: deficit-count proxy (experimental), text_he: מדד ליקויים ניסויי}
+    MEFI_Group_At_Index: {pos: 187, v1_equivalence: DOCUMENTED_MATCH, note: 'MEFI is NOT new: V1 / Phase 3 column; V21 documents the selection (record valid at the index day, groups 1-4)'}
+    MEFI_Group_Desc: {pos: 188, v1_equivalence: DOCUMENTED_MATCH}
+    MEFI_From_Date: {pos: 189, v1_equivalence: DOCUMENTED_MATCH}
+    MEFI_Assessed_Ind: {pos: 190, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Days_In_Current_MEFI_Group: {pos: 191, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Days_Since_MEFI_Assessment: {pos: 192, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'since the start of the latest MEFI record, even if expired'}
+    MEFI_Assessment_Count: {pos: 193, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    MEFI_Ever_Assessed_Ind: {pos: 194, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    MEFI_Prev_Group: {pos: 195, v1_equivalence: CLARIFIED_NO_CONFLICT, note: no tie-breaker for identical start dates (V21)}
+    MEFI_Worsened_Ind: {pos: 196, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Frailty_Not_Assessed_Ind: {pos: 197, v1_equivalence: DOCUMENTED_MATCH}
+    CCI_Group: {pos: 198, v1_equivalence: CLARIFIED_NO_CONFLICT, note: raw CCI group code of the population record (no Charlson computation in the VIEW)}
+    Malnutrition_Grade: {pos: 199, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'raw value; NULL / 0 / 1 / 2 observed, meanings not validated (V21)'}
+    Customer_Risk_Code: {pos: 200, v1_equivalence: CLARIFIED_NO_CONFLICT, note: raw code without a validated dictionary (V21)}
+    Income_Support: {pos: 201, v1_equivalence: DOCUMENTED_MATCH}
+    Has_Source_Visits_Ind: {pos: 202, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_Diagnosis_Ind: {pos: 203, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_Assessment_Ind: {pos: 204, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_Medication_Ind: {pos: 205, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_External_Care_Ind: {pos: 206, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_Registry_Ind: {pos: 207, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Has_Source_Frailty_Ind: {pos: 208, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Distinct_Sources_With_Data: {pos: 209, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Snapshot_Confidence: {pos: 210, v1_equivalence: DOCUMENTED_MATCH}
+    Leakage_Check_Ind: {pos: 211, v1_equivalence: DOCUMENTED_MATCH, note: 'checks only four latest dates (fall / visit / assessment / external care); NOT evidence of no leakage (purchases, discharges, data
+        availability are not checked)'}
+    Fall_Next_30D_Ind: {pos: 212, v1_equivalence: DOCUMENTED_MATCH, note: positive even after the personal Followup_End_Date}
+    Next_Fall_Date_30D: {pos: 213, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Days_To_Next_Fall_30D: {pos: 214, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Next_Fall_Event_ID_30D: {pos: 215, v1_equivalence: DOCUMENTED_MATCH}
+    Next_Fall_Confidence_30D: {pos: 216, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Label_Reason_30D: {pos: 217, v1_equivalence: DOCUMENTED_MATCH}
+    Fall_Next_180D_Ind: {pos: 218, v1_equivalence: DOCUMENTED_MATCH, note: 'V21: positive even when the record falls after the personal Followup_End_Date; NULL when personal follow-up incomplete'}
+    Next_Fall_Date_180D: {pos: 219, v1_equivalence: DOCUMENTED_MATCH}
+    Days_To_Next_Fall_180D: {pos: 220, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Next_Fall_Event_ID_180D: {pos: 221, v1_equivalence: DOCUMENTED_MATCH}
+    Next_Fall_Confidence_180D: {pos: 222, v1_equivalence: CLARIFIED_NO_CONFLICT}
+    Label_Reason_180D: {pos: 223, v1_equivalence: DOCUMENTED_MATCH, note: no research-end check (V21)}
+    Fall_Next_180D_HighConf_Ind: {pos: 224, v1_equivalence: DOCUMENTED_MATCH, note: category-2 diagnosis record in the window (not necessarily the first; also after follow-up end)}

@@ -1,0 +1,261 @@
+Customer_Full_ID Index_Date Snapshot_Key Observed_History_Days Has_Full_365D_Lookback Has_Full_30D_Label Has_Full_180D_Label Is_Eligible_Cohort Exclusion_Reason Population_Record_From_Date Population_Record_To_Date Population_Current_Ind Obs_Window_Start Label_End_30D Label_End_180D Age_At_Index Age_Group Birth_Date_Suspect_Ind Gender_Code Gender_Desc Available_History_Days Has_Minimum_History HMO_Seniority_Months Followup_End_Date Followup_End_Reason Has_Full_Followup_30D Has_Full_Followup_180D Is_Censored_30D Is_Censored_180D Leave_Join_Ind Abroad_Ind Prior_Fall_Count_30D Prior_Fall_Count_90D Prior_Fall_Count_180D Prior_Fall_Count_365D Prior_Fall_Since_Study_Start_Ind Prior_Fall_Count_Since_Study_Start Last_Fall_Date Days_Since_Last_Fall Last_Fall_Confidence Fall_On_Index_Date_Ind Diagnosis_Source_Absent_Ind Diagnosis_Count_180D Diagnosis_Count_365D Distinct_Diagnosis_Codes_365D Chronic_Diagnosis_Count_365D Gait_Disorder_Since_Study_Start_Ind Dizziness_Ind Gait_Abnormality_Ind Syncope_Ind Tremor_Ind Cataract_Ind Hearing_Loss_Dx_Ind Vision_Impairment_Dx_Ind Osteoporosis_Ind Parkinsonism_Ind Stroke_Dx_Ind Last_Dx_Date Days_Since_Last_Diagnosis Visit_Count_30D Visit_Count_90D Visit_Count_180D Visit_Count_365D Last_Visit_Date Days_Since_Last_Visit Rx_Written_365D Rx_Purchased_365D Prescription_Fill_Ratio_365D Lab_Referred_365D Lab_Performed_365D Lab_Performed_Ratio_365D Unsettled_Visit_Counter_Ind Falls_Risk_Assessment_Score Falls_Risk_Assessment_Date Fall_Self_Report_Value Fall_Self_Report_Date Fall_Required_Treatment_Ind Instability_Dizziness_Ind Fear_Of_Falling_Ind Confined_To_Chair_Bed_Ind Balance_Disorder_Ind Shuffling_Gait_Ind Hesitant_Gait_Ind Uses_Walking_Aid_Ind Prior_Falls_Nurse_Ind Muscle_Weakness_Ind Cognitive_Impairment_Nurse_Ind On_Medications_Nurse_Ind Unsafe_Environment_Ind Unsuitable_Footwear_Ind Missing_Sensory_Aids_Ind Unsuitable_Bed_Chair_Height_Ind Vision_Impairment_Nurse_Ind Orthostatic_Hypotension_Ind Polypharmacy_Nurse_Ind No_Primary_Caregiver_Ind Get_Up_And_Go_Date ADL_Worst_Domain_Score ADL_Domains_Assessed Transfer_Dependency_Score Mobility_Score Vision_Score Hearing_Score Mobility_Assessment_Date MMSE_Date MiniCog_Score MiniCog_Date Fall_Location_At_Home_Ind Fall_Count_Home_Safety Orthostatic_BP_Measured_Ind Slow_Rising_Ind Vitamin_D_Ind Home_Safety_Risk_Count Home_Safety_Questions_Answered Home_Safety_Assessment_Date Unmapped_Answer_Count Assessment_Count_365D Last_Assessment_Date Days_Since_Last_Assessment Distinct_Assessment_Dates_365D Has_Repeat_Assessment_Ind Assessment_Not_Performed_Ind Distinct_Active_Substance_Count Polypharmacy_5Plus_Ind Polypharmacy_10Plus_Ind Narcotic_Drug_Count Prescribed_Not_Collected_365D Credited_Prescriptions_365D Approx_Matched_365D Bought_Outside_Meuhedet_365D Atc_Unmatched_365D Future_Dated_365D Fallback_Exposure_365D Total_DDD_Amount Medication_Missing_Ind External_Care_Count_30D External_Care_Count_90D External_Care_Count_180D External_Care_Count_365D External_Care_Count_365D_Visible External_Care_Hidden_By_Billing_Lag_365D Max_Invoice_Lag_365D Last_Ext_Date Days_Since_Last_External_Care Hospitalization_Count_180D Hospitalization_Count_365D Total_Hosp_Days_365D Last_Hosp_Length Last_Hosp_Date Days_Since_Last_Hospitalization Invoice_Src_Rows_365D External_Care_Missing_Ind Active_Registry_Count Distinct_Registry_Type_Count Registry_Dementia_Ind Registry_Home_Confined_Ind Registry_SMI_Level Registry_Suicide_Attempt_Ind Registry_Heart_Disease_Ind Registry_Diabetes_T1_Ind Registry_Diabetes_T2_Ind Registry_Dialysis_Ind Registry_Kidneys_Ind Registry_Liver_Ind Registry_COPD_Ind Registry_Asthma_Ind Registry_Corona_Ind Registry_Immunosuppressant_Ind Registry_Stoma_Ind Longest_Registry_Duration_Days Registry_Distinct_Status_Values Days_Since_First_Registry Registry_Unknown_Dictionary_Count New_Registry_30D New_Registry_90D First_Registry_Date Registry_Missing_Ind Registry_Smoking_Ind Registry_Obesity_Ind Registry_Oncology_Ind Registry_IBD_Ind Registry_Opiate_Ind Registry_Severe_Function_Ind Registry_Smoking_SubCode Registry_Obesity_SubCode Deficit_Count_Proxy MEFI_Group_At_Index MEFI_Group_Desc MEFI_From_Date MEFI_Assessed_Ind Days_In_Current_MEFI_Group Days_Since_MEFI_Assessment MEFI_Assessment_Count MEFI_Ever_Assessed_Ind MEFI_Prev_Group MEFI_Worsened_Ind Frailty_Not_Assessed_Ind CCI_Group Malnutrition_Grade Customer_Risk_Code Income_Support Has_Source_Visits_Ind Has_Source_Diagnosis_Ind Has_Source_Assessment_Ind Has_Source_Medication_Ind Has_Source_External_Care_Ind Has_Source_Registry_Ind Has_Source_Frailty_Ind Distinct_Sources_With_Data Snapshot_Confidence Leakage_Check_Ind Fall_Next_30D_Ind Next_Fall_Date_30D Days_To_Next_Fall_30D Next_Fall_Event_ID_30D Next_Fall_Confidence_30D Label_Reason_30D Fall_Next_180D_Ind Next_Fall_Date_180D Days_To_Next_Fall_180D Next_Fall_Event_ID_180D Next_Fall_Confidence_180D Label_Reason_180D Fall_Next_180D_HighConf_Ind 
+
+ /*
+ משמעות עסקית לפי החישובים בקובץ הגדרת ה-VIEW, גרסה V21.
+ השאילתה המקורית נשמרה: אותם שדות, אותו סדר ואותו FROM; הוחלפו ההסברים בלבד.
+ הגדרת V21 יוצרת V_Falls_Prediction_Wide, בעוד ה-SELECT פונה ל-V_Falls_Prediction_Wide_3.
+ יש לוודא שהאובייקט הנשלף בשרת אכן מממש אותה הגדרה; כאן בוצעה בדיקה סטטית בלבד.
+ 
+ תאריכים בהגדרה: תחילת מחקר 2022-01-01, חיתוך 2026-01-01, סוף מחקר 2026-08-01.
+ חלון עבר של N ימים: תאריך >= Index_Date פחות N ימים וגם <= Index_Date, כולל הגבולות.
+ חלון תווית: תאריך > Index_Date וגם <= Label_End. ההשוואה בפועל תלויה גם בשעת המקור.
+ אבחנות, נפילות ושורות חיוב מוגבלות מלמטה ל-2022-01-01; ביקורים ומרשמים ל-2024-01-01.
+ אומדנים, רשמים ו-MEFI אינם מוגבלים בקוד לתחילת המחקר.
+ ותק חברות וגבולות המחקר אינם מבטיחים מידע מלא בכל מקור.
+ 
+ נפילה/שבר כאן הם רשומות אבחנה: קוד 888 מדויק או תחיליות 820/821/813/812/808.
+ שבר אינו בהכרח תוצאה של נפילה, ורשומות חוזרות עשויות לתעד מעקב אחר אותו אירוע.
+ באבחנות נדרש סטטוס/חשד/שלילה 0, אך NULL בדגלים אלה מטופל גם הוא כ-0.
+ דגל אבחנה או רשם 0 פירושו שלא נמצאה התאמה בקוד, ולא הוכחה להיעדר מחלה.
+ דגלי רשם מבוססים על תוקף תאריכים, ללא סינון STATUS; שם חבילת טעינה אינו אישור קליני.
+ אירוע חיוב מקובץ למבוטח לפי Ishpuz_Surrogate, ואם חסר לפי מספר התחייבות; אינו בהכרח אירוע קליני יחיד.
+ LOS הוא הפרש ימים מתחילת אשפוז מוקדמת לסיום המאוחר בקבוצה, תוך התעלמות מסיומים 1900-01-01/2999-01-01.
+ באומדנים נבחרת התשובה האחרונה לכל אומדן ושאלה בנפרד; שדות שונים עשויים להגיע מתאריכים שונים.
+ בינארי באומדנים: כן/Y=1, לא/N=0; NULL כולל חסר או תשובה שאינה ממופה, לרבות טקסט מספרי 0/1.
+ COUNT ללא רשומות מחזיר 0; SUM/MAX ללא רשומות מחזירים NULL, אלא אם ה-VIEW ממיר במפורש ל-0.
+ 
+ אזהרת תזמון: החשיפה התרופתית היא פרוקסי ממרשם/רכישה, לא הוכחת נטילה.
+ תחילת החשיפה היא תאריך המרשם; סיומה לפי יחידות שנרכשו חלקי נטילות ביום (חלק שלם),
+ אחרת Days_Cnt כימים, אחרת 30 יום; אין המרה לפי Period_Unit_Code, וזו הנחה הדורשת אימות.
+ אין סינון Last_Purchased_Date <= Index_Date; גם מונים מתעדכנים ונתוני חיוב/שחרור עלולים לדלוף מהעתיד.
+ Leakage_Check_Ind בודק ארבעה תאריכים בלבד ואינו שולל דליפה כללית.
+ התוויות אינן מגבילות אירוע ל-Followup_End_Date ואינן משתמשות בדגלי סוף המחקר:
+ חיובי עלול להופיע גם לאחר סוף המעקב האישי; שלילי מותנה במעקב אישי לפי הקוד, לא בכיסוי מחקר מלא.
+ שדות תווית, תאריכי עתיד וסיבות צנזור מיועדים לניתוח תוצאות, לא למאפייני חיזוי.
+ */
+ SELECT
+       [Customer_Full_ID] -- מזהה המבוטח המלא כפי שנשמר במקור; בסיס לחיבור הרשומות.
+      ,[Index_Date] -- תאריך החיתוך שאליו מיוחסים מאפייני העבר וחלונות התוצאה.
+      ,[Snapshot_Key] -- צירוף תאריך החיתוך בפורמט YYYYMMDD, קו תחתון ומזהה המבוטח; מפתח לוגי, ללא אילוץ ייחודיות.
+      ,[Observed_History_Days] -- הפרש ימים מתחילת המחקר עד החיתוך; לא מספר ימים שבהם נצפה מידע בפועל.
+      ,[Has_Full_365D_Lookback] -- 1 אם חלפו לפחות 365 ימים מתחילת המחקר עד החיתוך, אחרת 0; לא מדד לשלמות המקורות.
+      ,[Has_Full_30D_Label] -- 1 אם סוף חלון 30 הימים אינו אחרי סוף המחקר, אחרת 0; אינו נבדק בחישוב התווית.
+      ,[Has_Full_180D_Label] -- 1 אם סוף חלון 180 הימים אינו אחרי סוף המחקר, אחרת 0; אינו נבדק בחישוב התווית.
+      ,[Is_Eligible_Cohort] -- 1 אם חלפו 365 ימים מתחילת המחקר, חלון 180 יום בתוך המחקר וקיים ותק חברות של לפחות 365 ימים; אחרת 0, בתוך האוכלוסייה שכבר סוננה.
+      ,[Exclusion_Reason] -- סיבת אי-זכאות: INSIDE_BURN_IN_PERIOD / PREDICTION_WINDOW_EXCEEDS_RESEARCH_END / NO_JOIN_DATE / INSUFFICIENT_HISTORY; NULL כשזכאי.
+      ,[Population_Record_From_Date] -- תחילת תוקף רשומת האוכלוסייה שנבחרה לחיתוך; בחפיפה נבחרת המאוחרת לפי תאריכים ומפתח.
+      ,[Population_Record_To_Date] -- סוף תוקף רשומת האוכלוסייה שנבחרה; NULL מותר כתוקף פתוח.
+      ,[Population_Current_Ind] -- דגל הרשומה הנוכחית במקור האוכלוסייה; מוצג לבקרה ואינו קובע את הבחירה ההיסטורית.
+      ,[Obs_Window_Start] -- Index_Date פחות 365 ימים; גבול נומינלי, בלי התאמה לתחילת הנתונים בכל מקור.
+      ,[Label_End_30D] -- Index_Date ועוד 30 ימים; סוף חלון התוצאה הנומינלי, ללא קיצור בצנזור.
+      ,[Label_End_180D] -- Index_Date ועוד 180 ימים; סוף חלון התוצאה הנומינלי, ללא קיצור בצנזור.
+      ,[Age_At_Index] -- גיל בשנים מלאות לפי תאריך הלידה ותאריך החיתוך, עם התאמה אם יום ההולדת טרם חל.
+      ,[Age_Group] -- קבוצת גיל מחושבת: 65-69, 70-74, 75-79, 80-84 או 85+.
+      ,[Birth_Date_Suspect_Ind] -- 1 אם יום הלידה הוא 1 בינואר או 1 באפריל, אחרת 0; דגל לבדיקה ולא הוכחה לתאריך שגוי.
+      ,[Gender_Code] -- קוד מין גולמי ברשומת האוכלוסייה שנבחרה; אין כאן מיפוי מספרי נוסף.
+      ,[Gender_Desc] -- תיאור המין ברשומת האוכלוסייה שנבחרה.
+      ,[Available_History_Days] -- הפרש ימים מתאריך ההצטרפות BTL עד החיתוך; NULL בהיעדר תאריך, ולא עומק מידע רפואי מוכח.
+      ,[Has_Minimum_History] -- 1 אם קיים תאריך הצטרפות והוותק עד החיתוך לפחות 365 ימים; אחרת 0, לרבות תאריך חסר.
+      ,[HMO_Seniority_Months] -- מספר גבולות החודש בין תאריך ההצטרפות BTL לחיתוך לפי DATEDIFF(MONTH); לא בהכרח חודשים מלאים, NULL בתאריך חסר.
+      ,[Followup_End_Date] -- המוקדם מבין מועדי סיום מועמדים שאחרי החיתוך: פטירה נגזרת, ביטול כשסטטוס אינו 2, עזיבה, סוף סטטוס או חו"ל בדגל 1; NULL אם אין מועמד.
+      ,[Followup_End_Reason] -- סיבת המועד שנבחר: DECEASED, ABROAD, BTL_LEAVE, CANCEL או STATUS_END; OPEN כשאין מועד, ובשוויון לפי סדר ה-CASE.
+      ,[Has_Full_Followup_30D] -- 1 אם אין מועד סיום אישי או שהוא לפחות בסוף חלון 30 יום; אחרת 0, ללא בדיקת סוף המחקר.
+      ,[Has_Full_Followup_180D] -- 1 אם אין מועד סיום אישי או שהוא לפחות בסוף חלון 180 יום; אחרת 0, ללא בדיקת סוף המחקר.
+      ,[Is_Censored_30D] -- 1 אם מועד הסיום האישי לפני סוף חלון 30 יום, אחרת 0; כולל סיום עקב פטירה לפי הגדרת הקוד.
+      ,[Is_Censored_180D] -- 1 אם מועד הסיום האישי לפני סוף חלון 180 יום, אחרת 0; כולל סיום עקב פטירה לפי הגדרת הקוד.
+      ,[Leave_Join_Ind] -- קוד עזיבה/הצטרפות גולמי ברשומת האוכלוסייה; אינו לבדו קובע פטירה או סוף מעקב.
+      ,[Abroad_Ind] -- דגל חו"ל גולמי באוכלוסייה; רק ערך 1 מכניס את תאריך החו"ל למועמדי סוף המעקב.
+      ,[Prior_Fall_Count_30D] -- מספר רשומות נפילה/שבר לפי המיפוי בחלון עבר 30 יום; 0 ללא התאמות, לא מספר אירועים קליניים נפרדים.
+      ,[Prior_Fall_Count_90D] -- מספר רשומות נפילה/שבר לפי המיפוי בחלון עבר 90 יום; 0 ללא התאמות, כולל רשומות מעקב אפשריות.
+      ,[Prior_Fall_Count_180D] -- מספר רשומות נפילה/שבר לפי המיפוי בחלון עבר 180 יום; 0 ללא התאמות, כולל רשומות מעקב אפשריות.
+      ,[Prior_Fall_Count_365D] -- מספר רשומות נפילה/שבר לפי המיפוי בחלון עבר 365 יום; 0 ללא התאמות, כולל רשומות מעקב אפשריות.
+      ,[Prior_Fall_Since_Study_Start_Ind] -- 1 אם נמצאה לפחות רשומת נפילה/שבר מ-2022-01-01 עד החיתוך, אחרת 0; לא היסטוריית חיים מלאה.
+      ,[Prior_Fall_Count_Since_Study_Start] -- מספר רשומות נפילה/שבר מ-2022-01-01 עד החיתוך; COUNT מחזיר 0 בהיעדר רשומות.
+      ,[Last_Fall_Date] -- תאריך הביקור המאוחר ביותר ברשומות נפילה/שבר עד החיתוך; עשוי להיות מעקב ולא מועד האירוע, NULL ללא רשומה.
+      ,[Days_Since_Last_Fall] -- הפרש ימים מתאריך הרשומה האחרונה של נפילה/שבר עד החיתוך; NULL כשאין תאריך.
+      ,[Last_Fall_Confidence] -- MAX טקסטואלי של סיווג התאריך בכל רשומות העבר, לא בהכרח של האחרונה; HIGH לקטגוריית אבחנה 2, אחרת MEDIUM ברשומות שנכללות; לא אמינות קלינית מאומתת.
+      ,[Fall_On_Index_Date_Ind] -- 1 אם תאריך רשומת הנפילה/שבר המאוחרת ביותר שווה בדיוק לחיתוך, אחרת 0; כפוף לשעת המקור.
+      ,[Diagnosis_Source_Absent_Ind] -- 1 אם SUM מונה 365 יום הוא NULL: אין כלל אבחנות שעברו סינון מ-2022-01-01 עד החיתוך; אבחנות ישנות בלבד נותנות 0.
+      ,[Diagnosis_Count_180D] -- מספר רשומות אבחנה שעברו סינון בחלון עבר 180 יום; 0 ללא התאמות, לא מספר מחלות.
+      ,[Diagnosis_Count_365D] -- מספר רשומות אבחנה שעברו סינון בחלון עבר 365 יום; 0 ללא התאמות, לא מספר מחלות.
+      ,[Distinct_Diagnosis_Codes_365D] -- מספר קודי אבחנה גולמיים שונים בחלון עבר 365 יום; NULL בקוד אינו נספר, ללא נרמול קודים.
+      ,[Chronic_Diagnosis_Count_365D] -- מספר רשומות אבחנה בחלון עבר 365 יום שבהן דגל הכרוניות במקור שווה 1; 0 ללא התאמות.
+      ,[Gait_Disorder_Since_Study_Start_Ind] -- 1 אם נמצא קוד מדויק 719.7 לקושי בהליכה מ-2022-01-01 עד החיתוך, אחרת 0; פרוקסי לפי רישום.
+      ,[Dizziness_Ind] -- 1 אם נמצאה תחילית אבחנה 780.4 לסחרחורת מ-2022-01-01 עד החיתוך, אחרת 0; לא בהכרח תסמין פעיל בחיתוך.
+      ,[Gait_Abnormality_Ind] -- 1 אם נמצאה תחילית 781.2 לחריגות הליכה מ-2022-01-01 עד החיתוך, אחרת 0; נפרד מקוד 719.7.
+      ,[Syncope_Ind] -- 1 אם נמצאה תחילית 780.2 לעילפון מ-2022-01-01 עד החיתוך, אחרת 0; מבוסס רשומת אבחנה.
+      ,[Tremor_Ind] -- 1 אם נמצאה תחילית 781.0 לרעד מ-2022-01-01 עד החיתוך, אחרת 0; מבוסס רשומת אבחנה.
+      ,[Cataract_Ind] -- 1 אם נמצאה תחילית 366 לקטרקט מ-2022-01-01 עד החיתוך, אחרת 0; ללא דרגת חומרה או מצב טיפול.
+      ,[Hearing_Loss_Dx_Ind] -- 1 אם נמצאה תחילית 389 לירידה בשמיעה מ-2022-01-01 עד החיתוך, אחרת 0; ללא חומרה.
+      ,[Vision_Impairment_Dx_Ind] -- 1 אם נמצאה תחילית 368 או 369 להפרעות/ליקויי ראייה מ-2022-01-01 עד החיתוך, אחרת 0; קבוצה רחבה ללא חומרה.
+      ,[Osteoporosis_Ind] -- 1 אם נמצאה תחילית 733.0 לאוסטאופורוזיס מ-2022-01-01 עד החיתוך, אחרת 0; מבוסס רשומת אבחנה.
+      ,[Parkinsonism_Ind] -- 1 אם נמצאה תחילית 332 או 333 מ-2022-01-01 עד החיתוך, אחרת 0; כולל הפרעות תנועה נוספות ואינו הוכחה למחלת פרקינסון.
+      ,[Stroke_Dx_Ind] -- 1 אם שלוש הספרות הראשונות בקוד הן בטווח 430-438 מ-2022-01-01 עד החיתוך, אחרת 0; כולל מחלות כלי דם מוחיים והשלכותיהן, לא רק שבץ חריף.
+      ,[Last_Dx_Date] -- תאריך הביקור המאוחר ביותר בכל האבחנות שעברו סינון עד החיתוך; NULL כשאין רשומה.
+      ,[Days_Since_Last_Diagnosis] -- הפרש ימים מתאריך רשומת האבחנה האחרונה עד החיתוך; לא בהכרח זמן מתחילת מחלה, NULL ללא תאריך.
+      ,[Visit_Count_30D] -- מספר שורות ביקור עם Record_Status 0 או NULL בחלון עבר 30 יום; 0 ללא רשומות.
+      ,[Visit_Count_90D] -- מספר שורות ביקור עם Record_Status 0 או NULL בחלון עבר 90 יום; 0 ללא רשומות.
+      ,[Visit_Count_180D] -- מספר שורות ביקור עם Record_Status 0 או NULL בחלון עבר 180 יום; 0 ללא רשומות.
+      ,[Visit_Count_365D] -- מספר שורות ביקור עם Record_Status 0 או NULL בחלון עבר 365 יום; 0 ללא רשומות.
+      ,[Last_Visit_Date] -- תאריך שורת הביקור האחרונה מ-2024-01-01 עד החיתוך; NULL ללא רשומה.
+      ,[Days_Since_Last_Visit] -- הפרש ימים מהביקור האחרון עד החיתוך; NULL ללא תאריך.
+      ,[Rx_Written_365D] -- סכום מוני המרשמים שנכתבו בשורות ביקור בחלון עבר 365 יום; מונה חסר בשורה מוחלף ב-0, NULL כשאין כלל ביקורים עד החיתוך.
+      ,[Rx_Purchased_365D] -- סכום מוני המרשמים שנרכשו בשורות ביקור בחלון עבר 365 יום; חסר בשורה מוחלף ב-0, NULL ללא ביקורים; לא ספירת רכישות עצמאית.
+      ,[Prescription_Fill_Ratio_365D] -- סכום מוני נרכשו חלקי סכום מוני נכתבו בביקורים; NULL כשהמכנה אינו חיובי, ללא חסימה ל-1 ולא מדד היענות מוכח.
+      ,[Lab_Referred_365D] -- סכום מוני הפניות למעבדה בשורות ביקור בחלון עבר 365 יום; חסר בשורה מוחלף ב-0, NULL ללא כלל ביקורים עד החיתוך.
+      ,[Lab_Performed_365D] -- סכום מוני הפניות למעבדה שבוצעו בשורות ביקור בחלון עבר 365 יום; חסר בשורה מוחלף ב-0, NULL ללא ביקורים; לא בהכרח מספר בדיקות בודדות.
+      ,[Lab_Performed_Ratio_365D] -- סכום מוני מעבדה שבוצעו חלקי סכום מוני הפניות; NULL כשהמכנה אינו חיובי, ללא חסימה ל-1.
+      ,[Unsettled_Visit_Counter_Ind] -- 1 אם ביקור עד החיתוך נמצא במרחק DATEDIFF(DAY) קטן מ-3, לרבות יום החיתוך; אחרת 0, דגל למונים שייתכן שטרם התייצבו.
+      ,[Falls_Risk_Assessment_Score] -- התשובה הממופה האחרונה לשאלת סיכון לנפילות: 1 נמוך, 2 בינוני, 3 גבוה; NULL לחסר/לא ממופה, לא הסתברות.
+      ,[Falls_Risk_Assessment_Date] -- תאריך התשובה האחרונה לשאלת סיכון לנפילות, גם אם הציון אינו ממופה; NULL ללא שורה.
+      ,[Fall_Self_Report_Value] -- התשובה הבינארית האחרונה לדיווח עצמי על נפילה: 1 כן, 0 לא, NULL חסר/לא ממופה; לא אבחנת אירוע.
+      ,[Fall_Self_Report_Date] -- תאריך התשובה האחרונה לדיווח עצמי על נפילה; אינו בהכרח תאריך הנפילה.
+      ,[Fall_Required_Treatment_Ind] -- התשובה האחרונה אם נפילה דרשה טיפול רפואי: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Instability_Dizziness_Ind] -- התשובה האחרונה לחוסר יציבות/סחרחורת באומדן נפילות: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Fear_Of_Falling_Ind] -- התשובה האחרונה לפחד מנפילה: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Confined_To_Chair_Bed_Ind] -- התשובה האחרונה לריתוק לכיסא/מיטה באומדן נפילות: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Balance_Disorder_Ind] -- התשובה האחרונה להפרעת שיווי משקל באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Shuffling_Gait_Ind] -- התשובה האחרונה להליכה גוררת באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Hesitant_Gait_Ind] -- התשובה האחרונה להליכה מהוססת באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Uses_Walking_Aid_Ind] -- התשובה האחרונה לשימוש בעזר הליכה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Prior_Falls_Nurse_Ind] -- התשובה האחרונה לנפילות קודמות באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Muscle_Weakness_Ind] -- התשובה האחרונה לחולשת שרירים באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Cognitive_Impairment_Nurse_Ind] -- התשובה האחרונה לליקוי קוגניטיבי באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה; לא אבחנת דמנציה.
+      ,[On_Medications_Nurse_Ind] -- התשובה האחרונה לשימוש בתרופות באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה; לא פירוט תרופות.
+      ,[Unsafe_Environment_Ind] -- התשובה האחרונה לסביבה לא בטוחה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Unsuitable_Footwear_Ind] -- התשובה האחרונה להנעלה לא מתאימה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Missing_Sensory_Aids_Ind] -- התשובה האחרונה להיעדר עזרי שמיעה/ראייה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה; לא עזר הליכה.
+      ,[Unsuitable_Bed_Chair_Height_Ind] -- התשובה האחרונה לגובה לא מתאים של מיטה/כיסא: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Vision_Impairment_Nurse_Ind] -- התשובה האחרונה לליקוי ראייה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Orthostatic_Hypotension_Ind] -- התשובה האחרונה לירידת לחץ דם בעמידה באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה; לא חישוב ממדידות לחץ דם.
+      ,[Polypharmacy_Nurse_Ind] -- התשובה האחרונה לריבוי תרופות באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה; אינה נגזרת מסף ATC.
+      ,[No_Primary_Caregiver_Ind] -- התשובה האחרונה להיעדר מטפל עיקרי באומדן קום ולך: 1 כן, 0 לא, NULL חסר/לא ממופה.
+      ,[Get_Up_And_Go_Date] -- התאריך המאוחר בין השורות האחרונות לכל שאלה באומדן קום ולך; לא משך ביצוע מבחן ולא בהכרח תאריך אחיד לכל התשובות.
+      ,[ADL_Worst_Domain_Score] -- הציון המרבי בחמש תשובות ADL אחרונות: 0 עצמאות, 1 השגחה/סיוע קל, 2 עזרה חלקית, 3 תלות מלאה/אי-שליטה לפי תחום; NULL ללא ציון, לא ציון ADL כולל.
+      ,[ADL_Domains_Assessed] -- מספר חמשת תחומי ADL שבהם התשובה האחרונה קיבלה ציון ממופה, 0-5; לא מספר בדיקות ולא ספירת כל התשובות שנרשמו.
+      ,[Transfer_Dependency_Score] -- הציון המרבי בשתי שאלות מעברים אחרונות: 0 עצמאי גם עם עזר, 1 עזרה קלה/השגחה, 3 עזרה מלאה, 4 עזרה מלאה במנוף; NULL ללא ציון.
+      ,[Mobility_Score] -- ציון תשובת ניידות אחרונה: 0 לבד, 1 לבד עם מכשיר, 2 עם עזרה/ליווי, 3 ריתוק לכיסא/מיטה; NULL חסר/לא ממופה.
+      ,[Vision_Score] -- ציון תשובת ראייה אחרונה: 0 סבירה גם עם משקפיים, 1 מוגבלת, 2 עיוורון; NULL חסר/לא ממופה.
+      ,[Hearing_Score] -- ציון תשובת שמיעה אחרונה: 0 סבירה גם עם מכשור, 1 מוגבלת, 2 חירשות; NULL חסר/לא ממופה.
+      ,[Mobility_Assessment_Date] -- התאריך המאוחר בין השורות האחרונות באומדן ניידות ותפקוד; לא בהכרח התאריך של כל ציון מוצג.
+      ,[MMSE_Date] -- תאריך התשובה האחרונה לשדה ציון MMSE; אינו מעיד כשלעצמו על ציון תקין או על מבחן מלא.
+      ,[MiniCog_Score] -- הערך המספרי בתשובה האחרונה לשדה ציון Mini-Cog; NULL אם חסר/לא ניתן להמרה, ללא בדיקת טווח או סף קליני בקוד.
+      ,[MiniCog_Date] -- תאריך התשובה האחרונה לשדה ציון Mini-Cog; עשוי להתקיים גם כשהערך לא הומר למספר.
+      ,[Fall_Location_At_Home_Ind] -- מיקום הנפילה בתשובה האחרונה בבטיחות בבית: 1 בבית, 0 בחוץ, NULL חסר/לא ממופה; לא דגל לעצם התרחשות נפילה.
+      ,[Fall_Count_Home_Safety] -- הערך המספרי בתשובה האחרונה למספר נפילות בבטיחות בבית; NULL חסר/לא ניתן להמרה, ללא אימות ספירה או חלון זמן.
+      ,[Orthostatic_BP_Measured_Ind] -- התשובה האחרונה אם נמדד לחץ דם אורתוסטטי: 1 כן, 0 לא, NULL חסר/לא ממופה; לא תוצאת המדידה.
+      ,[Slow_Rising_Ind] -- התשובה האחרונה לשאלת קימה איטית בבטיחות בבית: 1 כן, 0 לא, NULL חסר/לא ממופה; לא בהכרח ליקוי.
+      ,[Vitamin_D_Ind] -- התשובה האחרונה לשאלת ויטמין D בבטיחות בבית: 1 כן, 0 לא, NULL חסר/לא ממופה; לא רמת מעבדה או הוכחת חסר.
+      ,[Home_Safety_Risk_Count] -- סכום תשובות כן/Y האחרונות לכל שאלה בבטיחות בבית; אינו ציון סיכון מאומת, כי כן אינו בהכרח סיכון; NULL ללא כלל שורות אומדן.
+      ,[Home_Safety_Questions_Answered] -- מספר שאלות בבטיחות בבית בעלות שורת תשובה אחרונה; כולל ערך ריק/לא מפוענח, 0 כשאין שורות מתאימות.
+      ,[Home_Safety_Assessment_Date] -- התאריך המאוחר בין שורות התשובה האחרונות בבטיחות בבית; ייתכן ערבוב תאריכים בין השאלות.
+      ,[Unmapped_Answer_Count] -- מספר תשובות אחרונות עם ערך לא ריק, ללא Score, שנמצאו במיפוי ללא ציון או שלא ניתן להמירן למספר; כולל בינארי מספרי לא מפוענח; NULL ללא שורות אומדן.
+      ,[Assessment_Count_365D] -- מספר שורות שאלה באומדנים שנבחרו בחלון עבר 365 יום; 0 ללא שורות, לא מספר מפגשים או מבחנים מלאים.
+      ,[Last_Assessment_Date] -- תאריך שורת האומדן המאוחרת ביותר עד החיתוך מתוך ששת סוגי האומדן שנכללו; NULL ללא שורה.
+      ,[Days_Since_Last_Assessment] -- הפרש ימים משורת האומדן האחרונה עד החיתוך; NULL ללא תאריך.
+      ,[Distinct_Assessment_Dates_365D] -- מספר ערכי תאריך אומדן שונים בחלון עבר 365 יום; 0 ללא שורות, לא בהכרח מספר מפגשים.
+      ,[Has_Repeat_Assessment_Ind] -- 1 אם קיימים לפחות שני תאריכי אומדן שונים בכל ההיסטוריה עד החיתוך, אחרת 0; לא מוגבל ל-365 יום.
+      ,[Assessment_Not_Performed_Ind] -- 1 אם אין שורת אומדן מהסוגים שנכללו עד החיתוך, אחרת 0; היעדר רישום אינו הוכחה שלא בוצעה הערכה.
+      ,[Distinct_Active_Substance_Count] -- מספר קודי ATC5 שונים בחשיפה משוערת המכילה את החיתוך, עם רכישה מסומנת או לא ידועה וללא Future_Ind=1; 0 ללא התאמות, לא בהכרח מספר חומרים יחידים.
+      ,[Polypharmacy_5Plus_Ind] -- 1 אם מספר קודי ATC5 בחשיפה המשוערת לפחות 5, 0 אם יש חשיפה אך פחות מ-5, NULL אם אין חשיפה מתאימה.
+      ,[Polypharmacy_10Plus_Ind] -- 1 אם מספר קודי ATC5 בחשיפה המשוערת לפחות 10, 0 אם יש חשיפה אך פחות מ-10, NULL אם אין חשיפה מתאימה.
+      ,[Narcotic_Drug_Count] -- מספר קודי ATC5 שונים בחשיפה המשוערת שלפחות רשומה אחת שלהם מסומנת נרקוטית במילון; 0 ללא התאמות, לא מספר מרשמים.
+      ,[Prescribed_Not_Collected_365D] -- מספר שורות מרשם בחלון עבר 365 יום עם Was_Collected=0; כולל זיכוי מלא, ולכן אינו בהכרח אי-מימוש; NULL ללא מרשמים בחלון.
+      ,[Credited_Prescriptions_365D] -- מספר שורות מרשם בחלון עבר 365 יום עם סטטוס זיכוי מלא 5/6 או חלקי 7/8; 0 אם יש מרשמים ואין התאמות, NULL ללא מרשמים.
+      ,[Approx_Matched_365D] -- מספר שורות מרשם בחלון עבר 365 יום עם סטטוס התאמה מקורבת 2/4/6/8, לרבות זיכויים; NULL ללא מרשמים.
+      ,[Bought_Outside_Meuhedet_365D] -- מספר שורות מרשם בחלון עבר 365 יום עם Purchased_In_Meuhedet=0; מסמן רכישה מחוץ לקופה במקור, לא אימות רכישה/נטילה; NULL ללא מרשמים.
+      ,[Atc_Unmatched_365D] -- מספר שורות מרשם בחלון עבר 365 יום ללא התאמת תרופה בתוקף או ללא ATC תקין לפי בדיקת NULL/-1; NULL ללא מרשמים.
+      ,[Future_Dated_365D] -- מספר שורות מרשם שתאריך המרשם בחלון העבר ו-Future_Ind=1; לא מספר מרשמים שתאריכם אחרי החיתוך; NULL ללא מרשמים.
+      ,[Fallback_Exposure_365D] -- מספר שורות מרשם בחלון עבר 365 יום שמשך החשיפה שלהן הוערך כברירת מחדל 30 יום; לא מספר חשיפות פעילות; NULL ללא מרשמים.
+      ,[Total_DDD_Amount] -- סכום DDD_Amount המרבי במילון לכל ATC5 בחשיפות המשוערות בחיתוך; -1 הומר ל-NULL; לא מינון שנרשם/נרכש/נלקח, NULL בלי ערכי DDD זמינים.
+      ,[Medication_Missing_Ind] -- 1 אם אין שורת חשיפה משוערת מתאימה עם ATC בחיתוך, אחרת 0; לא הוכחה שאין טיפול תרופתי.
+      ,[External_Care_Count_30D] -- מספר קבוצות אירוע חיוב שאינן אשפוז והתחילו בחלון עבר 30 יום; 0 ללא התאמות, אין זיהוי ייעודי של מיון.
+      ,[External_Care_Count_90D] -- מספר קבוצות אירוע חיוב שאינן אשפוז והתחילו בחלון עבר 90 יום; 0 ללא התאמות, לא מספר שורות חשבונית.
+      ,[External_Care_Count_180D] -- מספר קבוצות אירוע חיוב שאינן אשפוז והתחילו בחלון עבר 180 יום; 0 ללא התאמות.
+      ,[External_Care_Count_365D] -- מספר קבוצות אירוע חיוב שאינן אשפוז והתחילו בחלון עבר 365 יום; 0 ללא התאמות, כולל חיובים שנפתחו אחרי החיתוך.
+      ,[External_Care_Count_365D_Visible] -- מספר אירועי חוץ בחלון עבר 365 יום שמועד פתיחת החשבונית המוקדם בקבוצה ידוע ואינו אחרי החיתוך; פרוקסי לנראות ולא הוכחת זמינות כל פרט.
+      ,[External_Care_Hidden_By_Billing_Lag_365D] -- מספר אירועי חוץ בחלון עבר 365 יום שמועד פתיחת החשבונית חסר או אחרי החיתוך; חסר אינו מוכיח פיגור חיוב; 0 ללא התאמות.
+      ,[Max_Invoice_Lag_365D] -- פער הימים המרבי מטיפול לפתיחת חשבונית באירועים שהחלו בחלון עבר 365 יום, כולל אשפוז; עשוי להיות שלילי, NULL ללא פער זמין.
+      ,[Last_Ext_Date] -- תאריך התחלת קבוצת אירוע החוץ האחרונה שאינה אשפוז עד החיתוך; NULL ללא התאמה, ללא תנאי נראות חשבונית.
+      ,[Days_Since_Last_External_Care] -- הפרש ימים מהתחלת אירוע החוץ האחרון עד החיתוך; NULL ללא תאריך.
+      ,[Hospitalization_Count_180D] -- מספר קבוצות אירוע עם MAX(Is_Ishpuz)=1 שהחלו בחלון עבר 180 יום; 0 ללא התאמות, לפי איגוד החיובים.
+      ,[Hospitalization_Count_365D] -- מספר קבוצות אירוע עם MAX(Is_Ishpuz)=1 שהחלו בחלון עבר 365 יום; 0 ללא התאמות, לפי איגוד החיובים.
+      ,[Total_Hosp_Days_365D] -- סכום LOS לאשפוזים שהחלו בחלון עבר 365 יום; LOS חסר תורם 0, NULL ללא כלל אירועי חיוב עד החיתוך; לא נחתך לחיתוך ולא מנכה חפיפות.
+      ,[Last_Hosp_Length] -- MAX של משך האשפוז בכל האשפוזים עד החיתוך, לא משך האשפוז האחרון; NULL ללא LOS זמין.
+      ,[Last_Hosp_Date] -- תאריך ההתחלה המאוחר ביותר של קבוצת אשפוז עד החיתוך; NULL ללא אשפוז.
+      ,[Days_Since_Last_Hospitalization] -- הפרש ימים מתחילת האשפוז האחרון עד החיתוך; לא זמן מאז השחרור, NULL ללא תאריך.
+      ,[Invoice_Src_Rows_365D] -- סכום שורות החיוב לאחר סינון כמות חיוב חיובית או חסרה, באירועים שהתחילו בחלון עבר 365 יום, כולל אשפוז; NULL ללא אירועים עד החיתוך.
+      ,[External_Care_Missing_Ind] -- 1 אם SUM מונה אירועי החוץ הוא NULL: אין כלל אירועי חיוב שנכללו עד החיתוך; אירוע ישן או אשפוז בלבד נותנים 0 גם כשמונה החוץ 0.
+      ,[Active_Registry_Count] -- מספר צירופי סוג/תת-סוג/תת-תת-סוג רשם שונים שתוקפם מכיל את החיתוך; 0 ללא רשמים, לא מספר מחלות או שורות.
+      ,[Distinct_Registry_Type_Count] -- מספר סוגי רשם ראשיים שונים שתוקפם מכיל את החיתוך; NULL בסוג אינו נספר, 0 ללא סוגים.
+      ,[Registry_Dementia_Ind] -- 1 לחברות תקפה ברשם מסוג 103 או 136, מועמדים לדמנציה לפי מיפוי הטעינה; אחרת 0, ללא אימות קליני של האבחנה.
+      ,[Registry_Home_Confined_Ind] -- 1 לחברות תקפה ברשם 117 הממופה לריתוק לבית, אחרת 0; לא מדידה תפקודית עצמאית.
+      ,[Registry_SMI_Level] -- MAX מספרי של תת-תת-קוד ברשם 128 התקף; NULL ללא קוד, גם ערכים נצפים 1-4 אינם מוכיחים מדרג חומרה ללא מילון.
+      ,[Registry_Suicide_Attempt_Ind] -- 1 לחברות תקפה ברשם 127 הממופה לניסיון אובדני, אחרת 0; לא תאריך ניסיון או הערכת סיכון נוכחית.
+      ,[Registry_Heart_Disease_Ind] -- 1 לחברות תקפה בכל רשם 112 ללא סינון תת-סוג, אחרת 0; שם הרשם אינו מוכיח שכל חבר בו חולה לב מאובחן.
+      ,[Registry_Diabetes_T1_Ind] -- 1 לחברות תקפה ברשם 105 בתת-סוג 91 הממופה לסוכרת סוג 1, אחרת 0; מבוסס המיפוי ולא אימות אבחנה.
+      ,[Registry_Diabetes_T2_Ind] -- 1 לחברות תקפה ברשם 105 בתת-סוג 92 הממופה לסוכרת סוג 2, אחרת 0; מבוסס המיפוי ולא אימות אבחנה.
+      ,[Registry_Dialysis_Ind] -- 1 לחברות תקפה ברשם 101 בתת-סוג 1 המשויך לטעינת דיאליזה, אחרת 0; אינו דגל לכל אי-ספיקת כליות ואינו מאמת טיפול בחיתוך.
+      ,[Registry_Kidneys_Ind] -- 1 לחברות תקפה ברשם 122 הממופה לכליות, אחרת 0; ללא פירוט סוג/שלב מחלה.
+      ,[Registry_Liver_Ind] -- 1 לחברות תקפה ברשם 123 הממופה לכבד, אחרת 0; ללא פירוט סוג/שלב מחלה.
+      ,[Registry_COPD_Ind] -- 1 לחברות תקפה ברשם 110 הממופה ל-COPD, אחרת 0; ללא חומרה או הוכחה למחלה פעילה.
+      ,[Registry_Asthma_Ind] -- 1 לחברות תקפה ברשם 109 הממופה לאסתמה, אחרת 0; ללא חומרה או הוכחה למחלה פעילה.
+      ,[Registry_Corona_Ind] -- 1 לחברות תקפה ברשם 116 או 118 המשויכים לטעינת קורונה, אחרת 0; לא יתר לחץ דם ולא הוכחה לזיהום פעיל.
+      ,[Registry_Immunosuppressant_Ind] -- 1 לחברות תקפה ברשם 130 או 131 המשויכים לדיכוי חיסוני, אחרת 0; לא דגל השתלה ולא הוכחת נטילת תרופה.
+      ,[Registry_Stoma_Ind] -- 1 לחברות תקפה ברשם מסוג 11, אחרת 0; שיוכו לסטומה אינו מאומת ולכן אין להסיק קיום סטומה משם העמודה.
+      ,[Longest_Registry_Duration_Days] -- הפרש הימים המרבי מתחילת תוקף רשם התקף בחיתוך עד החיתוך; NULL ללא רשם, ותק רשומה/ETL ולא משך מחלה.
+      ,[Registry_Distinct_Status_Values] -- מספר ערכי STATUS שונים שאינם NULL ברשמים התקפים; 0 ללא ערכים, משמעות הסטטוסים אינה ידועה ולא משמשת לסינון.
+      ,[Days_Since_First_Registry] -- הפרש ימים מתחילת התוקף המוקדמת ביותר בין הרשמים התקפים בחיתוך; NULL ללא רשם, לא זמן מתחילת התחלואה.
+      ,[Registry_Unknown_Dictionary_Count] -- מספר צירופי רשם תקפים שסוגם אינו ברשימת הסוגים בקוד; 0 ללא התאמות, סוג NULL אינו מזוהה ב-NOT IN ואינו נספר כלא מוכר.
+      ,[New_Registry_30D] -- מספר צירופי רשם שונים שעדיין תקפים בחיתוך ותחילת תוקפם בחלון עבר 30 יום; 0 ללא התאמות, לא בהכרח מחלה חדשה.
+      ,[New_Registry_90D] -- מספר צירופי רשם שונים שעדיין תקפים בחיתוך ותחילת תוקפם בחלון עבר 90 יום; 0 ללא התאמות, לא כולל רשמים שכבר פגו.
+      ,[First_Registry_Date] -- תחילת התוקף המוקדמת ביותר בין הרשמים התקפים בחיתוך בלבד; NULL ללא רשם, לא הרשם הראשון אי פעם.
+      ,[Registry_Missing_Ind] -- 1 אם אין רשם שתוקפו מכיל את החיתוך, אחרת 0; אינו מעיד שאין תחלואה או שלא היו רשמים בעבר.
+      ,[Registry_Smoking_Ind] -- 1 לחברות תקפה ברשם 113 לעישון, אחרת 0; אינו מוכיח עישון נוכחי ואינו מבדיל מעולם לא עישן/עישן בעבר.
+      ,[Registry_Obesity_Ind] -- 1 לחברות תקפה ברשם 129 להשמנה, אחרת 0; אינו BMI מספרי ואינו מוכיח עמידה בסף השמנה בחיתוך.
+      ,[Registry_Oncology_Ind] -- 1 לחברות תקפה ברשם 115 המשויך לאונקולוגיה, אחרת 0; ללא סוג גידול, שלב או הוכחה למחלה פעילה.
+      ,[Registry_IBD_Ind] -- 1 לחברות תקפה ברשם 126 המשויך למחלות מעי דלקתיות, אחרת 0; ללא הבחנה בסוג המחלה או פעילותה.
+      ,[Registry_Opiate_Ind] -- 1 לחברות תקפה ברשם 121 המשויך לאופיאטים, אחרת 0; לא הוכחת נטילה פעילה, מינון או תלות.
+      ,[Registry_Severe_Function_Ind] -- 1 לחברות תקפה ברשם 134 או 999, איחוד הנשמה/ריתוק לפי מיפוי הטעינה; אחרת 0, לא סולם חומרה תפקודית מאומת.
+      ,[Registry_Smoking_SubCode] -- MAX מספרי של תת-קוד גולמי ברשם 113 התקף; NULL ללא קוד, לא מדרג עישון ואין פירוש קליני מאומת לערכים.
+      ,[Registry_Obesity_SubCode] -- MAX מספרי של תת-קוד גולמי ברשם 129 התקף; NULL ללא קוד, לא BMI או מדרג חומרת השמנה מאומת.
+      ,[Deficit_Count_Proxy] -- סכום ניסויי 0-25 של 25 דגלי רשם/אבחנה/ATC/נפילה, עם חפיפות ו-NULL המוחלף ב-0; לא ליקויים ייחודיים, לא eFI/MEFI ולא מדד שבריריות מאומת.
+      ,[MEFI_Group_At_Index] -- קבוצת MEFI מרשומה שתוקפה מכיל את החיתוך, לאחר סינון לקבוצות 1-4; בבחירה מועדפת תחילת תוקף מאוחרת, NULL ללא רשומה מתאימה.
+      ,[MEFI_Group_Desc] -- תיאור קבוצת MEFI באותה רשומה שנבחרה; נשמר מהמקור ולא נגזר מחדש ממילון.
+      ,[MEFI_From_Date] -- תחילת תוקף רשומת MEFI שנבחרה לחיתוך; אינה בהכרח מועד מבחן קליני.
+      ,[MEFI_Assessed_Ind] -- 1 אם נמצאה רשומת MEFI בקבוצה 1-4 התקפה בחיתוך, אחרת 0; היעדר רשומה אינו מוכיח שלא בוצעה הערכה.
+      ,[Days_In_Current_MEFI_Group] -- הפרש ימים מתחילת תוקף רשומת MEFI הנבחרת עד החיתוך; NULL ללא רשומה, לא בהכרח שהות רציפה בקבוצה.
+      ,[Days_Since_MEFI_Assessment] -- הפרש ימים מתחילת רשומת MEFI המאוחרת ביותר עד החיתוך, גם אם פג תוקפה; NULL ללא היסטוריה מסוננת.
+      ,[MEFI_Assessment_Count] -- מספר רשומות MEFI בקבוצות 1-4 שהחלו עד החיתוך; 0 ללא רשומות, לא בהכרח מספר הערכות קליניות.
+      ,[MEFI_Ever_Assessed_Ind] -- 1 אם קיימת לפחות רשומת MEFI בקבוצה 1-4 שהחלה עד החיתוך, גם אם פגה; אחרת 0.
+      ,[MEFI_Prev_Group] -- קבוצת MEFI מהרשומה בעלת תחילת התוקף המאוחרת שקדמה לתחילת הנוכחית, או לחיתוך כשאין נוכחית; NULL ללא קודמת, ללא שובר שוויון בתאריך זהה.
+      ,[MEFI_Worsened_Ind] -- 1 אם מספר הקבוצה הנוכחית גדול מהקודמת, 0 אם קטן/שווה, NULL אם אחת חסרה; השוואת קודים ולא שינוי בציון קליני מחושב.
+      ,[Frailty_Not_Assessed_Ind] -- 1 אם אין רשומת MEFI בקבוצה 1-4 התקפה בחיתוך, אחרת 0; ייתכן שנבדק בעבר או שיש ערך שסונן.
+      ,[CCI_Group] -- קוד קבוצת CCI גולמי ברשומת האוכלוסייה; אין חישוב Charlson או פירוש קבוצות בקוד, NULL עשוי לשקף חסר.
+      ,[Malnutrition_Grade] -- ערך גולמי של שדה סיכון לתת-תזונה באוכלוסייה; נצפו NULL/0/1/2 אך משמעותם אינה מאומתת, אין להסיק ש-NULL לא נבדק או שערך >=1 הוא סיכון.
+      ,[Customer_Risk_Code] -- קוד סיכון מבוטח גולמי ברשומת האוכלוסייה; ללא מילון מאומת אין להסיק סוג סיכון או סדר חומרה.
+      ,[Income_Support] -- ערך דגל תמיכה בהכנסה ברשומת האוכלוסייה כפי שנשמר במקור; ללא המרה או מיפוי נוסף בקוד, לא מדד הכנסה רציף.
+      ,[Has_Source_Visits_Ind] -- 1 אם יש שורת ביקור בחלון עבר 365 יום, אחרת 0; מציין נתון שנמצא ולא שלמות מקור.
+      ,[Has_Source_Diagnosis_Ind] -- 1 אם יש אבחנה שעברה סינון בחלון עבר 365 יום, אחרת 0; שונה מדגל היעדר מקור שבודק את כלל העבר המסונן.
+      ,[Has_Source_Assessment_Ind] -- 1 אם יש שורת שאלה באומדנים שנכללו בחלון עבר 365 יום, אחרת 0; אינו דורש תשובה מפוענחת.
+      ,[Has_Source_Medication_Ind] -- 1 אם קיים ATC בחשיפה המשוערת בחיתוך, אחרת 0; לא הוכחת נטילה או כיסוי תרופתי מלא.
+      ,[Has_Source_External_Care_Ind] -- 1 אם יש אירוע חיוב שאינו אשפוז בחלון עבר 365 יום, אחרת 0; אשפוז בלבד אינו מדליק אותו.
+      ,[Has_Source_Registry_Ind] -- 1 אם יש צירוף רשם תקף בחיתוך, אחרת 0; ללא דרישת סטטוס רשם מסוים.
+      ,[Has_Source_Frailty_Ind] -- 1 אם קיימת קבוצת MEFI 1-4 התקפה בחיתוך, אחרת 0; זהה לתנאי MEFI_Assessed_Ind.
+      ,[Distinct_Sources_With_Data] -- סכום שבעת דגלי המקור, 0-7; תנאי הזמן שונים בין מקורות, לא אחוז כיסוי או מספר מקורות בלתי תלויים.
+      ,[Snapshot_Confidence] -- דירוג נוכחות מקורות: HIGH ל-5-7, MEDIUM ל-3-4, LOW ל-0-2; אינו ביטחון תחזית או אמינות קלינית מאומתת.
+      ,[Leakage_Check_Ind] -- 1 אם אחד מארבעת תאריכי הנפילה/הביקור/האומדן/טיפול החוץ האחרונים אחרי החיתוך, אחרת 0; אינו בודק רכישות, שחרורים או זמינות נתונים.
+      ,[Fall_Next_30D_Ind] -- 1 אם קיימת רשומת נפילה/שבר בחלון עתיד 30 יום, גם לאחר סוף מעקב אישי; אחרת NULL במעקב אישי לא מלא או 0 במעקב אישי מלא לפי הקוד.
+      ,[Next_Fall_Date_30D] -- תאריך הביקור של רשומת הנפילה/שבר הראשונה בחלון עתיד 30 יום; NULL ללא התאמה, לא בהכרח מועד אירוע חדש.
+      ,[Days_To_Next_Fall_30D] -- הפרש ימים מהחיתוך לתאריך הרשומה הראשונה בחלון עתיד 30 יום; NULL ללא רשומה.
+      ,[Next_Fall_Event_ID_30D] -- Diagnosis_PK של רשומת הנפילה/שבר הראשונה בחלון עתיד 30 יום; בתאריך זהה נבחר המזהה הקטן, לא מזהה אפיזודה.
+      ,[Next_Fall_Confidence_30D] -- סיווג תאריך הרשומה הראשונה בחלון 30 יום: HIGH כשקטגוריית האבחנה 2, אחרת MEDIUM; NULL ללא רשומה, לא אמינות קלינית מאומתת.
+      ,[Label_Reason_30D] -- POSITIVE אם יש רשומה; אחרת NEGATIVE_FULL_FOLLOWUP במעקב אישי מלא לפי הקוד או CENSORED_NO_FULL_FOLLOWUP; ללא בדיקת סוף המחקר.
+      ,[Fall_Next_180D_Ind] -- 1 אם קיימת רשומת נפילה/שבר בחלון עתיד 180 יום, גם לאחר סוף מעקב אישי; אחרת NULL במעקב אישי לא מלא או 0 במעקב אישי מלא לפי הקוד.
+      ,[Next_Fall_Date_180D] -- תאריך הביקור של רשומת הנפילה/שבר הראשונה בחלון עתיד 180 יום; NULL ללא התאמה, לא בהכרח מועד אירוע חדש.
+      ,[Days_To_Next_Fall_180D] -- הפרש ימים מהחיתוך לתאריך הרשומה הראשונה בחלון עתיד 180 יום; NULL ללא רשומה.
+      ,[Next_Fall_Event_ID_180D] -- Diagnosis_PK של רשומת הנפילה/שבר הראשונה בחלון עתיד 180 יום; בתאריך זהה נבחר המזהה הקטן, לא מזהה אפיזודה.
+      ,[Next_Fall_Confidence_180D] -- סיווג תאריך הרשומה הראשונה בחלון 180 יום: HIGH כשקטגוריית האבחנה 2, אחרת MEDIUM; NULL ללא רשומה, לא אמינות קלינית מאומתת.
+      ,[Label_Reason_180D] -- POSITIVE אם יש רשומה; אחרת NEGATIVE_FULL_FOLLOWUP במעקב אישי מלא לפי הקוד או CENSORED_NO_FULL_FOLLOWUP; ללא בדיקת סוף המחקר.
+      ,[Fall_Next_180D_HighConf_Ind] -- 1 אם יש רשומת נפילה/שבר מקטגוריית אבחנה 2 בחלון עתיד 180 יום, גם אם אינה הראשונה או אחרי סוף המעקב; אחרת NULL במעקב אישי לא מלא או 0 במלא.
+ FROM [Meuhedet_DWH].[dbo].[V_Falls_Prediction_Wide_3]; 

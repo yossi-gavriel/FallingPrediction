@@ -20,9 +20,9 @@ from falls_ml.artifacts import utc_now
 from falls_ml.phase2 import durable as D
 from falls_ml.phase2.state import Phase2Stop
 from falls_ml.phase5 import DESIGN_LABEL, PHASE5_VERSION, SYNTHETIC_WATERMARK, WATERMARK, WATERMARK_HE
-from falls_ml.phase5.analysis import (ModelRun, calibration_rows, collect, compare, decide, model_row, nested_by_target, overall, prediction_summary,
-                                      subgroup_rows, threshold_tables)
-from falls_ml.phase5.config import FAMILIES, SET_LOWRISK, SET_NEW, SET_OLD, SET_VERIFIED
+from falls_ml.phase5.analysis import (PRIMARY_SETS, ModelRun, calibration_rows, capacity_rows, collect, compare, decide, model_row, nested_by_target,
+                                      outer_fold_rows, overall, prediction_summary, subgroup_rows, threshold_tables)
+from falls_ml.phase5.config import FAMILIES, PRIMARY_FAMILY, SET_ALL, SET_OLD, SET_SAFE
 
 MIN_CELL = 10
 ROW_LEVEL_COLUMNS = {"row_key", "Customer_Full_ID", "Snapshot_Key", "member_id", "research_id", "key"}
@@ -127,41 +127,44 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
     T = cfg.primary_sensitivity
     nb = int(cfg.budget["bootstrap_n"])
     seed = int(plan["seed"])
-    A: dict[str, Any] = {"runs": runs, "interim": interim}
+    alias = plan["alias"]
+    A: dict[str, Any] = {"runs": runs, "interim": interim, "primary_family": PRIMARY_FAMILY}
     rows = []
     for (fam, s), run in runs.items():
-        prim = s in (SET_OLD, SET_NEW, SET_VERIFIED, SET_LOWRISK)
+        prim = s in PRIMARY_SETS
         r = model_row(y, run, target=T, n_boot=nb, seed=seed + 3, with_ci=prim)
         r["n_features"] = len(plan["sets"][s])
-        r["kind"] = plan["kinds"].get(plan["alias"][s], "")
-        r["identical_to"] = plan["alias"][s] if plan["alias"][s] != s else ""
+        r["kind"] = plan["kinds"].get(alias[s], "")
+        r["role"] = ("PRIMARY" if fam == PRIMARY_FAMILY and s in (SET_OLD, SET_ALL) else "SECONDARY") if prim else plan["kinds"].get(alias[s], "")
+        r["identical_to"] = alias[s] if alias[s] != s else ""
         r["inner_selected_configs"] = json.dumps([f["config"] for f in run.folds], default=float)[:2000]
         r["not_converged_fits"] = int(sum(int(f.get("not_converged_fits") or 0) for f in run.folds))
         r["lambda_on_grid_edge_folds"] = int(sum(bool(f.get("edge")) for f in run.folds))
         rows.append(r)
     A["models"] = pd.DataFrame(rows)
-    A["targets"] = pd.concat([nested_by_target(y, run, cfg.targets) for (fam, s), run in runs.items() if s in (SET_OLD, SET_NEW, SET_VERIFIED, SET_LOWRISK)],
+    A["targets"] = pd.concat([nested_by_target(y, run, cfg.targets) for (fam, s), run in runs.items() if s in PRIMARY_SETS],
                              ignore_index=True) if runs else pd.DataFrame()
-    no_new = plan["alias"][SET_NEW] == plan["alias"][SET_OLD]
+    no_new = alias[SET_ALL] == alias[SET_OLD]
+    safe_same = alias[SET_SAFE] == alias[SET_ALL]
+    safe_none = alias[SET_SAFE] == alias[SET_OLD]
     cmps, dec = {}, {}
     for fam in FAMILIES:
-        o, nw = runs.get((fam, SET_OLD)), runs.get((fam, SET_NEW))
-        c_new = compare(y, o, nw, target=T, n_boot=nb, seed=seed + 11) if o and nw and not no_new else None
-        vs = plan["alias"][SET_VERIFIED] == plan["alias"][SET_NEW]
-        ls = plan["alias"][SET_LOWRISK] == plan["alias"][SET_NEW]
-        c_ver = compare(y, o, runs[(fam, SET_VERIFIED)], target=T, n_boot=nb, seed=seed + 12) if o and (fam, SET_VERIFIED) in runs and not vs and not no_new else None
-        c_low = compare(y, o, runs[(fam, SET_LOWRISK)], target=T, n_boot=nb, seed=seed + 13) if o and (fam, SET_LOWRISK) in runs and not ls and not no_new else None
-        cmps[fam] = {"new": c_new, "verified": c_ver, "lowrisk": c_low}
-        dec[fam] = decide(c_new, c_ver, c_low, no_new=no_new, ver_same=vs, low_same=ls, cfg=cfg)
+        o, al, sf = runs.get((fam, SET_OLD)), runs.get((fam, SET_ALL)), runs.get((fam, SET_SAFE))
+        c_all = compare(y, o, al, target=T, n_boot=nb, seed=seed + 11) if o and al and not no_new else None
+        c_safe = c_all if safe_same else (compare(y, o, sf, target=T, n_boot=nb, seed=seed + 12) if o and sf and not safe_none else None)
+        cmps[fam] = {"all": c_all, "safe": c_safe}
+        dec[fam] = decide(c_all, c_safe, no_new=no_new, safe_same=safe_same, cfg=cfg)
     A["comparisons"], A["decisions"] = cmps, dec
     A["overall"] = overall({f: d["verdict"] for f, d in dec.items()})
-    # lead family for the management page: the lowest nested false-alert share of OLD_PLUS_NEW_SAFE (stated as a best-of-three choice)
-    cand = [(runs[(f, SET_NEW)], f) for f in FAMILIES if (f, SET_NEW) in runs]
-    A["lead_family"] = min(cand, key=lambda t: (np.nan_to_num(_op(y, t[0], T)["false_alert_share"], nan=9.0), FAMILIES.index(t[1])))[1] if cand else None
-    # domains and ablations (paired vs their reference)
+    A["safe_same"], A["safe_none"], A["no_new"] = safe_same, safe_none, no_new
+    # exploratory only: the family with the lowest nested false-alert share of OLD_PLUS_ALL_NEW_ELIGIBLE (never the basis of the answer)
+    cand = [(runs[(f, SET_ALL)], f) for f in FAMILIES if (f, SET_ALL) in runs]
+    A["best_family_exploratory"] = min(cand, key=lambda t: (np.nan_to_num(_op(y, t[0], T)["false_alert_share"], nan=9.0), FAMILIES.index(t[1])))[1] if cand else None
+    A["lead_family"] = PRIMARY_FAMILY
+    # domains (OLD + domain vs OLD) and ablations (ALL_NEW minus a block vs ALL_NEW), paired
     drows, arows = [], []
-    for fam in FAMILIES:
-        o, nw = runs.get((fam, SET_OLD)), runs.get((fam, SET_NEW))
+    for fam in [f for f in FAMILIES if f in plan.get("domain_families", FAMILIES)]:
+        o = runs.get((fam, SET_OLD))
         for dom, info in plan["domains"].items():
             s = info["name"]
             if not info["added"]:
@@ -171,25 +174,31 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
                 drows.append({"family": fam, "domain": dom, "n_new_features": len(info["added"]), "status": "NOT_COMPLETE"})
                 continue
             c = compare(y, o, runs[(fam, s)], target=T, n_boot=nb, seed=seed + 21)
-            drows.append({"family": fam, "domain": dom, "n_new_features": len(info["added"]), "new_features": "; ".join(info["added"]), "status": "COMPLETE",
-                          **_delta_cols(c), "folds_improved": c["folds_improved"], "n_folds": len(c["fold_delta_false_alert_share"])})
+            drows.append({"family": fam, "role": "PRIMARY" if fam == PRIMARY_FAMILY else "SECONDARY", "domain": dom, "n_new_features": len(info["added"]),
+                          "new_features": "; ".join(info["added"]), "status": "COMPLETE", **_delta_cols(c), "delta_false_alerts": c["delta_op_fp"],
+                          "folds_improved": c["folds_improved"], "n_folds": len(c["fold_delta_false_alert_share"])})
+    for fam in [f for f in FAMILIES if f in plan.get("ablation_families", [PRIMARY_FAMILY])]:
+        al = runs.get((fam, SET_ALL))
         for ab, info in plan["ablations"].items():
             s = info["name"]
             if not info["removed"]:
                 arows.append({"family": fam, "ablation": ab, "n_removed": 0, "status": "NOTHING_TO_REMOVE"})
                 continue
-            if nw is None or (fam, s) not in runs:
+            if al is None or (fam, s) not in runs:
                 arows.append({"family": fam, "ablation": ab, "n_removed": len(info["removed"]), "status": "NOT_COMPLETE"})
                 continue
-            c = compare(y, nw, runs[(fam, s)], target=T, n_boot=nb, seed=seed + 31)
+            c = compare(y, al, runs[(fam, s)], target=T, n_boot=nb, seed=seed + 31)
             b = c["b"]
             arows.append({"family": fam, "ablation": ab, "n_removed": len(info["removed"]), "removed": "; ".join(info["removed"]), "status": "COMPLETE",
                           "ap": b["ap"], "auroc": b["auroc"], "brier": b["brier"], "ppv_at_70": b["op_ppv"], "false_alert_share_at_70": b["op_false_alert_share"],
-                          "flagged_share_at_70": b["op_flagged_share"], **_delta_cols(c), "folds_improved": c["folds_improved"]})
+                          "flagged_share_at_70": b["op_flagged_share"], **_delta_cols(c), "delta_false_alerts": c["delta_op_fp"],
+                          "folds_worse_without_block": c["folds_improved"], "note": "delta = (all new minus the block) - (all new): > 0 means the block helped"})
     A["domains"], A["ablations"] = pd.DataFrame(drows), pd.DataFrame(arows)
     A["subgroups"] = subgroup_rows(ctx, runs, cfg)
     A["calibration"] = calibration_rows(y, runs, 10)
     A["pred_summary"] = prediction_summary(y, runs)
+    A["outer_folds"] = outer_fold_rows(y, runs, T)
+    A["capacity"] = capacity_rows(y, runs, [float(c) for c in cfg["operating"].get("capacities", [0.1, 0.2, 0.3])])
     A["grid"], A["full_thresholds"] = threshold_tables(y, runs, float(cfg["privacy"]["threshold_grid_step"]))
     return A
 
@@ -212,41 +221,52 @@ def _delta_cols(c: dict[str, Any]) -> dict[str, Any]:
 
 
 # ============================================================================ tables
+def _model_cols(m: dict[str, Any]) -> dict[str, Any]:
+    return {"achieved_sensitivity": m["op_sensitivity"], "ppv": m["op_ppv"], "false_alert_share": m["op_false_alert_share"], "flagged_share": m["op_flagged_share"],
+            "fpr": m["op_fpr"], "specificity": m["op_specificity"], "captured_falls": m["op_tp"], "false_alerts": m["op_fp"], "missed_falls": m["op_fn"],
+            "true_negatives": m["op_tn"], "flagged": m["op_flagged"], "flagged_per_10000": m["op_flagged_per_10000"],
+            "false_alerts_per_10000": m["op_false_alerts_per_10000"], "flagged_per_captured_fall": m["op_flagged_per_capture"], "lift": m["op_lift"],
+            "ap": m["ap"], "auroc": m["auroc"], "brier": m["brier"], "brier_skill": m.get("brier_skill"), "logloss": m.get("logloss"),
+            "calibration_intercept": m["calibration_intercept"], "calibration_slope": m["calibration_slope"],
+            "descriptive_pooled_false_alert_share_at_70": m["desc_fas_0.70"], "descriptive_pooled_flagged_share_at_70": m["desc_flagged_0.70"]}
+
+
+def _delta_row(c: dict[str, Any]) -> dict[str, Any]:
+    return {"achieved_sensitivity": c["delta_op_sensitivity"], **{k: c.get(f"delta_op_{k}") for k in ("ppv", "false_alert_share", "flagged_share", "fpr", "specificity")},
+            "captured_falls": c["delta_op_tp"], "false_alerts": c["delta_op_fp"], "missed_falls": c.get("delta_op_fn"), "flagged": c.get("delta_op_flagged"),
+            "flagged_per_10000": c["delta_op_flagged_per_10000"], "false_alerts_per_10000": c["delta_op_false_alerts_per_10000"],
+            "false_alerts_avoided_per_10000": -c["delta_op_false_alerts_per_10000"],
+            "false_alerts_avoided_per_10000_ci_low": -c["delta_op_false_alerts_per_10000_ci_high"],
+            "false_alerts_avoided_per_10000_ci_high": -c["delta_op_false_alerts_per_10000_ci_low"],
+            **{f"delta_{k}_ci_{e}": c[f"delta_op_{k}_ci_{e}"] for k in ("false_alert_share", "flagged_share", "ppv", "false_alerts_per_10000", "fp", "tp", "flagged")
+               for e in ("low", "high") if f"delta_op_{k}_ci_{e}" in c},
+            "delta_captured_per_10000": c["delta_op_captured_per_10000"],
+            **{f"delta_{k}{suf}": c[f"delta_{k}{suf}"] for k in ("ap", "auroc", "brier") for suf in ("", "_ci_low", "_ci_high")},
+            "delta_descriptive_false_alert_share_at_70": c.get("delta_desc_fas_0.70"), "folds_improved": c["folds_improved"],
+            "fold_delta_false_alert_share": "; ".join(f"{100 * v:+.2f} pp" for v in c["fold_delta_false_alert_share"])}
+
+
 def primary_table(A: dict[str, Any]) -> pd.DataFrame:
     rows = []
-    for fam in FAMILIES:
-        c = A["comparisons"][fam]["new"]
-        d = A["decisions"][fam]
+    for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY]):
+        role = "PRIMARY" if fam == PRIMARY_FAMILY else "SECONDARY"
+        c, cs, d = A["comparisons"][fam]["all"], A["comparisons"][fam]["safe"], A["decisions"][fam]
         if c is None:
-            rows.append({"family": fam, "row": "VERDICT", "verdict": d["verdict"], "reason": d["reason"]})
+            rows.append({"family": fam, "role": role, "comparison": f"{SET_OLD} vs {SET_ALL}", "row": "VERDICT", "verdict": d["verdict"], "reason": d["reason"]})
             continue
-        for lab, m in (("OLD", c["a"]), ("OLD_PLUS_NEW_SAFE", c["b"])):
-            rows.append({"family": fam, "row": lab, "achieved_sensitivity": m["op_sensitivity"], "ppv": m["op_ppv"], "false_alert_share": m["op_false_alert_share"],
-                         "flagged_share": m["op_flagged_share"], "fpr": m["op_fpr"], "specificity": m["op_specificity"], "captured_falls": m["op_tp"],
-                         "false_alerts": m["op_fp"], "missed_falls": m["op_fn"], "flagged": m["op_flagged"], "flagged_per_10000": m["op_flagged_per_10000"],
-                         "false_alerts_per_10000": m["op_false_alerts_per_10000"], "flagged_per_captured_fall": m["op_flagged_per_capture"], "lift": m["op_lift"],
-                         "ap": m["ap"], "auroc": m["auroc"], "brier": m["brier"], "calibration_intercept": m["calibration_intercept"],
-                         "calibration_slope": m["calibration_slope"], "descriptive_pooled_false_alert_share_at_70": m["desc_fas_0.70"],
-                         "descriptive_pooled_flagged_share_at_70": m["desc_flagged_0.70"]})
-        rows.append({"family": fam, "row": "DELTA_NEW_MINUS_OLD", "achieved_sensitivity": c["delta_op_sensitivity"],
-                     **{k: c.get(f"delta_op_{k}") for k in ("ppv", "false_alert_share", "flagged_share", "fpr", "specificity")},
-                     "captured_falls": c["delta_op_tp"], "false_alerts": c["delta_op_fp"], "flagged_per_10000": c["delta_op_flagged_per_10000"],
-                     "false_alerts_per_10000": c["delta_op_false_alerts_per_10000"],
-                     "delta_false_alert_share_ci_low": c["delta_op_false_alert_share_ci_low"], "delta_false_alert_share_ci_high": c["delta_op_false_alert_share_ci_high"],
-                     "delta_flagged_share_ci_low": c["delta_op_flagged_share_ci_low"], "delta_flagged_share_ci_high": c["delta_op_flagged_share_ci_high"],
-                     "delta_ppv_ci_low": c["delta_op_ppv_ci_low"], "delta_ppv_ci_high": c["delta_op_ppv_ci_high"],
-                     "delta_false_alerts_per_10000_ci_low": c["delta_op_false_alerts_per_10000_ci_low"],
-                     "delta_false_alerts_per_10000_ci_high": c["delta_op_false_alerts_per_10000_ci_high"], "delta_captured_per_10000": c["delta_op_captured_per_10000"],
-                     "delta_ap": c["delta_ap"], "delta_ap_ci_low": c["delta_ap_ci_low"], "delta_ap_ci_high": c["delta_ap_ci_high"], "delta_auroc": c["delta_auroc"],
-                     "delta_auroc_ci_low": c["delta_auroc_ci_low"], "delta_auroc_ci_high": c["delta_auroc_ci_high"], "delta_brier": c["delta_brier"],
-                     "delta_brier_ci_low": c["delta_brier_ci_low"], "delta_brier_ci_high": c["delta_brier_ci_high"],
-                     "delta_descriptive_false_alert_share_at_70": c.get("delta_desc_fas_0.70"), "folds_improved": c["folds_improved"]})
-        rows.append({"family": fam, "row": "VERDICT", "verdict": d["verdict"], "reason": d["reason"], **{f"criterion_{k}": v for k, v in d["criteria"].items()}})
+        rows.append({"family": fam, "role": role, "comparison": f"{SET_OLD} vs {SET_ALL}", "row": SET_OLD, **_model_cols(c["a"])})
+        rows.append({"family": fam, "role": role, "comparison": f"{SET_OLD} vs {SET_ALL}", "row": SET_ALL, **_model_cols(c["b"])})
+        rows.append({"family": fam, "role": role, "comparison": f"{SET_OLD} vs {SET_ALL}", "row": "DELTA_NEW_MINUS_OLD", **_delta_row(c)})
+        if cs is not None and not A.get("safe_same"):
+            rows.append({"family": fam, "role": "SECONDARY", "comparison": f"{SET_OLD} vs {SET_SAFE}", "row": SET_SAFE, **_model_cols(cs["b"])})
+            rows.append({"family": fam, "role": "SECONDARY", "comparison": f"{SET_OLD} vs {SET_SAFE}", "row": "DELTA_NEW_MINUS_OLD", **_delta_row(cs)})
+        rows.append({"family": fam, "role": role, "comparison": f"{SET_OLD} vs {SET_ALL}", "row": "VERDICT", "verdict": d["verdict"], "reason": d["reason"],
+                     **{f"criterion_{k}": v for k, v in d["criteria"].items()}})
     return pd.DataFrame(rows)
 
 
 # ============================================================================ figures
-def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame) -> list[str]:
+def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame, stab: pd.DataFrame) -> list[str]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -256,7 +276,9 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame)
     runs, grid = A["runs"], A["grid"]
     grid = grid[grid_ok(grid)] if len(grid) else grid          # the figures show only rows the shared table shows in full
     made = []
-    col = {SET_OLD: "#6b7280", SET_NEW: "#2563eb"}
+    col = {SET_OLD: "#6b7280", SET_ALL: "#2563eb", SET_SAFE: "#16a34a"}
+    lab = {SET_OLD: "OLD", SET_ALL: "OLD + ALL NEW", SET_SAFE: "OLD + NEW SAFE"}
+    shown = (SET_OLD, SET_ALL) if A.get("safe_same") else (SET_OLD, SET_ALL, SET_SAFE)
 
     def save(fig: Any, name: str) -> None:
         fig.tight_layout()
@@ -264,66 +286,66 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame)
         plt.close(fig)
         made.append(name)
 
-    fams = [f for f in FAMILIES if any(k == (f, SET_OLD) for k in runs)]
-    if len(grid):
-        for name, ycol, lab in (("01_sensitivity_vs_false_alert_share.png", "false_alert_share", "false-alert share (FP / alerts)"),
-                                ("02_sensitivity_vs_population_flagged.png", "flagged_share", "population flagged"),
-                                ("03_sensitivity_vs_ppv.png", "ppv", "PPV (precision)")):
-            fig, axes = plt.subplots(1, max(1, len(fams)), figsize=(5 * max(1, len(fams)), 4), squeeze=False)
+    fams = [f for f in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY]) if (f, SET_OLD) in runs]
+    ttl = lambda fam: f"{fam}{' (PRIMARY)' if fam == PRIMARY_FAMILY else ''}"  # noqa: E731
+    if len(grid) and fams:
+        for name, ycol, ylab in (("01_sensitivity_vs_false_alert_share.png", "false_alert_share", "false-alert share (FP / alerts)"),
+                                 ("02_sensitivity_vs_population_flagged.png", "flagged_share", "population flagged"),
+                                 ("03_sensitivity_vs_ppv.png", "ppv", "PPV (precision)")):
+            fig, axes = plt.subplots(1, len(fams), figsize=(5 * len(fams), 4), squeeze=False)
             for ax, fam in zip(axes[0], fams):
-                for s in (SET_OLD, SET_NEW):
+                for s in shown:
                     g = grid[(grid["family"] == fam) & (grid["feature_set"] == s)]
-                    ax.plot(g["sensitivity"], g[ycol], label=s, color=col[s])
+                    ax.plot(g["sensitivity"], g[ycol], label=lab[s], color=col[s])
                 ax.axvline(0.70, ls="--", color="#b91c1c", lw=1)
-                ax.set_title(f"{fam} (pooled OOF, descriptive)")
+                ax.set_title(f"{ttl(fam)} - pooled OOF, descriptive")
                 ax.set_xlabel("sensitivity (falls captured)")
-                ax.set_ylabel(lab)
+                ax.set_ylabel(ylab)
                 ax.legend(fontsize=8)
             save(fig, name)
-    if fams and len(grid):
         for name, kind in (("04_precision_recall.png", "pr"), ("05_roc.png", "roc")):
             fig, axes = plt.subplots(1, len(fams), figsize=(5 * len(fams), 4), squeeze=False)
             for ax, fam in zip(axes[0], fams):
-                for s in (SET_OLD, SET_NEW):
+                for s in shown:
                     g = grid[(grid["family"] == fam) & (grid["feature_set"] == s)]
                     if not len(g):
                         continue
                     if kind == "pr":
-                        ax.plot(g["sensitivity"], g["ppv"], color=col[s], label=s)
+                        ax.plot(g["sensitivity"], g["ppv"], color=col[s], label=lab[s])
                         ax.set_xlabel("recall (sensitivity)")
                         ax.set_ylabel("precision (PPV)")
                     else:
-                        ax.plot(np.r_[0.0, g["fpr"].to_numpy(dtype=float)], np.r_[0.0, g["sensitivity"].to_numpy(dtype=float)], color=col[s], label=s)
+                        ax.plot(np.r_[0.0, g["fpr"].to_numpy(dtype=float)], np.r_[0.0, g["sensitivity"].to_numpy(dtype=float)], color=col[s], label=lab[s])
                         ax.plot([0, 1], [0, 1], ":", color="#9ca3af")
                         ax.set_xlabel("false-positive rate")
                         ax.set_ylabel("sensitivity")
-                ax.set_title(f"{fam} (pooled OOF, 0.5% grid)")
+                ax.set_title(f"{ttl(fam)} (pooled OOF, 0.5% grid)")
                 ax.legend(fontsize=8)
             save(fig, name)
     cal = A["calibration"]
-    if len(cal):
+    if len(cal) and fams:
         fig, axes = plt.subplots(1, len(fams), figsize=(5 * len(fams), 4), squeeze=False)
         for ax, fam in zip(axes[0], fams):
-            for s in (SET_OLD, SET_NEW):
+            for s in shown:
                 c = cal[(cal["family"] == fam) & (cal["feature_set"] == s)]
-                ax.plot(c["mean_predicted"], c["observed_rate"], "o-", color=col[s], label=s)
+                ax.plot(c["mean_predicted"], c["observed_rate"], "o-", color=col[s], label=lab[s])
             mx = float(cal["mean_predicted"].max() * 1.1) if len(cal) else 1
             ax.plot([0, mx], [0, mx], ":", color="#9ca3af")
-            ax.set_title(f"{fam} calibration (deciles)")
+            ax.set_title(f"{ttl(fam)} calibration (deciles)")
             ax.set_xlabel("mean predicted risk")
             ax.set_ylabel("observed fall rate")
             ax.legend(fontsize=8)
         save(fig, "06_calibration.png")
     m = A["models"]
     if len(m):
-        mm = m[m["feature_set"].isin([SET_OLD, SET_NEW])]
+        mm = m[m["feature_set"].isin(list(shown))]
         if len(mm):
-            fig, ax = plt.subplots(figsize=(7, 4))
-            labels = [f"{r.family}\n{'NEW' if r.feature_set == SET_NEW else 'OLD'}" for r in mm.itertuples()]
+            fig, ax = plt.subplots(figsize=(8, 4))
+            labels = [f"{r.family}\n{lab[r.feature_set]}" for r in mm.itertuples()]
             err = np.array([[r.brier - r.brier_ci_low if pd.notna(getattr(r, "brier_ci_low", np.nan)) else 0 for r in mm.itertuples()],
                             [r.brier_ci_high - r.brier if pd.notna(getattr(r, "brier_ci_high", np.nan)) else 0 for r in mm.itertuples()]])
             ax.bar(range(len(mm)), mm["brier"], yerr=err, color=[col[s] for s in mm["feature_set"]])
-            ax.set_xticks(range(len(mm)), labels, fontsize=8)
+            ax.set_xticks(range(len(mm)), labels, fontsize=7)
             ax.set_ylabel("Brier score (lower = better)")
             ax.set_title("Brier comparison (pooled OOF, 95% CI)")
             save(fig, "07_brier_comparison.png")
@@ -332,45 +354,49 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame)
         dd = dm[dm["status"] == "COMPLETE"]
         if len(dd):
             fig, ax = plt.subplots(figsize=(8, 0.5 * len(dd) + 1.5))
-            lab = [f"{r.family}: {r.domain}" for r in dd.itertuples()]
+            yl = [f"{r.family}: {r.domain}" for r in dd.itertuples()]
             v = dd["delta_false_alert_share"].to_numpy(dtype=float) * 100
             lo = dd["delta_false_alert_share_ci_low"].to_numpy(dtype=float) * 100
             hi = dd["delta_false_alert_share_ci_high"].to_numpy(dtype=float) * 100
             ax.errorbar(v, range(len(dd)), xerr=[v - lo, hi - v], fmt="o", color="#2563eb")
             ax.axvline(0, color="#6b7280", lw=1)
-            ax.set_yticks(range(len(dd)), lab, fontsize=8)
+            ax.set_yticks(range(len(dd)), yl, fontsize=8)
             ax.set_xlabel("change in false-alert share at the 70% target (percentage points; < 0 = fewer false alerts)")
             ax.set_title("Domain incremental value: OLD + domain vs OLD")
             save(fig, "08_domain_incremental_value.png")
-    if len(perm):
-        top = perm[perm["feature_set"] == SET_NEW]
-        if len(top):
-            fams_p = [f for f in FAMILIES if f in set(top["family"])]
-            fig, axes = plt.subplots(1, len(fams_p), figsize=(5.5 * len(fams_p), 5), squeeze=False)
-            for ax, fam in zip(axes[0], fams_p):
-                t = top[top["family"] == fam].head(15).iloc[::-1]
-                ax.barh(t["feature"], t["mean_drop_ap"], color="#2563eb")
-                ax.set_title(f"{fam}: top predictors (permutation, AP drop)")
-                ax.tick_params(axis="y", labelsize=7)
-            save(fig, "09_top_feature_importance.png")
+    st_ = stab[(stab["family"] == PRIMARY_FAMILY)] if len(stab) and "selection_frequency" in stab else pd.DataFrame()
+    px = perm[(perm["family"] == "XGB") & (perm["feature_set"] == SET_ALL)] if len(perm) else pd.DataFrame()
+    if len(st_) or len(px):
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+        if len(st_):
+            t = st_.sort_values(["selection_frequency", "coefficient_median"], ascending=[False, False]).head(20).iloc[::-1]
+            axes[0].barh(t["feature"], t["selection_frequency"], color=["#2563eb" if str(f).startswith("new_") else "#6b7280" for f in t["feature"]])
+            axes[0].set_xlim(0, 1)
+            axes[0].set_title(f"{PRIMARY_FAMILY} (primary): bootstrap selection frequency\n(blue = new V21 predictor; not causal)")
+            axes[0].tick_params(axis="y", labelsize=7)
+        if len(px):
+            t = px.head(15).iloc[::-1]
+            axes[1].barh(t["feature"], t["mean_drop_ap"], color=["#2563eb" if str(f).startswith("new_") else "#6b7280" for f in t["feature"]])
+            axes[1].set_title("XGBoost (secondary): permutation importance (AP drop)")
+            axes[1].tick_params(axis="y", labelsize=7)
+        save(fig, "09_feature_importance_coefficient_stability.png")
     if len(grid):
-        lead = A.get("lead_family") or fams[0]
-        g = grid[(grid["family"] == lead) & (grid["feature_set"] == SET_NEW)]
+        g = grid[(grid["family"] == PRIMARY_FAMILY) & (grid["feature_set"] == SET_ALL)]
         if len(g):
             fig, ax = plt.subplots(figsize=(7, 4))
             ax.plot(g["threshold"], g["sensitivity"], label="sensitivity")
             ax.plot(g["threshold"], g["ppv"], label="PPV")
             ax.plot(g["threshold"], g["flagged_share"], label="population flagged")
+            ax.plot(g["threshold"], g["false_alert_share"], label="false-alert share")
             ax.set_xscale("log")
             ax.set_xlabel("risk threshold")
-            ax.set_title(f"Threshold trade-off ({lead}, OLD_PLUS_NEW_SAFE, pooled OOF)")
+            ax.set_title(f"Threshold trade-off ({PRIMARY_FAMILY}, {SET_ALL}, pooled OOF)")
             ax.legend(fontsize=8)
             save(fig, "10_threshold_tradeoff.png")
-    lead = A.get("lead_family")
-    c = A["comparisons"].get(lead, {}).get("new") if lead else None
+    c = A["comparisons"].get(PRIMARY_FAMILY, {}).get("all")
     if c is not None:
         fig, axes = plt.subplots(1, 2, figsize=(9, 4))
-        for ax, (lab, mm_) in zip(axes, (("OLD", c["a"]), ("OLD + NEW", c["b"]))):
+        for ax, (lb, mm_) in zip(axes, (("OLD", c["a"]), ("OLD + ALL NEW", c["b"]))):
             n = mm_["op_tp"] + mm_["op_fp"] + mm_["op_fn"] + mm_["op_tn"]
             vals = np.array([[mm_["op_tp"], mm_["op_fn"]], [mm_["op_fp"], mm_["op_tn"]]]) * 1e4 / n
             ax.imshow(vals, cmap="Blues")
@@ -378,17 +404,17 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame)
                 ax.text(j, i, f"{v:,.0f}", ha="center", va="center", fontsize=11, color="white" if v > vals.max() * 0.5 else "black")
             ax.set_xticks([0, 1], ["alerted", "not alerted"])
             ax.set_yticks([0, 1], ["fell", "did not fall"])
-            ax.set_title(f"{lab} ({lead}) per 10,000 patients")
+            ax.set_title(f"{lb} ({PRIMARY_FAMILY}) per 10,000 patients")
         save(fig, "11_confusion_per_10000_at_70.png")
-    rows = [(f, A["comparisons"][f]["new"]) for f in FAMILIES if A["comparisons"].get(f, {}).get("new")]
+    rows = [(f, A["comparisons"][f]["all"]) for f in fams if A["comparisons"].get(f, {}).get("all")]
     if rows:
         fig, ax = plt.subplots(figsize=(7, 4))
         x = np.arange(len(rows))
         a = [r["a"]["op_false_alerts_per_10000"] for _, r in rows]
         b = [r["b"]["op_false_alerts_per_10000"] for _, r in rows]
         ax.bar(x - 0.2, a, 0.4, label="OLD", color=col[SET_OLD])
-        ax.bar(x + 0.2, b, 0.4, label="OLD + NEW", color=col[SET_NEW])
-        ax.set_xticks(x, [f for f, _ in rows])
+        ax.bar(x + 0.2, b, 0.4, label="OLD + ALL NEW", color=col[SET_ALL])
+        ax.set_xticks(x, [ttl(f) for f, _ in rows])
         ax.set_ylabel("false alerts per 10,000 patients")
         ax.set_title("False alerts at the nested 70%-sensitivity rule")
         ax.legend()
@@ -397,138 +423,200 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame)
 
 
 # ============================================================================ summaries
-def _fam_line(A: dict[str, Any], fam: str, y_n: int) -> dict[str, Any] | None:
-    c = A["comparisons"][fam]["new"]
-    if c is None:
-        return None
-    a, b = c["a"], c["b"]
-    return {"old_flagged": a["op_flagged"], "old_fas": a["op_false_alert_share"], "old_sens": a["op_sensitivity"], "new_flagged": b["op_flagged"],
-            "new_fas": b["op_false_alert_share"], "new_sens": b["op_sensitivity"], "fp_saved_10k": -c["delta_op_false_alerts_per_10000"],
-            "fp_saved_10k_ci": (-c["delta_op_false_alerts_per_10000_ci_high"], -c["delta_op_false_alerts_per_10000_ci_low"]),
-            "flag_saved_10k": -c["delta_op_flagged_per_10000"], "fp_saved": a["op_fp"] - b["op_fp"], "flag_saved": a["op_flagged"] - b["op_flagged"],
-            "d_fas": c["delta_op_false_alert_share"], "d_fas_ci": (c["delta_op_false_alert_share_ci_low"], c["delta_op_false_alert_share_ci_high"])}
+REASON_HE = (("PROBABLE_RENAME_OF_V1", "ככל הנראה שינוי שם של עמודת רשם שהוסרה מ-V1 (עם משמעות מתוקנת) – לא בהכרח מידע חדש"),
+             ("UNVALIDATED_CODES", "תת-קוד גולמי ללא מילון מאומת"), ("EXPERIMENTAL_COMPOSITE", "מדד מורכב ניסויי"),
+             ("timing uncertain", "תזמון לא ודאי ביום המדד (כולל חשיפה תרופתית שאינה מוגבלת בתאריך רכישה)"),
+             ("INELIGIBLE_LEAKAGE", "חשד לדליפת מידע מהעתיד (חזק מדי לבדו)"), ("INELIGIBLE_TIMING", "רשומות אחרי תאריך המדד"),
+             ("INELIGIBLE_DATA", "מעט מדי נתונים / ערך קבוע"), ("INELIGIBLE_SEMANTICS", "הערכים אינם תואמים את ההגדרה"))
+
+
+def _reason_he(text: str) -> str:
+    for key, he in REASON_HE:
+        if key in text:
+            return he
+    return text
+
+
+def _excluded_lines(plan: dict[str, Any]) -> list[str]:
+    np_ = plan.get("new_predictors") or {}
+    out = [f"  - {r['column']}: לא נכלל באף מערך – {_reason_he(r['class'] + ' ' + r['set_reason'])}" for r in np_.get("excluded_from_all_new", [])]
+    out += [f"  - {r['column']}: נכלל ב-ALL_NEW בלבד (לא ב-NEW_SAFE) – {_reason_he(r['set_reason'])}" for r in np_.get("all_new_only", [])]
+    out += [f"  - {r['column']}: עמודה חדשה שאינה מנבא – {'דגל היעדר מקור / מטא-דאטה' if r['class'] == 'METADATA_OR_ADMIN' else r['class']}"
+            for r in np_.get("new_non_predictor_columns", [])]
+    return out
 
 
 def management_he(A: dict[str, Any], plan: dict[str, Any], synthetic: bool, interim: bool) -> str:
     n, ev = plan["n"], plan["events"]
-    lead = A.get("lead_family")
-    L = [f"# סיכום למנהלים – שלב 5: פיתוח מחדש על נתוני 2026", "", f"**{WATERMARK_HE}**", ""]
+    fam = PRIMARY_FAMILY
+    sc = plan.get("schema_counts") or {}
+    np_ = plan.get("new_predictors") or {}
+    L = ["# סיכום למנהלים – שלב 5: פיתוח מחדש על נתוני 2026 והערך המוסף של מידע V21", "", f"**{WATERMARK_HE}**", ""]
     if synthetic:
         L += [f"> **{SYNTHETIC_WATERMARK}** – המספרים להלן מנתונים סינתטיים (בדיקת תוכנה) ואינם תוצאה מדעית.", ""]
     if interim:
         L += ["> **דו\"ח ביניים** – ההשוואה הראשית הושלמה; ניתוחי התחומים, האבלציות והיציבות עדיין רצים.", ""]
-    L += ["## עמוד ראשון – התשובות", "",
-          f"1. **כמה מטופלים נותחו?** {num(n)} מטופלים (כל המבוטחים הזכאים עם תוצא ידוע בתאריך 01/01/2026).",
-          f"2. **כמה נפילות נרשמו?** {num(ev)} נפילות ב-180 הימים שלאחר תאריך המדד ({pct(ev / n if n else float('nan'))} מהמטופלים).", ""]
-    fl = _fam_line(A, lead, n) if lead else None
-    if fl:
-        old_n = num(fl["old_flagged"])
-        new_n = num(fl["new_flagged"])
-        saved = fl["fp_saved_10k"]
-        verb = "נחסכו" if saved >= 0 else "נוספו"
-        L += [f"3. **המודל הישן (OLD, {FAM_HE[lead]}):** כדי לתפוס כ-70% מהנפילות סומנו {old_n} מטופלים ({pct(fl['old_flagged'] / n)} מהאוכלוסייה); "
-              f"{pct(fl['old_fas'])} מההתראות היו התראות שווא (בפועל נתפסו {pct(fl['old_sens'])} מהנפילות).",
-              f"4. **המודל עם הפיצ'רים החדשים (OLD+NEW):** סומנו {new_n} מטופלים ({pct(fl['new_flagged'] / n)}); {pct(fl['new_fas'])} התראות שווא "
-              f"(נתפסו {pct(fl['new_sens'])} מהנפילות).",
-              f"5. **ההבדל:** {verb} {num(abs(saved))} התראות שווא לכל 10,000 מטופלים (רווח סמך 95%: {num(fl['fp_saved_10k_ci'][0])} עד "
-              f"{num(fl['fp_saved_10k_ci'][1])}); {'פחות' if fl['flag_saved_10k'] >= 0 else 'יותר'} {num(abs(fl['flag_saved_10k']))} מטופלים לכל 10,000 "
-              f"נדרשים להתערבות. בקוהורט כולו: {num(fl['fp_saved'])} התראות שווא ו-{num(fl['flag_saved'])} סימונים {'פחות' if fl['flag_saved'] >= 0 else '(שלילי = יותר)'}.",
-              "", "> כדי לתפוס כ-70% מהנפילות:", f"> המודל הישן סימן {old_n} מטופלים, מתוכם {pct(fl['old_fas'])} התראות שווא.",
-              f"> המודל עם הפיצ'רים החדשים סימן {new_n} מטופלים, מתוכם {pct(fl['new_fas'])} התראות שווא.",
-              f"> כלומר {verb} {num(abs(saved))} התראות שווא לכל 10,000 מטופלים.", ""]
-    elif plan["alias"][SET_NEW] == plan["alias"][SET_OLD]:
-        L += ["3-5. **אין השוואה:** אף פיצ'ר חדש של V21 לא עבר את בדיקות התזמון / המשמעות / הכיסוי / הדליפה, ולכן OLD+NEW זהה ל-OLD.", ""]
+    L += ["## עמוד ראשון", "", "**השאלה:** בערך באותה רגישות של 70% לפחות (תפיסת נפילות), האם הוספת המידע החדש של V21 מפחיתה את מספר ואחוז התראות השווא?", "",
+          "### הנתונים והפיצ'רים",
+          f"- **מטופלים שנותחו:** {num(n)} (כל הזכאים עם תוצא ידוע, תאריך מדד 01/01/2026, תחזית בסוף יום המדד).",
+          f"- **נפילות:** {num(ev)} ב-180 הימים שאחרי יום המדד ({pct(ev / n if n else float('nan'))} מהמטופלים).",
+          f"- **השוואה מדויקת V1 → V21:** {sc.get('v1_columns', '—')} עמודות ב-V1, {sc.get('extract_columns', '—')} ב-V21; "
+          f"{sc.get('new_columns', '—')} עמודות חדשות, {sc.get('removed_v1_columns', '—')} הוסרו, {sc.get('renamed_or_replaced', '—')} הוחלפו (שינוי שם ומשמעות), "
+          f"{sc.get('changed_definition', '—')} שינו הגדרה. שדות MEFI אינם חדשים (קיימים ב-V1).",
+          f"- **פיצ'רים חדשים אמיתיים שנמצאו ב-V21:** {np_.get('genuine_new_predictors', '—')}.",
+          f"- **נכנסו ל-OLD + כל החדשים הכשירים (ההשוואה העסקית):** {np_.get('all_new_eligible', '—')}.",
+          f"- **נכנסו ל-OLD + חדשים בטוחים בלבד (בדיקה מחמירה):** {np_.get('new_safe', '—')}."]
+    ex = _excluded_lines(plan)
+    L += ["- **מה הוצא ולמה:**" if ex else "- **מה הוצא:** אף פיצ'ר חדש לא הוצא.", *ex, ""]
+    c = A["comparisons"].get(fam, {}).get("all")
+    if c is not None:
+        a, b = c["a"], c["b"]
+        L += [f"### המודל הישן (OLD, {FAM_HE[fam]}) בכ-70% רגישות",
+              f"- מטופלים שקיבלו התראה: {num(a['op_flagged'])} ({pct(a['op_flagged_share'])} מהאוכלוסייה)",
+              f"- נפילות שנתפסו: {num(a['op_tp'])} מתוך {num(ev)} ({pct(a['op_sensitivity'])})",
+              f"- התראות שווא: {num(a['op_fp'])} ({pct(a['op_false_alert_share'])} מההתראות)",
+              f"- PPV (שיעור ההתראות שבהן אכן הייתה נפילה): {pct(a['op_ppv'])}", "",
+              f"### OLD + כל הפיצ'רים החדשים ({FAM_HE[fam]})",
+              f"- מטופלים שקיבלו התראה: {num(b['op_flagged'])} ({pct(b['op_flagged_share'])} מהאוכלוסייה)",
+              f"- נפילות שנתפסו: {num(b['op_tp'])} מתוך {num(ev)} ({pct(b['op_sensitivity'])})",
+              f"- התראות שווא: {num(b['op_fp'])} ({pct(b['op_false_alert_share'])} מההתראות)",
+              f"- PPV: {pct(b['op_ppv'])}", "",
+              "### ההבדל (חדש פחות ישן, אותם מטופלים)",
+              f"- **התראות שווא שנחסכו:** {num(a['op_fp'] - b['op_fp'])} בקוהורט; {num(-c['delta_op_false_alerts_per_10000'])} לכל 10,000 מטופלים "
+              f"(רווח סמך 95%: {num(-c['delta_op_false_alerts_per_10000_ci_high'])} עד {num(-c['delta_op_false_alerts_per_10000_ci_low'])}; ערך שלילי = יותר התראות שווא)",
+              f"- **התערבויות שנחסכו:** {num(a['op_flagged'] - b['op_flagged'])} מטופלים פחות קיבלו התראה ({num(-c['delta_op_flagged_per_10000'])} לכל 10,000)",
+              f"- **שינוי ב-PPV:** {pp(c['delta_op_ppv'])} (רווח סמך {pp(c['delta_op_ppv_ci_low'])} עד {pp(c['delta_op_ppv_ci_high'])})",
+              f"- **שינוי בשיעור התראות השווא:** {pp(c['delta_op_false_alert_share'])} (רווח סמך {pp(c['delta_op_false_alert_share_ci_low'])} עד "
+              f"{pp(c['delta_op_false_alert_share_ci_high'])}); שיפור ב-{c['folds_improved']} מתוך {len(c['fold_delta_false_alert_share'])} הקפלים",
+              f"- **נפילות שנוספו / אבדו:** {num(b['op_tp'] - a['op_tp'])} (חיובי = יותר נפילות נתפסו)", ""]
+    elif A.get("no_new"):
+        L += ["### אין השוואה", f"אף פיצ'ר חדש של V21 לא עבר את בדיקות התזמון / המשמעות / הכיסוי / הדליפה, ולכן OLD+ALL_NEW זהה ל-OLD.", ""]
     else:
-        L += ["3-5. ההשוואה הראשית עוד לא הושלמה.", ""]
-    L += [f"6. **האם הפיצ'רים החדשים הוסיפו מידע משמעותי?** **{OVERALL_HE.get(A['overall'], A['overall'])}** "
-          f"(לפי כלל ההחלטה שנקבע מראש; לפי משפחת מודל: " + ", ".join(f"{FAM_HE[f]} – {VERDICT_HE.get(d['verdict'], d['verdict'])}" for f, d in A["decisions"].items()) + ")."]
+        L += ["### ההשוואה הראשית עוד לא הושלמה", ""]
+    d = A["decisions"].get(fam, {})
+    ans = OVERALL_HE.get(A["overall"], A["overall"])
+    crit = d.get("criteria") or {}
+    why = {"1_lower_false_alert_share_nested_and_descriptive": "פחות התראות שווא בכלל ה-70% המקונן ובנקודת ה-70% התיאורית",
+           "2_paired_ci_below_zero_nested_and_at_equal_sensitivity": "רווח הסמך המזווג של ההפרש כולו מתחת ל-0 (בכלל המקונן ובאותה רגישות בדיוק)",
+           "3_every_outer_fold_improves": f"שיפור בכל {plan['cv']['outer_folds']} הקפלים החיצוניים",
+           "4_not_dependent_on_timing_or_provenance_questionable_predictors": "השיפור נשמר גם בלי פיצ'רים עם תזמון / מקור מפוקפק (NEW_SAFE)",
+           "5_calibration_not_materially_worse": "הכיול לא נפגע מהותית"}
+    L += ["### האם הפיצ'רים הנוספים של V21 הוסיפו מידע שימושי?", "", f"## **{ans}**", "",
+          f"התשובה נקבעת מראש לפי Elastic Net בלבד (OLD מול OLD + כל החדשים הכשירים), לפי כלל החלטה שנקבע לפני שנראו תוצאות: "
+          f"{VERDICT_HE.get(d.get('verdict', ''), d.get('verdict', ''))}."]
+    if crit:
+        L += [f"- {'✔' if v else '✘'} {why.get(k, k)}" for k, v in crit.items()]
+    sec = [f"{FAM_HE[f]} – {VERDICT_HE.get(A['decisions'][f]['verdict'], A['decisions'][f]['verdict'])}" for f in FAMILIES if f != fam]
+    L += ["", f"ניתוחים משניים (לא קובעים את התשובה): {'; '.join(sec)}. "
+          + (f"המשפחה עם הכי מעט התראות שווא (חקרני בלבד): {FAM_HE.get(A.get('best_family_exploratory'), A.get('best_family_exploratory'))}." if A.get("best_family_exploratory") else "")]
+    cs = A["comparisons"].get(fam, {}).get("safe")
+    if cs is not None and not A.get("safe_same"):
+        L += [f"בדיקה מחמירה (OLD + חדשים בטוחים בלבד, {FAM_HE[fam]}): שינוי בשיעור התראות השווא {pp(cs['delta_op_false_alert_share'])} "
+              f"(רווח סמך {pp(cs['delta_op_false_alert_share_ci_low'])} עד {pp(cs['delta_op_false_alert_share_ci_high'])}); "
+              f"{num(-cs['delta_op_false_alerts_per_10000'])} התראות שווא פחות לכל 10,000."]
     dm = A["domains"]
-    if len(dm) and "delta_false_alert_share" in dm and (dm["status"] == "COMPLETE").any():
-        dd = dm[(dm["status"] == "COMPLETE") & (dm["family"] == lead)] if lead else dm[dm["status"] == "COMPLETE"]
-        dd = dd.sort_values("delta_false_alert_share")
-        items = [f"{r.domain}: {pp(r.delta_false_alert_share)} בשיעור התראות השווא (רווח סמך {pp(r.delta_false_alert_share_ci_low)} עד {pp(r.delta_false_alert_share_ci_high)}; "
-                 f"שיפור ב-{int(r.folds_improved)} מתוך {int(r.n_folds)} קפלים; "
-                 + ("עקבי: רווח הסמך מתחת ל-0 ושיפור בכל הקפלים" if r.delta_false_alert_share_ci_high < 0 and int(r.folds_improved) == int(r.n_folds)
-                    else "לא עקבי – אין לבחור תחום על סמך זה") + ")" for r in dd.itertuples()]
-        L += [f"7. **אילו תחומים חדשים תרמו הכי הרבה?** ({FAM_HE.get(lead, lead)}) " + ("; ".join(items) if items else "—")]
-    else:
-        L += ["7. **אילו תחומים חדשים תרמו הכי הרבה?** " + ("ניתוח התחומים עוד רץ." if A["interim"] else "אין תחום חדש עם פיצ'רים כשירים / הניתוח לא הושלם.")]
-    L += ["8. **מגבלות מדעיות:** תיקוף צולב מקונן פנימי על תמונת מצב אחת (2026) – לא תיקוף חיצוני; נדרשת תמונת מצב עתידית בלתי תלויה לפני הטמעה. "
-          "בחירת משפחת המודל המובילה מתוך שלוש על אותם נתונים אופטימית מעט. התראות השווא נמדדות מול נפילות מתועדות בלבד. "
-          "פיצ'רים 'מאושרים' (SAFE_ATTESTED) מסתמכים על הצהרת ה-DWH שאין מידע אחרי תאריך המדד; ההשפעה שלהם נבדקת בניתוחי הרגישות. "
-          "חשיבות פיצ'רים אינה סיבתית.", "",
-          "## הערות לקריאה", "- 'סף מקונן': הסף נבחר בכל קפל רק על נתוני האימון של אותו קפל (תחזיות פנימיות), והוחל על המטופלים שלא נראו – זו ההערכה התפעולית הנאמנה.",
+    if len(dm) and "delta_false_alert_share" in dm and ((dm["status"] == "COMPLETE") & (dm["family"] == fam)).any():
+        dd = dm[(dm["status"] == "COMPLETE") & (dm["family"] == fam)].sort_values("delta_false_alert_share")
+        L += ["", f"**תרומת תחומים ({FAM_HE[fam]}, OLD + תחום מול OLD):** " + "; ".join(
+            f"{r.domain}: {pp(r.delta_false_alert_share)} (רווח סמך {pp(r.delta_false_alert_share_ci_low)} עד {pp(r.delta_false_alert_share_ci_high)}; "
+            f"שיפור ב-{int(r.folds_improved)}/{int(r.n_folds)} קפלים)" for r in dd.itertuples())]
+    L += ["", "### מגבלות",
+          "- תיקוף צולב מקונן פנימי על תמונת מצב אחת (2026) – לא תיקוף חיצוני; נדרשת תמונת מצב עתידית בלתי תלויה לפני הטמעה.",
+          "- התראות השווא נמדדות מול נפילות מתועדות בלבד (רשומות אבחנה); רשומות חוזרות עשויות לתעד מעקב אחר אותו אירוע.",
+          "- פיצ'רים 'מאושרים' (SAFE_ATTESTED, למשל רשמים) מסתמכים על הצהרת ה-DWH שאין מידע אחרי תאריך המדד; חשיפה תרופתית אינה מוגבלת בתאריך רכישה (הסתייגות V21).",
+          "- חשיבות פיצ'רים אינה סיבתית.", "",
+          "## הערות לקריאה",
+          "- 'כלל 70% מקונן': הסף נבחר בכל קפל רק על נתוני האימון של אותו קפל (תחזיות פנימיות) והוחל על מטופלים שלא נראו – זו ההערכה התפעולית הנאמנה; "
+          "הרגישות בפועל משתנה סביב 70%.",
           "- 'OOF מאוחד': אותן תחזיות מכל הקפלים יחד, עם סף שנקבע ישירות על התוצאות – לתכנון בלבד, לא תיקוף.",
-          f"- נתון היסטורי (2025, לא ראיה לערך הפיצ'רים החדשים): בסף 0.02 נתפסו {pct(HISTORICAL['sensitivity'])} מהנפילות, PPV {pct(HISTORICAL['ppv'])}, "
-          f"{pct(HISTORICAL['false_alert_share'])} התראות שווא.", "",
-          "קבצים: PRIMARY_70_SENSITIVITY_COMPARISON.csv, MODEL_COMPARISON.csv, DOMAIN_INCREMENTAL_VALUE.csv, figures/."]
+          f"- נתון היסטורי (2025, הקשר בלבד, לא ראיה לערך הפיצ'רים החדשים): בסף 0.02 נתפסו {pct(HISTORICAL['sensitivity'])} מהנפילות, PPV {pct(HISTORICAL['ppv'])}.", "",
+          "קבצים: PRIMARY_70_SENSITIVITY_COMPARISON.csv, THRESHOLD_TRADEOFF.csv, DOMAIN_INCREMENTAL_VALUE.csv, ALL_V21_COLUMN_CLASSIFICATION.csv, figures/."]
     return "\n".join(L) + "\n"
 
 
 def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: bool, interim: bool, he: bool) -> str:
     n, ev = plan["n"], plan["events"]
     t = A["models"]
+    sc = plan.get("schema_counts") or {}
+    np_ = plan.get("new_predictors") or {}
     L = [("# סיכום מדעי – שלב 5" if he else "# Phase 5 scientific summary"), "", f"**{WATERMARK_HE if he else WATERMARK}**", ""]
     if synthetic:
         L += [f"> **{SYNTHETIC_WATERMARK}**", ""]
     if interim:
         L += ["> INTERIM: primary comparison complete; domain / ablation / explanation / stability analyses still running.", ""]
     L += [("## שיטה" if he else "## Design"), "",
-          (f"- {DESIGN_LABEL}: {plan['n']} מטופלים, {plan['events']} נפילות; {plan['cv']['outer_folds']} קפלים חיצוניים × {plan['cv']['inner_folds']} פנימיים, "
-           "שיוך קפלים קבוע אחד לכל המודלים והקבוצות." if he else
-           f"- {DESIGN_LABEL}: {n} patients, {ev} events; {plan['cv']['outer_folds']} outer x {plan['cv']['inner_folds']} inner stratified folds, one fixed "
-           "assignment shared by every family and feature set."),
-          ("- משפחות: LASSO, Elastic Net, XGBoost (הוצהרו מראש). כיוונון, early stopping, בחירת קונפיגורציה וספים – רק על תחזיות OOF פנימיות." if he else
-           "- Families: LASSO, elastic net, XGBoost (pre-declared). Tuning, early stopping, configuration and every threshold use INNER out-of-fold "
+          (f"- {DESIGN_LABEL}: {n} מטופלים, {ev} נפילות; {plan['cv']['outer_folds']} קפלים חיצוניים × {plan['cv']['inner_folds']} פנימיים, שיוך קפלים קבוע אחד לכל המודלים והקבוצות." if he else
+           f"- {DESIGN_LABEL}: {n} patients, {ev} events (Fall_Next_180D_Ind, strictly after the index day); {plan['cv']['outer_folds']} outer x "
+           f"{plan['cv']['inner_folds']} inner stratified folds, one fixed assignment shared by every family and feature set."),
+          ("- שאלה ראשית: ב-~70% רגישות, האם OLD_PLUS_ALL_NEW_ELIGIBLE מפחית התראות שווא לעומת OLD? משפחה ראשית מוצהרת מראש: Elastic Net; LASSO ו-XGBoost משניים." if he else
+           f"- Primary question: at ~70% sensitivity, does {SET_ALL} reduce false alerts versus {SET_OLD}? Pre-declared primary family: ENET (elastic net); "
+           "LASSO and XGBoost are secondary analyses of the same sets."),
+          ("- כיוונון, early stopping, עיבוד מקדים, בחירת קונפיגורציה וספים – רק על תחזיות OOF פנימיות של נתוני האימון החיצוניים." if he else
+           "- Preprocessing (medians, scaling, learned code levels), tuning, early stopping, configuration choice and every threshold use INNER out-of-fold "
            "predictions of the outer-training patients only."),
-          ("- יעד: הסף הגבוה ביותר שמשיג רגישות ≥70% ב-OOF הפנימי; מזעור שיעור המסומנים, שובר שוויון: שיעור התראות שווא, AP, Brier, פשטות." if he else
-           "- Objective: the highest threshold reaching >= 70% sensitivity on inner OOF; minimise the share flagged; ties -> false-alert share -> AP -> "
-           "Brier -> simpler model."),
-          f"- OLD = {plan['n_old']} features of the Phase 3 universe eligible on 2026; NEW_SAFE adds {plan['n_new_safe']} V21 features "
-          f"(verified-only {plan['n_new_verified']}, low availability risk {plan['n_new_lowrisk']}).", ""]
+          f"- Schema: exact V1 -> V21 diff: V1 {sc.get('v1_columns')} columns, V21 {sc.get('extract_columns')}; unchanged {sc.get('unchanged_columns')}, removed "
+          f"{sc.get('removed_v1_columns')}, new {sc.get('new_columns')}, renamed / replaced {sc.get('renamed_or_replaced')}, changed definition "
+          f"{sc.get('changed_definition')}, unresolved {sc.get('unresolved_requires_semantic_review')}.",
+          f"- OLD = {plan['n_old']} Phase 3 universe features reproducible on V21; {SET_ALL} adds {plan['n_all_new']} of the "
+          f"{np_.get('genuine_new_predictors', '—')} genuine new V21 predictors; {SET_SAFE} adds {plan['n_new_safe']} (SAFE timing and DEFENSIBLE provenance).", ""]
     L += [("## תוצאה ראשית (כלל 70% מקונן)" if he else "## Primary result (nested 70% rule)"), "",
-          "| family | set | sensitivity | PPV | false-alert share | flagged | AP | AUROC | Brier | cal. slope | cal. intercept |", "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for r in t[t["feature_set"].isin([SET_OLD, SET_NEW, SET_VERIFIED, SET_LOWRISK])].itertuples():
-        L.append(f"| {r.family} | {r.feature_set} | {pct(r.op_sensitivity)} | {pct(r.op_ppv)} | {pct(r.op_false_alert_share)} | {pct(r.op_flagged_share)} | "
-                 f"{r.ap:.3f} | {r.auroc:.3f} | {r.brier:.4f} | {r.calibration_slope:.2f} | {r.calibration_intercept:+.2f} |")
-    L += ["", ("## השוואה מזווגת OLD מול OLD+NEW_SAFE" if he else "## Paired OLD vs OLD_PLUS_NEW_SAFE"), ""]
-    for fam in FAMILIES:
-        c, d = A["comparisons"][fam]["new"], A["decisions"][fam]
+          "| family | role | set | sensitivity | PPV | false-alert share | flagged | AP | AUROC | Brier | BSS | cal. slope | cal. intercept |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for r in t[t["feature_set"].isin(list(PRIMARY_SETS))].itertuples():
+        L.append(f"| {r.family} | {r.role} | {r.feature_set} | {pct(r.op_sensitivity)} | {pct(r.op_ppv)} | {pct(r.op_false_alert_share)} | {pct(r.op_flagged_share)} | "
+                 f"{r.ap:.3f} | {r.auroc:.3f} | {r.brier:.4f} | {r.brier_skill:.3f} | {r.calibration_slope:.2f} | {r.calibration_intercept:+.2f} |")
+    L += ["", ("## השוואה מזווגת" if he else f"## Paired comparisons ({SET_OLD} vs {SET_ALL}; secondary {SET_OLD} vs {SET_SAFE})"), ""]
+    for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY]):
+        c, d = A["comparisons"][fam]["all"], A["decisions"][fam]
+        tag = "PRIMARY" if fam == PRIMARY_FAMILY else "secondary"
         if c is None:
-            L.append(f"- {fam}: {d['verdict']} - {d['reason']}")
+            L.append(f"- {fam} ({tag}): {d['verdict']} - {d['reason']}")
             continue
-        L.append(f"- {fam}: Δ false-alert share {pp(c['delta_op_false_alert_share'])} {ci(c['delta_op_false_alert_share_ci_low'], c['delta_op_false_alert_share_ci_high'], pp)}; "
-                 f"Δ flagged {pp(c['delta_op_flagged_share'])} {ci(c['delta_op_flagged_share_ci_low'], c['delta_op_flagged_share_ci_high'], pp)}; "
-                 f"Δ PPV {pp(c['delta_op_ppv'])}; Δ false alerts / 10,000 {num(c['delta_op_false_alerts_per_10000'])} "
-                 f"{ci(c['delta_op_false_alerts_per_10000_ci_low'], c['delta_op_false_alerts_per_10000_ci_high'], num)}; Δ AP {c['delta_ap']:+.4f} "
-                 f"[{c['delta_ap_ci_low']:+.4f}, {c['delta_ap_ci_high']:+.4f}]; Δ AUROC {c['delta_auroc']:+.4f}; Δ Brier {c['delta_brier']:+.5f}; "
-                 f"descriptive pooled Δ false-alert share at 70% {pp(c.get('delta_desc_fas_0.70'))}; folds improved {c['folds_improved']}/{len(c['fold_delta_false_alert_share'])} "
-                 f"-> **{d['verdict']}** ({d['reason']})")
-    L += ["", f"**Overall (pre-declared rule): {A['overall']}**", "", f"Decision rule: {cfg['decision']['rule']}", ""]
+        L.append(f"- {fam} ({tag}), ALL_NEW: Δ false-alert share {pp(c['delta_op_false_alert_share'])} {ci(c['delta_op_false_alert_share_ci_low'], c['delta_op_false_alert_share_ci_high'], pp)}; "
+                 f"Δ flagged {pp(c['delta_op_flagged_share'])}; Δ PPV {pp(c['delta_op_ppv'])} {ci(c['delta_op_ppv_ci_low'], c['delta_op_ppv_ci_high'], pp)}; "
+                 f"Δ FP {num(c['delta_op_fp'])}; false alerts avoided / 10,000 {num(-c['delta_op_false_alerts_per_10000'])} "
+                 f"{ci(-c['delta_op_false_alerts_per_10000_ci_high'], -c['delta_op_false_alerts_per_10000_ci_low'], num)}; Δ captured falls {num(c['delta_op_tp'])}; "
+                 f"Δ AP {c['delta_ap']:+.4f} [{c['delta_ap_ci_low']:+.4f}, {c['delta_ap_ci_high']:+.4f}]; Δ AUROC {c['delta_auroc']:+.4f} "
+                 f"[{c['delta_auroc_ci_low']:+.4f}, {c['delta_auroc_ci_high']:+.4f}]; Δ Brier {c['delta_brier']:+.5f}; descriptive pooled Δ false-alert share at 70% "
+                 f"{pp(c.get('delta_desc_fas_0.70'))}; folds improved {c['folds_improved']}/{len(c['fold_delta_false_alert_share'])} -> **{d['verdict']}** ({d['reason']})")
+        cs = A["comparisons"][fam]["safe"]
+        if cs is not None and not A.get("safe_same"):
+            L.append(f"  - {fam} NEW_SAFE: Δ false-alert share {pp(cs['delta_op_false_alert_share'])} {ci(cs['delta_op_false_alert_share_ci_low'], cs['delta_op_false_alert_share_ci_high'], pp)}; "
+                     f"false alerts avoided / 10,000 {num(-cs['delta_op_false_alerts_per_10000'])}; folds improved {cs['folds_improved']}/{len(cs['fold_delta_false_alert_share'])}")
+    L += ["", f"**Answer (pre-declared: the {PRIMARY_FAMILY} verdict): {A['overall']}**"
+          + (f"; best family (exploratory only): {A['best_family_exploratory']}" if A.get("best_family_exploratory") else ""), "",
+          f"Decision rule: {cfg['decision']['rule']}", ""]
     if len(A["domains"]) and "delta_false_alert_share" in A["domains"]:
         L += ["## Domain additions (OLD + domain vs OLD)", ""]
         for r in A["domains"].itertuples():
             if getattr(r, "status", "") == "COMPLETE":
                 L.append(f"- {r.family} {r.domain} (+{r.n_new_features}): Δ false-alert share {pp(r.delta_false_alert_share)} "
-                         f"{ci(r.delta_false_alert_share_ci_low, r.delta_false_alert_share_ci_high, pp)}, Δ AP {r.delta_ap:+.4f}, folds improved {int(r.folds_improved)}/{int(r.n_folds)}")
+                         f"{ci(r.delta_false_alert_share_ci_low, r.delta_false_alert_share_ci_high, pp)}, Δ false alerts {num(r.delta_false_alerts)}, Δ flagged "
+                         f"{pp(r.delta_flagged_share)}, Δ PPV {pp(r.delta_ppv)}, Δ AP {r.delta_ap:+.4f}, Δ Brier {r.delta_brier:+.5f}, folds improved {int(r.folds_improved)}/{int(r.n_folds)}")
             else:
                 L.append(f"- {r.family} {r.domain}: {r.status}")
         L.append("")
     if len(A["ablations"]) and "delta_false_alert_share" in A["ablations"]:
-        L += ["## Ablations (OLD_PLUS_NEW_SAFE minus a block)", ""]
+        L += [f"## Ablations ({SET_ALL} minus a block; {PRIMARY_FAMILY})", ""]
         for r in A["ablations"].itertuples():
             if getattr(r, "status", "") == "COMPLETE":
                 L.append(f"- {r.family} {r.ablation} (-{r.n_removed}): Δ false-alert share {pp(r.delta_false_alert_share)} "
-                         f"{ci(r.delta_false_alert_share_ci_low, r.delta_false_alert_share_ci_high, pp)}, Δ AP {r.delta_ap:+.4f}")
+                         f"{ci(r.delta_false_alert_share_ci_low, r.delta_false_alert_share_ci_high, pp)}, Δ AP {r.delta_ap:+.4f} (> 0 pp = the block helped)")
         L.append("")
     L += ["## Limitations", "",
           "- Internal nested cross-validation on one 2026 snapshot (development data): not external validation; a later independent snapshot is required.",
           "- The nested operating results use thresholds chosen on inner OOF predictions; achieved outer sensitivity varies around 70%. The pooled-OOF "
           "threshold results are descriptive / planning-only.",
-          "- Paired bootstrap intervals are conditional on the fitted models and fold thresholds (patient resampling of the OOF predictions).",
+          "- Paired bootstrap intervals are conditional on the fitted models and fold thresholds (patient resampling of the OOF predictions); the "
+          "every-fold criterion guards against training-to-training noise.",
           "- SAFE_ATTESTED features rely on the DWH statement that no post-index information enters the extract (re-checked by V3 on record dates); "
-          "information-availability lag (backdating, billing / coding lag) is not verifiable from the extract.",
-          "- Choosing the leading family among three on the same data is slightly optimistic; importance and SHAP are descriptive, never causal.",
+          "information-availability lag (registry backdating, coding / billing lag) is not verifiable from the extract.",
+          "- V21 documents timing caveats for OLD inputs too (medication purchase status not bounded by Index_Date; visit counters may settle after it); "
+          "these inputs are identical in every feature set, so they cannot create the OLD vs NEW difference, but they are not proven pre-index.",
+          "- Fall outcomes are diagnosis records (falls and fractures); positives may lie after the personal follow-up end (audited, limited by the contract).",
+          "- Three registry columns are probable renames of removed V1 columns (relabelled meaning); they are excluded from OLD_PLUS_NEW_SAFE.",
+          "- The leakage screen (single-feature AUROC >= 0.80) uses every label but can only exclude, never select, a predictor.",
+          "- Importance, coefficients and SHAP are descriptive, never causal.",
           f"- Historical 2025 reference (context only): threshold 0.02, sensitivity {pct(HISTORICAL['sensitivity'])}, PPV {pct(HISTORICAL['ppv'])}, "
           f"false-alert share {pct(HISTORICAL['false_alert_share'])}; never used as evidence of incremental value.", ""]
     return "\n".join(L) + "\n"
@@ -595,14 +683,14 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
     aw.mkdir(parents=True, exist_ok=True)
     oof = pd.DataFrame({"row_key": ctx.frame["row_key"], "y": ctx.y, "outer_fold": ctx.outer})
     for (fam, s), run in A["runs"].items():
-        if s in (SET_OLD, SET_NEW, SET_VERIFIED, SET_LOWRISK):
+        if s in PRIMARY_SETS:
             oof[f"p__{fam}__{s}"] = run.p
             oof[f"flag70__{fam}__{s}"] = run.flags[f"{cfg.primary_sensitivity:.2f}"]
     D.write_parquet(aw / "OOF_PREDICTIONS_LOCAL.parquet", oof)
     if len(A["full_thresholds"]):
         D.write_csv(aw / "THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", A["full_thresholds"])
-    perm, shap = importance_tables(ctx, list(FAMILIES), list(dict.fromkeys([plan["alias"][SET_OLD], plan["alias"][SET_NEW]])))
-    stab = stability_table(ctx, list(FAMILIES), plan["alias"][SET_NEW], perm)
+    perm, shap = importance_tables(ctx, list(FAMILIES), list(dict.fromkeys([plan["alias"][SET_OLD], plan["alias"][SET_ALL]])))
+    stab = stability_table(ctx, list(FAMILIES), plan["alias"][SET_ALL], perm)
     tmp = out / ".tmp-share"
     if tmp.exists():
         shutil.rmtree(tmp)
@@ -626,6 +714,8 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
     D.write_csv(tmp / "OOF_MODEL_COMPARISON.csv", suppress(A["models"][oofc]))
     D.write_csv(tmp / "OOF_PREDICTION_SUMMARY.csv", suppress(A["pred_summary"]))
     D.write_csv(tmp / "CALIBRATION.csv", suppress(A["calibration"]))
+    D.write_csv(tmp / "CAPACITY_CURVE.csv", suppress(A["capacity"]))
+    D.write_csv(tmp / "OUTER_FOLD_RESULTS.csv", suppress(A["outer_folds"]))
     D.write_csv(tmp / "DOMAIN_INCREMENTAL_VALUE.csv", A["domains"])
     D.write_csv(tmp / "ABLATION_RESULTS.csv", A["ablations"])
     D.write_csv(tmp / "SUBGROUP_SUMMARY.csv", suppress_subgroups(A["subgroups"]) if len(A["subgroups"]) else A["subgroups"])
@@ -635,28 +725,32 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
         D.write_csv(tmp / "SHAP_SUMMARY.csv", shap)
     pf = out / "preflight"
     for name in ("FEATURE_ELIGIBILITY.csv", "NEW_FEATURE_CATALOGUE.csv", "V21_UNDECLARED_COLUMNS.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
-                 "PHASE5_PREFLIGHT.md", "FEATURE_SETS.json"):
+                 "PHASE5_PREFLIGHT.md", "FEATURE_SETS.json", "SCHEMA_DIFF_V1_V21.csv", "ALL_V21_COLUMN_CLASSIFICATION.csv", "REMOVED_V1_COLUMNS.csv",
+                 "RENAMED_OR_CHANGED_COLUMNS.csv"):
         if (pf / name).is_file():
             shutil.copyfile(pf / name, tmp / name)
     for name in ("RUN_TIMINGS.csv", "ENVIRONMENT.json"):
         if (out / name).is_file():
             shutil.copyfile(out / name, tmp / name)
     D.write_json(tmp / "HISTORICAL_BENCHMARK_2025.json", HISTORICAL)
-    figs = figures(tmp / "figures", A, y, perm)
+    figs = figures(tmp / "figures", A, y, perm, stab)
     status = json.loads((out / "RUN_STATUS.json").read_text(encoding="utf-8")) if (out / "RUN_STATUS.json").is_file() else {}
     D.write_json(tmp / "RUN_MANIFEST.json", {
         "watermark": WATERMARK, "synthetic": synthetic, "design": DESIGN_LABEL, "phase5_version": PHASE5_VERSION, "falls_ml_version": __import__("falls_ml").__version__,
         "report_kind": "INTERIM" if interim else "FINAL", "created_at": utc_now(), "mode": plan["mode"], "input": plan["input"], "config_sha256": plan["config_sha256"],
-        "v21_catalogue_sha256": plan["v21_catalogue_sha256"], "code_sha256_plan": plan["code_sha256"], "frame_sha256": plan["frame_sha256"],
+        "v21_schema_sha256": plan["v21_schema_sha256"], "v21_definition_sha256": plan["v21_definition_sha256"], "code_sha256_plan": plan["code_sha256"],
+        "frame_sha256": plan["frame_sha256"], "schema_counts": plan.get("schema_counts"), "primary_family": PRIMARY_FAMILY,
+        "primary_comparison": [SET_OLD, SET_ALL], "secondary_comparison": [SET_OLD, SET_SAFE],
         "folds_sha256": plan["folds_sha256"], "seed": plan["seed"], "cv": plan["cv"], "n": plan["n"], "events": plan["events"],
         "fold_sizes": plan["fold_sizes"], "fold_events": {k: ("<10" if 0 < int(v) < MIN_CELL else v) for k, v in plan["fold_events"].items()},
         "feature_sets": {k: {"n_features": len(v), "kind": plan["kinds"].get(plan["alias"][k]), "identical_to": plan["alias"][k] if plan["alias"][k] != k else None}
                          for k, v in plan["sets"].items()},
-        "decisions": {f: {"verdict": d["verdict"], "criteria": d["criteria"]} for f, d in A["decisions"].items()}, "overall_answer": A["overall"],
-        "lead_family_for_management_page": A["lead_family"], "jobs": status.get("jobs"), "device": status.get("device"), "sessions": status.get("sessions"),
+        "decisions": {f: {"verdict": d["verdict"], "criteria": d["criteria"], "role": "PRIMARY" if f == PRIMARY_FAMILY else "SECONDARY"}
+                      for f, d in A["decisions"].items()}, "overall_answer": A["overall"], "overall_answer_basis": f"the {PRIMARY_FAMILY} verdict (pre-declared)",
+        "best_family_exploratory": A["best_family_exploratory"], "jobs": status.get("jobs"), "device": status.get("device"), "sessions": status.get("sessions"),
         "failures": [{"item": f.get("item"), "error": f.get("error")} for f in status.get("failures", [])], "figures": figs,
         "row_level_outputs_kept_locally": ["work/analysis/OOF_PREDICTIONS_LOCAL.parquet", "work/analysis/THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", "work/units/*"]})
     res = publish(out, tmp, src, ctx.frame)
     n_files = sum(1 for p in (out / "share").rglob("*") if p.is_file())
     return {"files": n_files, "privacy_passed": bool(res["passed"]), "overall": A["overall"], "interim": interim,
-            "decisions": {f: d["verdict"] for f, d in A["decisions"].items()}}
+            "decisions": {f: d["verdict"] for f, d in A["decisions"].items()}, "primary_family": PRIMARY_FAMILY}

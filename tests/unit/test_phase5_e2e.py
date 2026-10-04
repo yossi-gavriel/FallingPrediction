@@ -1,15 +1,14 @@
-"""Phase 5 end-to-end on SYNTHETIC V21 extracts (slow): the whole overnight command in a small configuration (3 x 3 folds, tiny budgets).
+"""Phase 5 end-to-end on SYNTHETIC extracts with the EXACT authoritative V21 header (slow): the whole overnight command in a small configuration
+(3 x 3 folds, tiny budgets).
 
-Brief AB proofs covered here:
- 4  the same outer folds are reused for OLD and NEW (and every other set)     test_same_outer_folds_for_every_family_and_set
- 9  no true extra signal -> no guaranteed improvement                        test_null_new_feature_does_not_show_a_robust_gain
- 10 a planted useful new feature improves the operational metric             test_planted_new_feature_lowers_the_false_alert_burden
- 12 an interrupted run resumes without repeating finished work              test_interrupted_run_resumes_without_recomputing
- 14 the share folder holds no patient-level data                             test_share_is_aggregate_only
- 15 Windows-safe paths (a folder name with spaces; no absolute path shared)  (every test: the work folder has spaces; share path scan)
- 17 a deterministic rerun gives identical folds and model-selection decisions test_deterministic_rerun
- 2  a tampered plan with an ineligible / post-index feature hard-stops         test_tampered_feature_set_hard_stops_on_resume
- E  an outcome-contract violation stops before any model is fitted            test_outcome_contract_violation_stops_before_training
+Brief section 22 acceptance proofs covered here:
+ 7  a tampered plan with an ineligible / removed feature hard-stops           test_tampered_feature_set_hard_stops_on_resume
+ 8  the same folds are used for OLD and NEW (every family and set)            test_same_outer_folds_for_every_family_and_set
+ 11 null new features do not produce a USEFUL verdict                        test_null_new_features_do_not_give_a_useful_verdict
+ 12 a planted useful new feature improves the operational endpoint           test_planted_new_feature_lowers_the_false_alert_burden
+ 14 an interrupted run resumes without repeating finished work              test_interrupted_run_resumes_without_recomputing
+ 15 the share folder holds no patient-level data                             test_share_is_aggregate_only
+ +  Windows-safe paths (folder names with spaces; no absolute path shared), a deterministic rerun, the outcome contract and duplicate-ID stops
 """
 
 from __future__ import annotations
@@ -30,10 +29,13 @@ OV = {"cv": {"outer_folds": 3, "inner_folds": 3}, "eligibility": {"min_known_obs
       "modes": {"quick": {"lasso": {"n_lambda": 8}, "enet": {"n_lambda": 6, "l1_ratios": [0.2, 0.8]}, "xgb": {"n_trials": 3, "n_startup_trials": 2},
                           "bootstrap_n": 300, "stability_linear": 3, "stability_xgb": 2, "permutation_repeats": 1, "shap_rows": 500}}}
 REQUIRED_SHARE = ["MANAGEMENT_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY.md", "PRIMARY_70_SENSITIVITY_COMPARISON.csv", "THRESHOLD_TRADEOFF.csv",
-                  "MODEL_COMPARISON.csv", "DOMAIN_INCREMENTAL_VALUE.csv", "ABLATION_RESULTS.csv", "OOF_MODEL_COMPARISON.csv", "OOF_PREDICTION_SUMMARY.csv",
-                  "CALIBRATION.csv", "SUBGROUP_SUMMARY.csv", "FEATURE_ELIGIBILITY.csv", "NEW_FEATURE_CATALOGUE.csv", "FEATURE_STABILITY.csv",
-                  "PERMUTATION_IMPORTANCE.csv", "SHAP_SUMMARY.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json", "RUN_MANIFEST.json",
-                  "RUN_TIMINGS.csv", "ENVIRONMENT.json", "PRIVACY_SCAN.json"]
+                  "MODEL_COMPARISON.csv", "DOMAIN_INCREMENTAL_VALUE.csv", "ABLATION_RESULTS.csv", "OOF_MODEL_COMPARISON.csv", "CALIBRATION.csv",
+                  "SUBGROUP_SUMMARY.csv", "FEATURE_ELIGIBILITY.csv", "NEW_FEATURE_CATALOGUE.csv", "ALL_V21_COLUMN_CLASSIFICATION.csv", "SCHEMA_DIFF_V1_V21.csv",
+                  "FEATURE_STABILITY.csv", "PERMUTATION_IMPORTANCE.csv", "SHAP_SUMMARY.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
+                  "RUN_MANIFEST.json", "RUN_TIMINGS.csv", "ENVIRONMENT.json", "PRIVACY_SCAN.json",     # brief section 24
+                  "REMOVED_V1_COLUMNS.csv", "RENAMED_OR_CHANGED_COLUMNS.csv", "V21_UNDECLARED_COLUMNS.csv", "CAPACITY_CURVE.csv", "OOF_PREDICTION_SUMMARY.csv",
+                  "OUTER_FOLD_RESULTS.csv"]
+PRIMARY_CMP = "OLD vs OLD_PLUS_ALL_NEW_ELIGIBLE"
 
 
 def _run(src: Path, out: Path, **kw: Any) -> dict[str, Any]:
@@ -95,17 +97,31 @@ def test_planted_run_completes_with_every_output(planted: dict[str, Any]) -> Non
     man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
     assert man["design"] == "INTERNAL NESTED CROSS-VALIDATION ON 2026 SNAPSHOT" and man["report_kind"] == "FINAL"
     assert (out / "preflight" / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8").rstrip().endswith("SAFE TO MODEL")
+    assert man["primary_family"] == "ENET" and man["primary_comparison"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE"]
+    cl = pd.read_csv(share / "ALL_V21_COLUMN_CLASSIFICATION.csv")
+    assert len(cl) == 224 and cl["x_use"].astype(str).str.len().gt(3).all() and not (cl["class"] == "REQUIRES_SEMANTIC_REVIEW").any()
+    sets = json.loads((share / "FEATURE_SETS.json").read_text(encoding="utf-8"))
+    assert {"OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"} <= set(sets["sets"])
+    ab = pd.read_csv(share / "ABLATION_RESULTS.csv")
+    assert set(ab["family"]) == {"ENET"} and "NO_TIMING_UNCERTAIN" in set(ab["ablation"]) and "NO_FALL_RECENCY" in set(ab["ablation"])
+    mg = (share / "MANAGEMENT_SUMMARY_HE.md").read_text(encoding="utf-8")
+    for needle in ("מטופלים שנותחו", "נפילות", "פיצ'רים חדשים אמיתיים", "ALL_NEW", "התראות שווא שנחסכו", "PPV", "האם הפיצ'רים הנוספים של V21"):
+        assert needle in mg, needle
 
 
 def test_planted_new_feature_lowers_the_false_alert_burden(planted: dict[str, Any]) -> None:
     t = pd.read_csv(planted["out"] / "share" / "PRIMARY_70_SENSITIVITY_COMPARISON.csv")
+    t = t[t["comparison"] == PRIMARY_CMP]
     d = t[t["row"] == "DELTA_NEW_MINUS_OLD"].set_index("family")
     for fam in ("LASSO", "ENET", "XGB"):
         assert float(d.loc[fam, "false_alert_share"]) < 0, fam
         assert float(d.loc[fam, "delta_false_alert_share_ci_high"]) < 0, fam          # paired interval below 0
+        assert float(d.loc[fam, "false_alerts_avoided_per_10000"]) > 0, fam
         assert float(d.loc[fam, "delta_ap"]) > 0
-    v = t[t["row"] == "VERDICT"].set_index("family")["verdict"]
-    assert set(v) <= {"NEW_FEATURES_OPERATIONALLY_USEFUL", "PROMISING_BUT_NOT_ROBUST"} and "NEW_FEATURES_OPERATIONALLY_USEFUL" in set(v)
+    v = t[t["row"] == "VERDICT"].set_index("family")
+    assert v.loc["ENET", "verdict"] == "NEW_FEATURES_OPERATIONALLY_USEFUL" and v.loc["ENET", "role"] == "PRIMARY"
+    man = json.loads((planted["out"] / "share" / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
+    assert man["overall_answer"] == "YES" and man["overall_answer_basis"].startswith("the ENET verdict")
     dom = pd.read_csv(planted["out"] / "share" / "DOMAIN_INCREMENTAL_VALUE.csv")
     dd = dom[(dom["domain"] == "NEW_DIAGNOSIS") & (dom["status"] == "COMPLETE")]
     assert len(dd) == 3 and (dd["delta_false_alert_share"] < 0).all()
@@ -178,7 +194,7 @@ def test_tampered_feature_set_hard_stops_on_resume(planted: dict[str, Any], worl
     shutil.copytree(planted["out"], copy)
     pp = copy / "work" / "PLAN.json"
     plan = json.loads(pp.read_text(encoding="utf-8"))
-    plan["sets"]["OLD_PLUS_NEW_SAFE"] = [*plan["sets"]["OLD_PLUS_NEW_SAFE"], "new_syncope_ind"]
+    plan["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] = [*plan["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"], "hypertension"]      # removed in V21
     pp.write_text(json.dumps(plan), encoding="utf-8")
     with pytest.raises(Phase2Stop) as e:
         _run(worlds["planted"], copy)
@@ -222,19 +238,18 @@ def test_interrupted_run_resumes_without_recomputing(worlds: dict[str, Any], mon
     assert st["sessions"] == 3
 
 
-def test_null_new_feature_does_not_show_a_robust_gain(worlds: dict[str, Any]) -> None:
+def test_null_new_features_do_not_give_a_useful_verdict(worlds: dict[str, Any]) -> None:
     out = worlds["base"] / "out null"
     if not (out / "share" / "PRIMARY_70_SENSITIVITY_COMPARISON.csv").is_file():
         pytest.skip("depends on test_interrupted_run_resumes_without_recomputing")
     t = pd.read_csv(out / "share" / "PRIMARY_70_SENSITIVITY_COMPARISON.csv")
-    v = t[t["row"] == "VERDICT"].set_index("family")["verdict"]
-    assert "NEW_FEATURES_OPERATIONALLY_USEFUL" not in set(v), v.to_dict()
+    v = t[(t["row"] == "VERDICT") & (t["comparison"] == PRIMARY_CMP)].set_index("family")
+    assert v.loc["ENET", "verdict"] != "NEW_FEATURES_OPERATIONALLY_USEFUL", v["verdict"].to_dict()
     man = json.loads((out / "share" / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
     assert man["overall_answer"] in ("NO", "UNCERTAIN")
-    # the patient bootstrap holds the fitted models fixed: under the null a noise feature can still give a narrow interval below 0 (model noise);
-    # the pre-declared rule therefore also requires the improvement in EVERY outer fold - no family meets both here
-    vr = t[t["row"] == "VERDICT"].set_index("family")
-    assert not vr["criterion_2_paired_ci_below_zero_and_every_outer_fold_improves"].astype(str).eq("True").any()
+    # the patient bootstrap holds the fitted models fixed: under the null a noise feature can still give a narrow interval below 0; the
+    # pre-declared rule therefore also requires the improvement in EVERY outer fold and without the questionable predictors
+    assert "NEW_FEATURES_OPERATIONALLY_USEFUL" not in set(v["verdict"]), v["verdict"].to_dict()
 
 
 # ============================================================================ determinism, contract stop
@@ -272,7 +287,7 @@ def test_outcome_contract_violation_stops_before_training(worlds: dict[str, Any]
     assert r["status"] == "STOPPED_PREFLIGHT" and r["exit_code"] == 2
     assert not (out / "work" / "units").exists() and not (out / "work" / "PLAN.json").exists()
     md = (out / "preflight" / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8")
-    assert md.rstrip().endswith("STOP - 2026 REDEVELOPMENT NOT DEFENSIBLE") and "O1" in md
+    assert md.rstrip().endswith("STOP - REVIEW REQUIRED") and "O1" in md
     oc = json.loads((out / "preflight" / "OUTCOME_CONTRACT_2026.json").read_text(encoding="utf-8"))
     assert oc["passed"] is False
 

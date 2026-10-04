@@ -17,12 +17,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from falls_ml.phase5.config import FAMILIES, SET_LOWRISK, SET_NEW, SET_OLD, SET_VERIFIED
+from falls_ml.phase5.config import FAMILIES, PRIMARY_FAMILY, SET_ALL, SET_OLD, SET_SAFE
 from falls_ml.phase5.engine import Ctx, UnitSpec, is_complete, load_result
 from falls_ml.phase5.metrics import calibration_table, model_summary, paired_bootstrap, single_bootstrap
 from falls_ml.phase5.thresholds import counts, operating_point, threshold_table
 
-STAGE_OF_KIND = {"PRIMARY": "PRIMARY", "SENSITIVITY": "PRIMARY", "DOMAIN": "DOMAIN", "ABLATION": "ABLATION"}
+STAGE_OF_KIND = {"PRIMARY": "PRIMARY", "DOMAIN": "DOMAIN", "ABLATION": "ABLATION"}
+PRIMARY_SETS = (SET_OLD, SET_ALL, SET_SAFE)
 
 
 @dataclass
@@ -106,26 +107,23 @@ def compare(y: np.ndarray, a: ModelRun, b: ModelRun, *, target: float, n_boot: i
 
 
 # ============================================================================ the pre-declared decision rule
-def decide(cmp_new: dict[str, Any] | None, cmp_ver: dict[str, Any] | None, cmp_low: dict[str, Any] | None, *, no_new: bool, ver_same: bool, low_same: bool,
-           cfg: Any) -> dict[str, Any]:
+def decide(cmp_all: dict[str, Any] | None, cmp_safe: dict[str, Any] | None, *, no_new: bool, safe_same: bool, cfg: Any) -> dict[str, Any]:
+    """The pre-declared rule (phase5.yaml decision.rule) for one family: OLD_PLUS_ALL_NEW_ELIGIBLE versus OLD."""
     if no_new:
-        return {"verdict": "NO_ELIGIBLE_NEW_FEATURES", "criteria": {}, "reason": "no new V21 predictor passed the gates: OLD_PLUS_NEW_SAFE = OLD"}
-    if cmp_new is None:
-        return {"verdict": "INCOMPLETE", "criteria": {}, "reason": "the OLD / OLD_PLUS_NEW_SAFE units of this family are not all complete"}
+        return {"verdict": "NO_ELIGIBLE_NEW_FEATURES", "criteria": {}, "reason": f"no new V21 predictor passed the gates: {SET_ALL} = OLD"}
+    if cmp_all is None:
+        return {"verdict": "INCOMPLETE", "criteria": {}, "reason": f"the OLD / {SET_ALL} units of this family are not all complete"}
     dc = cfg["decision"]
-    op_d = cmp_new["delta_op_false_alert_share"]
-    desc_d = cmp_new.get("delta_desc_fas_0.70")
+    op_d = cmp_all["delta_op_false_alert_share"]
+    desc_d = cmp_all.get("delta_desc_fas_0.70")
     c1 = bool(op_d < 0 and desc_d is not None and desc_d < 0)
-    folds = cmp_new.get("fold_delta_false_alert_share") or []
-    c2 = bool(cmp_new["delta_op_false_alert_share_ci_high"] < 0 and folds and all(v < 0 for v in folds))
-
-    def same_dir(c: dict[str, Any] | None, same: bool) -> bool:
-        if same:
-            return c1
-        return bool(c is not None and c["delta_op_false_alert_share"] < 0)
-
-    c3 = same_dir(cmp_ver, ver_same) and same_dir(cmp_low, low_same)
-    a, b = cmp_new["a"], cmp_new["b"]
+    # the nested interval holds each fold's inner-selected threshold fixed; the equal-sensitivity interval re-derives the 70% threshold in every
+    # bootstrap replicate (pooled OOF), so threshold placement is part of the uncertainty - both must lie entirely below 0
+    c2 = bool(cmp_all["delta_op_false_alert_share_ci_high"] < 0 and cmp_all.get("delta_desc_fas_0.70_ci_high", math.inf) < 0)
+    folds = cmp_all.get("fold_delta_false_alert_share") or []
+    c3 = bool(folds and all(v < 0 for v in folds))
+    c4 = c1 if safe_same else bool(cmp_safe is not None and cmp_safe["delta_op_false_alert_share"] < 0)
+    a, b = cmp_all["a"], cmp_all["b"]
     lo, hi = dc["calibration_slope_range"]
     mx = float(dc["max_abs_calibration_intercept"])
 
@@ -133,27 +131,25 @@ def decide(cmp_new: dict[str, Any] | None, cmp_ver: dict[str, Any] | None, cmp_l
         return bool(lo <= m["calibration_slope"] <= hi and abs(m["calibration_intercept"]) <= mx)
 
     no_worse = bool(abs(b["calibration_slope"] - 1) <= abs(a["calibration_slope"] - 1) + 1e-12 and abs(b["calibration_intercept"]) <= abs(a["calibration_intercept"]) + 1e-12)
-    c4 = bool((ok_range(b) or no_worse) and not (cmp_new["delta_brier_ci_low"] > 0))
-    crit = {"1_lower_false_alert_share_nested_and_descriptive": c1, "2_paired_ci_below_zero_and_every_outer_fold_improves": c2, "3_not_dependent_on_attested_bounded_or_high_risk": c3,
-            "4_calibration_not_materially_worse": c4}
-    if c1 and c2 and c3 and c4:
+    c5 = bool((ok_range(b) or no_worse) and not (cmp_all["delta_brier_ci_low"] > 0))
+    crit = {"1_lower_false_alert_share_nested_and_descriptive": c1, "2_paired_ci_below_zero_nested_and_at_equal_sensitivity": c2, "3_every_outer_fold_improves": c3,
+            "4_not_dependent_on_timing_or_provenance_questionable_predictors": c4, "5_calibration_not_materially_worse": c5}
+    if all(crit.values()):
         v = "NEW_FEATURES_OPERATIONALLY_USEFUL"
-    elif op_d < 0:
+    elif c1 and (c2 or c3):
         v = "PROMISING_BUT_NOT_ROBUST"
     else:
         v = "NO_ROBUST_OPERATIONAL_GAIN"
-    return {"verdict": v, "criteria": crit, "reason": "; ".join(k for k, x in crit.items() if not x) or "all four criteria met"}
+    return {"verdict": v, "criteria": crit, "reason": "; ".join(f"not {k}" for k, x in crit.items() if not x) or "all five criteria met"}
+
+
+ANSWER = {"NEW_FEATURES_OPERATIONALLY_USEFUL": "YES", "PROMISING_BUT_NOT_ROBUST": "UNCERTAIN", "NO_ROBUST_OPERATIONAL_GAIN": "NO",
+          "NO_ELIGIBLE_NEW_FEATURES": "NO", "INCOMPLETE": "UNCERTAIN"}
 
 
 def overall(verdicts: dict[str, str]) -> str:
-    vs = list(verdicts.values())
-    if vs and all(v == "NO_ELIGIBLE_NEW_FEATURES" for v in vs):
-        return "NO"
-    if sum(v == "NEW_FEATURES_OPERATIONALLY_USEFUL" for v in vs) >= 2:
-        return "YES"
-    if not any(v in ("NEW_FEATURES_OPERATIONALLY_USEFUL", "PROMISING_BUT_NOT_ROBUST") for v in vs):
-        return "NO" if all(v != "INCOMPLETE" for v in vs) else "UNCERTAIN"
-    return "UNCERTAIN"
+    """The answer to "did the V21 information add useful information?" = the PRIMARY family's (ENET) verdict; the other families are secondary."""
+    return ANSWER.get(verdicts.get(PRIMARY_FAMILY, "INCOMPLETE"), "UNCERTAIN")
 
 
 # ============================================================================ subgroups
@@ -170,7 +166,7 @@ def subgroup_rows(ctx: Ctx, runs: dict[tuple[str, str], ModelRun], cfg: Any) -> 
     rows = []
     mefi_cov = float((ctx.frame["sg_mefi_group"] != "not assessed").mean()) if "sg_mefi_group" in ctx.frame else 0.0
     for (fam, s), run in runs.items():
-        if s not in (SET_OLD, SET_NEW):
+        if s not in (SET_OLD, SET_ALL):
             continue
         for name, col in SUBGROUPS:
             if col not in ctx.frame:
@@ -192,10 +188,10 @@ def subgroup_rows(ctx: Ctx, runs: dict[tuple[str, str], ModelRun], cfg: Any) -> 
 
 
 def threshold_tables(y: np.ndarray, runs: dict[tuple[str, str], ModelRun], step: float) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(shareable grid table for OLD / OLD_PLUS_NEW_SAFE, exhaustive local table)."""
+    """(shareable grid table for the three primary sets, exhaustive local table)."""
     grid, full = [], []
     for (fam, s), run in runs.items():
-        if s not in (SET_OLD, SET_NEW):
+        if s not in PRIMARY_SETS:
             continue
         g = threshold_table(y, run.p, grid_step=step)
         g.insert(0, "feature_set", s)
@@ -211,7 +207,7 @@ def threshold_tables(y: np.ndarray, runs: dict[tuple[str, str], ModelRun], step:
 def calibration_rows(y: np.ndarray, runs: dict[tuple[str, str], ModelRun], groups: int = 10) -> pd.DataFrame:
     out = []
     for (fam, s), run in runs.items():
-        if s not in (SET_OLD, SET_NEW, SET_VERIFIED, SET_LOWRISK):
+        if s not in PRIMARY_SETS:
             continue
         t = calibration_table(y, run.p, groups)
         t.insert(0, "feature_set", s)
@@ -228,4 +224,38 @@ def prediction_summary(y: np.ndarray, runs: dict[tuple[str, str], ModelRun]) -> 
             v = run.p[m]
             out.append({"family": fam, "feature_set": s, "group": lab, "n": int(m.sum()), "mean": float(v.mean()) if len(v) else math.nan,
                         **{f"p{int(q * 100):02d}": float(np.quantile(v, q)) if len(v) else math.nan for q in qs}})
+    return pd.DataFrame(out)
+
+
+def outer_fold_rows(y: np.ndarray, runs: dict[tuple[str, str], ModelRun], target: float) -> pd.DataFrame:
+    """The nested operating result of every outer fold (the fold's inner-selected threshold applied to its holdout)."""
+    key = f"{target:.2f}"
+    out = []
+    for (fam, s), run in runs.items():
+        if s not in PRIMARY_SETS:
+            continue
+        for f in run.folds:
+            te = f["test_idx"]
+            c = counts(y[te], run.flags[key][te])
+            out.append({"family": fam, "feature_set": s, "outer_fold": f["outer"], "threshold": f["thresholds"].get(key),
+                        **{k: c[k] for k in ("n", "events", "tp", "fp", "fn", "tn", "sensitivity", "ppv", "false_alert_share", "specificity", "fpr",
+                                             "flagged", "flagged_share")}, "captured_falls": c["tp"], "false_alerts": c["fp"]})
+    return pd.DataFrame(out)
+
+
+def capacity_rows(y: np.ndarray, runs: dict[tuple[str, str], ModelRun], capacities: list[float]) -> pd.DataFrame:
+    """Capacity curve (pooled OOF, descriptive / planning only): flag the highest-risk share c of the population (ties flagged together)."""
+    out = []
+    n = len(y)
+    for (fam, s), run in runs.items():
+        if s not in PRIMARY_SETS:
+            continue
+        order = np.sort(run.p)[::-1]
+        for c in capacities:
+            k = max(1, int(round(c * n)))
+            thr = float(order[k - 1])
+            cc = counts(y, run.p >= thr)
+            out.append({"family": fam, "feature_set": s, "capacity_target": c, "threshold": thr, **{k2: cc[k2] for k2 in (
+                "flagged", "tp", "fp", "fn", "tn", "flagged_share", "sensitivity", "ppv", "false_alert_share", "lift", "false_alerts_per_10000",
+                "captured_per_10000")}, "note": "pooled OOF, descriptive / planning only"})
     return pd.DataFrame(out)

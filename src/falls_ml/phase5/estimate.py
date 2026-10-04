@@ -1,6 +1,6 @@
 """``meuhedet-phase5 --estimate``: runtime estimate WITHOUT fitting any model on the real data.
 
-The real file contributes only its SHAPE: the header (which declared V21 columns exist) and the number of eligible index-date rows (two
+The real file contributes only its SHAPE: the header (which V21 predictors of the authoritative schema exist) and the number of eligible index-date rows (two
 columns: Index_Date, Is_Eligible_Cohort - never an outcome or a predictor value). If the preflight already ran, its plan gives the exact cohort,
 feature-set and domain / ablation counts. The cost of one solver step is then measured on RANDOM synthetic matrices of the same size (a LASSO
 and an elastic-net path, an XGBoost fit with early stopping) and multiplied by the work the plan implies for the chosen --mode and --jobs.
@@ -29,14 +29,17 @@ def _shape(src: Path | None, out: Path, cfg: Any) -> dict[str, Any]:
         kinds = plan["kinds"]
         canon = [s for s in plan["sets"] if plan["alias"][s] == s]
         return {"source": "preflight plan", "n": int(plan["n"]), "prevalence": plan["events"] / max(1, plan["n"]),
-                "p_old": len(plan["sets"]["OLD"]), "p_new": len(plan["sets"]["OLD_PLUS_NEW_SAFE"]) - len(plan["sets"]["OLD"]),
-                "n_primary_sets": sum(1 for s in canon if kinds.get(s) in ("PRIMARY", "SENSITIVITY")),
-                "n_domain_sets": sum(1 for s in canon if kinds.get(s) == "DOMAIN"), "n_ablation_sets": sum(1 for s in canon if kinds.get(s) == "ABLATION")}
+                "p_old": len(plan["sets"]["OLD"]), "p_new": len(plan["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"]) - len(plan["sets"]["OLD"]),
+                "n_primary_sets": sum(1 for s in canon if kinds.get(s) == "PRIMARY"),
+                "n_domain_sets": sum(1 for s in canon if kinds.get(s) == "DOMAIN"), "n_ablation_sets": sum(1 for s in canon if kinds.get(s) == "ABLATION"),
+                "domain_families": list(plan.get("domain_families", cfg["domain_families"])),
+                "ablation_families": list(plan.get("ablation_families", cfg["ablations"]["families"]))}
     if src is None:
         raise ValueError("--estimate needs --input (or a folder whose preflight already ran)")
     from falls_ml.data.meuhedet_wide import NA_VALUES
+    from falls_ml.phase3.runner import load_all
     from falls_ml.phase4.sealed import read_header
-    from falls_ml.phase5.data import tokens
+    from falls_ml.phase5.data import value_inputs
 
     header = read_header(src)
     raw = (pd.read_parquet(src, columns=["Index_Date", "Is_Eligible_Cohort"]).astype("string") if src.suffix.lower() == ".parquet" else
@@ -46,14 +49,16 @@ def _shape(src: Path | None, out: Path, cfg: Any) -> dict[str, Any]:
         got = pd.to_datetime(raw["Index_Date"].str.strip().str[:10], format=fmt, errors="coerce")
         d = d.fillna(got)
     n = int(((d == pd.Timestamp(cfg["index_date"])) & (pd.to_numeric(raw["Is_Eligible_Cohort"], errors="coerce") == 1)).sum())
-    from falls_ml.data.meuhedet_wide import load_wide_contract, load_wide_mapping
-
-    names25 = set(load_wide_contract(load_wide_mapping().contract_path).names)
-    htok = {tokens(c) for c in header if c not in names25}            # 2025 contract columns are OLD, never new
-    p_new = sum(1 for f in cfg.v21.features if any(tokens(x) in htok for x in (f.column, *f.aliases)))
-    doms = {f.domain for f in cfg.v21.features if any(tokens(x) in htok for x in (f.column, *f.aliases))}
-    return {"source": "header + eligibility columns (no outcome, no predictor value read)", "n": n, "prevalence": 0.02, "p_old": 108, "p_new": p_new,
-            "n_primary_sets": 4 if p_new else 1, "n_domain_sets": len(doms), "n_ablation_sets": len(cfg["ablations"])}
+    L = load_all(cfg["phase3_config"])
+    v1 = set(L["contract"].names)
+    present = set(header) | set(cfg.schema.bridges)
+    p_old = sum(1 for ins in value_inputs(L).values() if all(c in present for c in ins))
+    newp = [cfg.schema.predictors[c] for c in header if c in cfg.schema.predictors and c not in v1]     # V1 columns are OLD, never new
+    doms = {p.domain for p in newp}
+    blocks = len(cfg["ablations"].get("blocks") or {})
+    return {"source": "header + eligibility columns (no outcome, no predictor value read)", "n": n, "prevalence": 0.02, "p_old": p_old, "p_new": len(newp),
+            "n_primary_sets": 3 if newp else 1, "n_domain_sets": len(doms), "n_ablation_sets": (len(doms) if cfg["ablations"].get("remove_each_domain") else 0) + blocks,
+            "domain_families": list(cfg["domain_families"]), "ablation_families": list(cfg["ablations"]["families"])}
 
 
 def _bench(n: int, p: int, prev: float, cfg: Any, jobs: int, seed: int = 0) -> dict[str, float]:
@@ -124,8 +129,8 @@ def estimate(src: Path | None, out: Path, cfg: Any, jobs: int) -> dict[str, Any]
                                       int(b["stability_xgb"]) * (bm["XGB_fit"] * 1.5 + pfeat * bm["predict"] * 3))
     stages["PRIMARY"] = sum(per_item[f"PRIMARY|{f}"] for f in unit) * K * sh["n_primary_sets"]
     stages["FINAL"] = sum(per_item[f"FINAL|{f}"] for f in unit) * (2 if sh["p_new"] else 1)
-    stages["DOMAIN"] = sum(per_item[f"DOMAIN|{f}"] for f in unit) * K * sh["n_domain_sets"]
-    stages["ABLATION"] = sum(per_item[f"ABLATION|{f}"] for f in unit) * K * sh["n_ablation_sets"]
+    stages["DOMAIN"] = sum(per_item[f"DOMAIN|{f}"] for f in unit if f in sh["domain_families"]) * K * sh["n_domain_sets"]
+    stages["ABLATION"] = sum(per_item[f"ABLATION|{f}"] for f in unit if f in sh["ablation_families"]) * K * sh["n_ablation_sets"]
     stages["EXPLAIN"] = sum(per_item[f"EXPLAIN|{f}"] for f in unit) * (2 if sh["p_new"] else 1)
     stages["STABILITY"] = sum(per_item[f"STABILITY|{f}"] for f in unit)
     stages["REPORT"] = 60.0 + int(b["bootstrap_n"]) * sh["n"] * 2.5e-7 * (8 + sh["n_domain_sets"] * 3 + sh["n_ablation_sets"] * 3)
@@ -145,9 +150,9 @@ def estimate_text(r: dict[str, Any]) -> str:
     sh = r["shape"]
     lines = [f"Phase 5 runtime estimate (--mode {r['mode']}, --jobs {r['jobs']}) - no model was fitted on the real data",
              f"  shape from {sh['source']}: {sh['n']:,} patients; {sh['p_old']} OLD + {sh['p_new']} new features; "
-             f"{sh['n_primary_sets']} primary/sensitivity sets, {sh['n_domain_sets']} domain sets, {sh['n_ablation_sets']} ablations",
+             f"{sh['n_primary_sets']} primary sets, {sh['n_domain_sets']} domain sets, {sh['n_ablation_sets']} ablations ({', '.join(sh['ablation_families'])})",
              "  stage hours: " + ", ".join(f"{k} {v}" for k, v in r["stage_hours"].items()),
              f"  TOTAL about {r['total_hours']} h (plausible range {r['range_hours'][0]}-{r['range_hours'][1]} h)",
-             f"  the primary OLD vs OLD+NEW answer (interim share/) is expected after about {r['first_answer_after_hours']} h",
+             f"  the primary OLD vs OLD+ALL NEW answer (interim share/) is expected after about {r['first_answer_after_hours']} h",
              f"  {r['note']}"]
     return "\n".join(lines)

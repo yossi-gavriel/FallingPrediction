@@ -1,5 +1,5 @@
-"""Phase 5 settings (``configs/meuhedet/phase5.yaml``) and the pre-declared V21 catalogue (``configs/meuhedet/phase5_v21_features.yaml``):
-validated, hashed (line-ending insensitive) and recorded in the frozen plan."""
+"""Phase 5 settings (``configs/meuhedet/phase5.yaml``) and the authoritative V21 schema (``configs/meuhedet/phase5_v21_schema.yaml`` + the embedded
+VIEW definition): validated, hashed (line-ending insensitive) and recorded in the frozen plan."""
 
 from __future__ import annotations
 
@@ -13,18 +13,19 @@ import yaml
 
 from falls_ml.errors import ConfigError
 from falls_ml.paths import resolve_path
+from falls_ml.phase5.schema import V21Schema, load_v21_schema
 
 DEFAULT_CONFIG = "configs/meuhedet/phase5.yaml"
 FAMILIES = ("LASSO", "ENET", "XGB")
+PRIMARY_FAMILY = "ENET"
 MODES = ("quick", "overnight")
-SET_OLD, SET_NEW = "OLD", "OLD_PLUS_NEW_SAFE"
-SET_VERIFIED, SET_LOWRISK = "OLD_PLUS_NEW_VERIFIED_ONLY", "OLD_PLUS_NEW_LOW_AVAILABILITY_RISK"
-CLASSES = ("SAFE_VERIFIED", "SAFE_BOUNDED", "SAFE_ATTESTED", "INELIGIBLE_TIMING", "INELIGIBLE_SEMANTICS", "INELIGIBLE_DATA", "INELIGIBLE_LEAKAGE")
-KINDS = ("binary", "count", "days", "ordinal", "categorical", "continuous")
-TIMINGS = ("record_date", "days_value", "attested", "forbidden")
-REQUIRED = ("index_date", "expected_definition_version", "seed", "phase3_config", "v21_catalogue", "x_sealing", "cohort", "outcome_contract",
-            "eligibility", "cv", "families", "primary_sets", "sensitivity_sets", "domains", "ablations", "derived_tuning", "operating", "modes", "lasso",
-            "enet", "xgb", "decision", "subgroups", "privacy", "resources")
+SET_OLD, SET_ALL, SET_SAFE = "OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"
+SETS = (SET_OLD, SET_ALL, SET_SAFE)
+SAFE_CLASSES = ("SAFE_VERIFIED", "SAFE_BOUNDED", "SAFE_ATTESTED")
+CLASSES = (*SAFE_CLASSES, "UNCERTAIN_TIMING", "INELIGIBLE_TIMING", "INELIGIBLE_SEMANTICS", "INELIGIBLE_DATA", "INELIGIBLE_LEAKAGE")
+REQUIRED = ("index_date", "seed", "phase3_config", "v21_schema", "x_sealing", "cohort", "outcome_contract", "eligibility", "cv", "families",
+            "primary_family", "sets", "primary_comparison", "secondary_comparison", "domains", "domain_families", "ablations", "derived_tuning", "operating",
+            "modes", "lasso", "enet", "xgb", "decision", "subgroups", "privacy", "resources")
 BRIEF_SEALED = ("Fall_Next_30D_Ind", "Next_Fall_Date_30D", "Days_To_Next_Fall_30D", "Next_Fall_Event_ID_30D", "Next_Fall_Confidence_30D", "Label_Reason_30D",
                 "Fall_Next_180D_Ind", "Next_Fall_Date_180D", "Days_To_Next_Fall_180D", "Next_Fall_Event_ID_180D", "Next_Fall_Confidence_180D",
                 "Label_Reason_180D", "Fall_Next_180D_HighConf_Ind")
@@ -35,44 +36,11 @@ def _sha(p: Path) -> str:
 
 
 @dataclass(frozen=True)
-class V21Feature:
-    column: str
-    aliases: tuple[str, ...]
-    domain: str
-    kind: str
-    timing: str
-    missing: str
-    text: str
-    text_he: str
-    levels: tuple[float, ...] | None = None
-    record_date: tuple[str, ...] = ()
-    availability: str | None = None
-    process: bool = False
-
-
-@dataclass(frozen=True)
-class V21Catalogue:
-    path: str
-    sha256: str
-    version: str
-    domains: dict[str, dict[str, str]]
-    availability: dict[str, dict[str, str]]
-    features: tuple[V21Feature, ...]
-
-    def risk_of(self, f: V21Feature) -> tuple[str, str]:
-        if f.availability:
-            return f.availability, "declared for the column"
-        src = self.domains[f.domain].get("source", "")
-        a = self.availability.get(src) or {}
-        return str(a.get("risk", "UNKNOWN")), str(a.get("assumption", "no availability declaration"))
-
-
-@dataclass(frozen=True)
 class Phase5Config:
     path: str
     sha256: str
     raw: dict[str, Any]
-    v21: V21Catalogue
+    schema: V21Schema
     mode: str = "overnight"
     overrides: dict[str, Any] = field(default_factory=dict)
 
@@ -105,46 +73,10 @@ class Phase5Config:
     def with_mode(self, mode: str) -> Phase5Config:
         if mode not in MODES:
             raise ConfigError(f"--mode must be one of {MODES}")
-        return Phase5Config(path=self.path, sha256=self.sha256, raw=self.raw, v21=self.v21, mode=mode, overrides=self.overrides)
+        return Phase5Config(path=self.path, sha256=self.sha256, raw=self.raw, schema=self.schema, mode=mode, overrides=self.overrides)
 
 
-def load_v21_catalogue(path: str | Path) -> V21Catalogue:
-    p = resolve_path(path)
-    raw = (yaml.safe_load(p.read_text(encoding="utf-8")) or {}).get("phase5_v21_features") or {}
-    problems: list[str] = []
-    domains = raw.get("domains") or {}
-    feats: list[V21Feature] = []
-    seen: set[str] = set()
-    for i, f in enumerate(raw.get("features") or []):
-        col = str(f.get("column", ""))
-        if not col:
-            problems.append(f"feature {i}: no column")
-            continue
-        names = [col, *[str(a) for a in f.get("aliases") or []]]
-        for n in names:
-            if n.lower() in seen:
-                problems.append(f"{n}: declared twice")
-            seen.add(n.lower())
-        if f.get("domain") not in domains:
-            problems.append(f"{col}: unknown domain {f.get('domain')!r}")
-        if f.get("kind") not in KINDS:
-            problems.append(f"{col}: kind must be one of {KINDS}")
-        if f.get("timing") not in TIMINGS:
-            problems.append(f"{col}: timing must be one of {TIMINGS}")
-        if f.get("kind") in ("ordinal", "categorical") and not f.get("levels"):
-            problems.append(f"{col}: {f.get('kind')} needs levels")
-        feats.append(V21Feature(column=col, aliases=tuple(str(a) for a in f.get("aliases") or []), domain=str(f.get("domain")), kind=str(f.get("kind")),
-                                timing=str(f.get("timing")), missing=str(f.get("missing", "no_event")), text=str(f.get("text", col)),
-                                text_he=str(f.get("text_he", f.get("text", col))), levels=tuple(float(x) for x in f["levels"]) if f.get("levels") else None,
-                                record_date=tuple(str(x) for x in (f.get("record_date") or [])), availability=f.get("availability"),
-                                process=bool(f.get("process", False))))
-    if problems:
-        raise ConfigError(f"{p}: invalid V21 catalogue: " + "; ".join(problems))
-    return V21Catalogue(path=str(p), sha256=_sha(p), version=str(raw.get("version", "")), domains=dict(domains),
-                        availability=dict(raw.get("availability") or {}), features=tuple(feats))
-
-
-def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overnight", v21_catalogue: str | Path | None = None,
+def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overnight", v21_schema: str | Path | None = None,
                        overrides: dict[str, Any] | None = None) -> Phase5Config:
     """``overrides`` (tests only) is merged into the raw settings and recorded; the real run never passes it."""
     p = resolve_path(path)
@@ -159,6 +91,8 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
         problems.append(f"x_sealing.columns must contain every outcome column of the brief: missing {missing}")
     if not {"LABEL", "FORBIDDEN_LEAKAGE"} <= set(raw["x_sealing"]["contract_roles"]):
         problems.append("x_sealing.contract_roles must contain LABEL and FORBIDDEN_LEAKAGE")
+    if not {"OUTCOME_OR_FUTURE_FORBIDDEN", "IDENTIFIER"} <= set(raw["x_sealing"].get("schema_classes") or []):
+        problems.append("x_sealing.schema_classes must contain OUTCOME_OR_FUTURE_FORBIDDEN and IDENTIFIER")
     for pat in raw["x_sealing"]["name_patterns"]:
         try:
             re.compile(pat)
@@ -166,10 +100,21 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
             problems.append(f"x_sealing.name_patterns: {pat!r} ({exc})")
     if tuple(raw["families"]) != FAMILIES:
         problems.append(f"families must be exactly {list(FAMILIES)} (pre-declared)")
-    if list(raw["primary_sets"]) != [SET_OLD, SET_NEW]:
-        problems.append(f"primary_sets must be [{SET_OLD}, {SET_NEW}]")
-    if list(raw["sensitivity_sets"]) != [SET_VERIFIED, SET_LOWRISK]:
-        problems.append(f"sensitivity_sets must be [{SET_VERIFIED}, {SET_LOWRISK}]")
+    if raw["primary_family"] != PRIMARY_FAMILY:
+        problems.append(f"primary_family must be {PRIMARY_FAMILY} (pre-declared)")
+    if tuple(raw["sets"]) != SETS:
+        problems.append(f"sets must be exactly {list(SETS)}")
+    if list(raw["primary_comparison"]) != [SET_OLD, SET_ALL]:
+        problems.append(f"primary_comparison must be [{SET_OLD}, {SET_ALL}]")
+    if list(raw["secondary_comparison"]) != [SET_OLD, SET_SAFE]:
+        problems.append(f"secondary_comparison must be [{SET_OLD}, {SET_SAFE}]")
+    el = raw["eligibility"]
+    if list(el.get("safe_classes") or []) != list(SAFE_CLASSES):
+        problems.append(f"eligibility.safe_classes must be {list(SAFE_CLASSES)}")
+    if not set(SAFE_CLASSES) <= set(el.get("all_new_classes") or []) or not set(el.get("all_new_classes") or []) <= set(CLASSES[:4]):
+        problems.append("eligibility.all_new_classes must hold the SAFE classes (+ optionally UNCERTAIN_TIMING) only")
+    if el.get("old_changed_definition_policy") not in ("keep_v21_definition", "exclude"):
+        problems.append("eligibility.old_changed_definition_policy must be keep_v21_definition or exclude")
     if float(raw["operating"]["primary_sensitivity"]) != 0.70:
         problems.append("operating.primary_sensitivity must be 0.70 (the management requirement)")
     if 0.70 not in [float(t) for t in raw["operating"]["targets"]]:
@@ -185,16 +130,20 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
     for fam in FAMILIES:
         if raw["derived_tuning"].get(fam) not in ("full", "reuse_reference"):
             problems.append(f"derived_tuning.{fam} must be full or reuse_reference")
+    if not set(raw["domain_families"]) <= set(FAMILIES) or not set(raw["ablations"].get("families") or []) <= set(FAMILIES):
+        problems.append("domain_families / ablations.families must be model families")
+    if PRIMARY_FAMILY not in raw["ablations"].get("families", []):
+        problems.append("ablations.families must contain the primary family")
     if problems:
         raise ConfigError(f"{p}: invalid Phase 5 settings: " + "; ".join(problems))
-    v21 = load_v21_catalogue(v21_catalogue or raw["v21_catalogue"])
-    unknown = [d for d in raw["domains"] if d not in v21.domains]
+    schema = load_v21_schema(v21_schema or raw["v21_schema"])
+    unknown = [d for d in raw["domains"] if d not in schema.domains]
     if unknown:
-        raise ConfigError(f"{p}: domains {unknown} are not V21 catalogue domains")
+        raise ConfigError(f"{p}: domains {unknown} are not V21 schema domains")
     sha = _sha(p)
     if overrides:
         sha = hashlib.sha256((sha + "|overrides|" + repr(sorted(_flat(overrides)))).encode()).hexdigest()
-    return Phase5Config(path=str(p), sha256=sha, raw=raw, v21=v21, mode=mode if mode in MODES else "overnight", overrides=dict(overrides or {}))
+    return Phase5Config(path=str(p), sha256=sha, raw=raw, schema=schema, mode=mode if mode in MODES else "overnight", overrides=dict(overrides or {}))
 
 
 def _merge(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:

@@ -5,12 +5,14 @@ Linear (LASSO / elastic net):
     binary          1 if the value is 1, else 0
     thermometer     ordinal levels: one column ">= level" per level above the lowest
     fall bands      days since the last fall: <=90 / 91-180 / 181-365 / >365 (reference: no prior fall)
-    onehot          declared categorical levels (reference: the first level)
+    onehot          declared categorical levels (reference: the first level); a categorical without declared levels (raw, unvalidated codes)
+                    learns its levels on the TRAINING rows (codes seen >= 10 times; others fall into the reference)
     log1p / none    log(1 + max(x, 0)) or the value; NULL -> the TRAINING median
     + one "<feature>__na" indicator per feature with any NULL in the training rows (NULL = not assessed / nothing recorded is information,
       never silently 0); exact duplicate and constant training columns are dropped (label-blind numerical safeguard); every column is then
       standardised with the TRAINING mean / sd.
-Trees (XGBoost): the engineered values with NULL kept (native missing-value handling); declared categorical levels one-hot.
+Trees (XGBoost): the engineered values with NULL kept (native missing-value handling); declared categorical levels one-hot (raw codes without declared
+levels are kept as one numeric column - a tree can split on them).
 """
 
 from __future__ import annotations
@@ -21,9 +23,10 @@ import numpy as np
 import pandas as pd
 
 FALL_BANDS = (90, 180, 365)
+MIN_LEVEL_COUNT = 10
 
 
-def _encode(f: str, m: dict[str, Any], x: np.ndarray) -> tuple[list[str], np.ndarray, bool]:
+def _encode(f: str, m: dict[str, Any], x: np.ndarray, levels: list[float] | None = None) -> tuple[list[str], np.ndarray, bool]:
     """(column names, matrix before NULL filling, needs a median fill)."""
     obs = np.isfinite(x)
     lin, kind = m.get("linear", "none"), m.get("kind", "continuous")
@@ -40,7 +43,7 @@ def _encode(f: str, m: dict[str, Any], x: np.ndarray) -> tuple[list[str], np.nda
             mat = np.column_stack([((xx > lo) & (xx <= hi)).astype(float) for lo, hi in zip(edges[:-1], edges[1:])])
         return [f"{f}__{lab}" for lab in labels], mat, False
     if lin == "onehot":
-        lv = [float(v) for v in (m.get("levels") or [])][1:]
+        lv = [float(v) for v in (levels if levels is not None else (m.get("levels") or []))][1:]
         return [f"{f}__eq{v:g}" for v in lv], np.column_stack([np.where(obs, (x == v).astype(float), 0.0) for v in lv]) if lv else np.empty((len(x), 0)), False
     if kind == "binary":
         return [f], np.where(obs, (x == 1.0).astype(float), 0.0)[:, None], False
@@ -59,12 +62,13 @@ class LinearDesign:
         self.sd_: np.ndarray | None = None
         self.columns_: list[str] = []
         self.feature_of_: dict[str, str] = {}
+        self.levels_: dict[str, list[float]] = {}
 
     def _raw(self, X: pd.DataFrame) -> tuple[list[str], np.ndarray]:
         names, parts = [], []
         for f in self.features:
             x = X[f].to_numpy(dtype=float)
-            cols, mat, fill = _encode(f, self.meta[f], x)
+            cols, mat, fill = _encode(f, self.meta[f], x, self.levels_.get(f))
             if fill and mat.shape[1]:
                 mat = np.where(np.isfinite(mat), mat, self.medians_.get(f, 0.0))
             names += cols
@@ -75,10 +79,14 @@ class LinearDesign:
         return names, (np.column_stack(parts) if parts else np.empty((len(X), 0)))
 
     def fit(self, X: pd.DataFrame) -> LinearDesign:
-        self.medians_, self.na_ = {}, []
+        self.medians_, self.na_, self.levels_ = {}, [], {}
         for f in self.features:
             x = X[f].to_numpy(dtype=float)
-            cols, mat, fill = _encode(f, self.meta[f], x)
+            m = self.meta[f]
+            if m.get("linear") == "onehot" and not m.get("levels"):
+                v, cnt = np.unique(x[np.isfinite(x)], return_counts=True)
+                self.levels_[f] = [float(a) for a, k in zip(v, cnt) if k >= MIN_LEVEL_COUNT]
+            cols, mat, fill = _encode(f, m, x, self.levels_.get(f))
             if fill and mat.shape[1]:
                 v = mat[:, 0]
                 self.medians_[f] = float(np.nanmedian(v)) if np.isfinite(v).any() else 0.0
@@ -120,7 +128,7 @@ class TreeDesign:
         cols = []
         for f in self.features:
             m = self.meta[f]
-            if m.get("linear") == "onehot":
+            if m.get("linear") == "onehot" and m.get("levels"):
                 cols += [f"{f}__eq{float(v):g}" for v in (m.get("levels") or [])]
             else:
                 cols.append(f)
@@ -133,7 +141,7 @@ class TreeDesign:
         for f in self.features:
             m = self.meta[f]
             x = X[f].to_numpy(dtype=float)
-            if m.get("linear") == "onehot":
+            if m.get("linear") == "onehot" and m.get("levels"):
                 lv = [float(v) for v in (m.get("levels") or [])]
                 parts += [np.where(np.isfinite(x), (x == v).astype(float), np.nan) for v in lv]
             else:
