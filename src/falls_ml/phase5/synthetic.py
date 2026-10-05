@@ -1,13 +1,13 @@
 """SYNTHETIC 2026 / V21 extracts for the Phase 5 tests and the smoke run (never real data - SYNTHETIC DATA, NOT SCIENTIFIC RESULTS).
 
 The Phase 1 synthetic wide extract on Index_Date 2026-01-01 under the corrected contract, converted to the EXACT authoritative V21 header (224 columns,
-the order of ``configs/meuhedet/phase5_v21_schema.yaml``): the 20 removed V1 columns are dropped, the three relabelled registry columns renamed, and the
-new V21 columns added:
+the order of ``configs/meuhedet/phase5_v21_schema.yaml``): the 20 removed V1 columns are dropped and the new V21 columns added (the COVID-19 /
+dialysis / immunosuppression registries are independent new noise columns - their lineage to the removed V1 registries is NOT proven):
 
     Dizziness_Ind                 the NEW signal: outcome-related in the "planted" scenario, pure noise in the "null" scenario
     other diagnosis / registry    noise (diagnosis flags only where a diagnosis record exists: Last_Dx_Date bounds them)
     Registry_*_SubCode            raw sub-codes of the smoking / obesity registries (noise)
-    Deficit_Count_Proxy           a count of the NEW flags (UNCERTAIN_TIMING by the schema); renamed registries are the V1 noise columns
+    Deficit_Count_Proxy           a count of the NEW flags (UNCERTAIN_TIMING by the schema)
 
 Optional traps (``traps``):
     "unknown_column"   an extra clinical-looking column the authoritative schema does not define  -> REQUIRES_SEMANTIC_REVIEW -> STOP
@@ -15,6 +15,7 @@ Optional traps (``traps``):
     "leaky_new"        Deficit_Count_Proxy almost equal to the label                             -> INELIGIBLE_LEAKAGE (excluded)
     "post_index_dx"    Last_Dx_Date after the index day on many diagnosed fallers                -> diagnosis features UNKNOWN / INELIGIBLE_TIMING
     "missing_column"   one authoritative V21 column (Tremor_Ind) absent from the extract         -> WARN; the feature is not available
+    "positive_after_followup"  a few positives whose event lies after their personal Followup_End_Date -> O4 zero tolerance -> STOP
 """
 
 from __future__ import annotations
@@ -26,13 +27,11 @@ import numpy as np
 import pandas as pd
 
 SCENARIOS = ("planted", "null")
-TRAPS = ("unknown_column", "future_column", "leaky_new", "post_index_dx", "missing_column")
+TRAPS = ("unknown_column", "future_column", "leaky_new", "post_index_dx", "missing_column", "positive_after_followup")
 DX_PREV = {"Dizziness_Ind": None, "Gait_Abnormality_Ind": 0.04, "Syncope_Ind": 0.03, "Tremor_Ind": 0.03, "Cataract_Ind": 0.15, "Hearing_Loss_Dx_Ind": 0.08,
            "Vision_Impairment_Dx_Ind": 0.06, "Osteoporosis_Ind": 0.10, "Parkinsonism_Ind": 0.02, "Stroke_Dx_Ind": 0.05}
 REG_PREV = {"Registry_Smoking_Ind": 0.08, "Registry_Obesity_Ind": 0.15, "Registry_Oncology_Ind": 0.06, "Registry_IBD_Ind": 0.02, "Registry_Opiate_Ind": 0.04,
-            "Registry_Severe_Function_Ind": 0.02}
-RENAMES = {"Registry_Blood_Pressure_Ind": "Registry_Corona_Ind", "Registry_Chronic_Renal_Failure_Ind": "Registry_Dialysis_Ind",
-           "Registry_Transplant_Ind": "Registry_Immunosuppressant_Ind"}
+            "Registry_Severe_Function_Ind": 0.02, "Registry_Corona_Ind": 0.05, "Registry_Dialysis_Ind": 0.01, "Registry_Immunosuppressant_Ind": 0.02}
 
 
 def v21_header() -> list[str]:
@@ -59,7 +58,6 @@ def make_v21(n_rows: int = 4000, *, seed: int = 26, scenario: str = "planted", i
     idx = pd.Timestamp(index_date)
     n = len(df)
     y = pd.to_numeric(df["Fall_Next_180D_Ind"], errors="coerce").fillna(0).to_numpy(dtype=float)
-    df = df.rename(columns=RENAMES)
     has_dx = pd.to_datetime(df["Last_Dx_Date"], errors="coerce").notna().to_numpy()
     df["Diagnosis_Source_Absent_Ind"] = (~has_dx).astype(int)
     for c, prev in DX_PREV.items():
@@ -81,6 +79,13 @@ def make_v21(n_rows: int = 4000, *, seed: int = 26, scenario: str = "planted", i
         late = has_dx & (rng.random(n) < 0.10 + 0.6 * y)
         df["Last_Dx_Date"] = ld.where(~late, idx + pd.to_timedelta(rng.integers(1, 120, n), unit="D"))
         facts["post_index_rows"] = int(late.sum())
+    if "positive_after_followup" in traps:
+        ev = pd.to_datetime(df["Next_Fall_Date_180D"], errors="coerce")
+        cand = np.flatnonzero((y == 1) & ev.notna().to_numpy() & ((ev - idx).dt.days > 2).to_numpy())[:7]
+        fe = pd.to_datetime(df["Followup_End_Date"], errors="coerce")
+        fe.iloc[cand] = ev.iloc[cand] - pd.Timedelta(days=1)
+        df["Followup_End_Date"] = fe
+        facts["positives_after_followup"] = int(len(cand))
     cols = v21_header()
     missing = [c for c in cols if c not in df.columns]
     if missing:

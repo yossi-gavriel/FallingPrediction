@@ -38,8 +38,9 @@ phase5:
     reason_column: Label_Reason_180D
     followup_end_column: Followup_End_Date
     window_days: 180
-    max_positive_after_followup_share: 0.005          # positives with an event after the personal Followup_End_Date: > 0.5% of positives -> STOP
-                                                      #   (V21 labels allow it by construction; labels are never rewritten silently)
+    max_positive_after_followup_share: 0              # ZERO TOLERANCE (must be 0; the loader refuses any other value): ANY positive with its event
+                                                      #   after the personal Followup_End_Date -> STOP - REVIEW REQUIRED; aggregate count and % only;
+                                                      #   V21 labels allow it by construction - labels are never altered, patients never excluded
     max_label_date_inconsistency_share: 0.001         # positives without an event date / negatives with one: > 0.1% -> STOP
     min_usable_events: 100                            # fewer usable 2026 events -> STOP before training
     warn_usable_share_below: 0.90
@@ -55,7 +56,7 @@ phase5:
     all_new_classes: [SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING]   # OLD_PLUS_ALL_NEW_ELIGIBLE also takes plausibly-at-index,
                                                                              #   non-future predictors whose timing is uncertain
     safe_provenance: [DEFENSIBLE]                     # OLD_PLUS_NEW_SAFE also requires a defensible provenance (no unvalidated raw codes, no
-                                                      #   probable rename of a V1 column, no experimental composite)
+                                                      #   experimental composite)
     old_changed_definition_policy: keep_v21_definition   # a Phase 3 feature whose V1 column changed definition stays with the V21 definition,
                                                          #   flagged, in EVERY feature set (it cannot create an OLD vs NEW difference)
 
@@ -66,7 +67,7 @@ phase5:
   sets: [OLD, OLD_PLUS_ALL_NEW_ELIGIBLE, OLD_PLUS_NEW_SAFE]
   primary_comparison: [OLD, OLD_PLUS_ALL_NEW_ELIGIBLE]     # the business comparison
   secondary_comparison: [OLD, OLD_PLUS_NEW_SAFE]           # the stricter scientific sensitivity analysis
-  domains: [NEW_DIAGNOSIS, NEW_VISION_HEARING, NEW_REGISTRY, NEW_REGISTRY_RELABELLED, NEW_FRAILTY_OR_RISK_PROXY]   # = V21 schema domains (OLD + domain)
+  domains: [NEW_DIAGNOSIS, NEW_VISION_HEARING, NEW_REGISTRY, NEW_FRAILTY_OR_RISK_PROXY]   # = V21 schema domains (OLD + domain)
   domain_families: [LASSO, ENET, XGB]
   ablations:                                          # removed from OLD_PLUS_ALL_NEW_ELIGIBLE, for the PRIMARY family only
     families: [ENET]

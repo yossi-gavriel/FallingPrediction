@@ -124,6 +124,8 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
             problems.append(f"modes.{m} missing")
     if int(raw["outcome_contract"]["window_days"]) != 180:
         problems.append("outcome_contract.window_days must be 180")
+    if float(raw["outcome_contract"].get("max_positive_after_followup_share", -1)) != 0.0:
+        problems.append("outcome_contract.max_positive_after_followup_share must be 0 (zero tolerance: any positive after Followup_End_Date stops the run)")
     for f in ("outer_folds", "inner_folds"):
         if int(raw["cv"][f]) < 2:
             problems.append(f"cv.{f} must be >= 2")

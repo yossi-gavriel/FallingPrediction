@@ -13,6 +13,8 @@ Brief section 22 acceptance proofs covered here (the rest in tests/unit/test_pha
  15 the privacy scan blocks patient-level outputs                 test_share_publication_fails_closed_on_an_identifier
  16 Phase 2 / 3 / 4 unchanged                                     test_phase2_3_4_files_are_unchanged
  +  the first real-data action is the preflight alone             test_real_data_modelling_requires_a_preflight_first
+ +  a rename is never inferred from position / name               test_registry_lineage_is_proven_never_inferred
+ +  any positive after Followup_End_Date stops (zero tolerance)   test_positive_after_followup_end_stops_with_zero_tolerance
 """
 
 from __future__ import annotations
@@ -103,9 +105,13 @@ def test_schema_diff_is_exact_and_programmatic() -> None:
     assert set(d.classes) == set(hdr) and set(d.classes.values()) <= set(CLASSES) and not d.unresolved and d.header_matches
     assert len(d.table) == len(set(v1) | set(hdr)) and len(d.classification) == 224
     rc = d.renamed_changed.set_index("v21_column")
-    assert rc.loc["Registry_Corona_Ind", "v1_column"] == "Registry_Blood_Pressure_Ind"
-    assert rc.loc["Registry_Dialysis_Ind", "v1_column"] == "Registry_Chronic_Renal_Failure_Ind"
-    assert rc.loc["Registry_Immunosuppressant_Ind", "v1_column"] == "Registry_Transplant_Ind"
+    for v21c, v1c in (("Registry_Corona_Ind", "Registry_Blood_Pressure_Ind"), ("Registry_Dialysis_Ind", "Registry_Chronic_Renal_Failure_Ind"),
+                      ("Registry_Immunosuppressant_Ind", "Registry_Transplant_Ind")):
+        assert rc.loc[v21c, "v1_column"] == v1c and rc.loc[v21c, "lineage_class"] == "OLD_REMOVED_NEW_ADDED" and not rc.loc[v21c, "lineage_proven"]
+        assert rc.loc[v21c, "change"] == "NOT_A_RENAME (OLD_REMOVED_NEW_ADDED)" and d.classes[v21c] == "NEW_CANDIDATE_PREDICTOR"
+    assert d.counts["renamed_or_replaced"] == 0 and "RENAMED_OR_REPLACED" not in set(d.classes.values())
+    assert d.counts["lineage_by_class"] == {"TRUE_RENAME_SAME_SEMANTICS": 0, "CORRECTED_LABEL_SAME_SOURCE": 0, "OLD_REMOVED_NEW_ADDED": 3,
+                                            "MATERIAL_DEFINITION_CHANGE": 0}
     assert set(rc.index[rc["change"] == "OLD_CHANGED_DEFINITION"]) == {"Last_Hosp_Length", "Fall_Self_Report_Value"}
     rm = d.removed.set_index("column")
     assert "hypertension" in rm.loc["Registry_Blood_Pressure_Ind", "phase3_features_affected"]
@@ -126,7 +132,7 @@ def test_schema_diff_is_recomputed_from_the_real_header(tmp_path: Path) -> None:
     assert d.classes["Balance_Clinic_Referral_Ind"] == REVIEW                    # undefined clinical-looking column: never silently dropped
     assert d.classes["Fall_Next_365D_Ind"] == "OUTCOME_OR_FUTURE_FORBIDDEN"      # future-looking name: sealed
     assert d.classes["Registry_Blood_Pressure_Ind"] == REVIEW                    # a V1 predictor V21 does not define: review, not OLD
-    assert d.classes["Registry_Corona_Ind"] == "NEW_CANDIDATE_PREDICTOR"         # its predecessor is present: no longer a rename
+    assert d.classes["Registry_Corona_Ind"] == "NEW_CANDIDATE_PREDICTOR"         # never a rename (lineage not proven)
     assert set(d.unresolved) == {"Balance_Clinic_Referral_Ind", "Registry_Blood_Pressure_Ind"}
     # the reviewed schema must cover exactly the embedded definition file, whose content is pinned by sha256
     bad = tmp_path / "schema.yaml"
@@ -144,32 +150,109 @@ def test_schema_diff_is_recomputed_from_the_real_header(tmp_path: Path) -> None:
         load_v21_schema(bad2)
 
 
+def test_registry_lineage_is_proven_never_inferred(tmp_path: Path) -> None:
+    from falls_ml.errors import ConfigError
+    from falls_ml.phase3.runner import load_all
+    from falls_ml.phase5.data import universe_inputs
+    from falls_ml.phase5.schema import load_v21_schema, schema_diff
+
+    s = load_v21_schema("configs/meuhedet/phase5_v21_schema.yaml")
+    assert set(s.lineage) == {"Registry_Blood_Pressure_Ind", "Registry_Chronic_Renal_Failure_Ind", "Registry_Transplant_Ind"}
+    for g in s.lineage.values():
+        assert g.klass == "OLD_REMOVED_NEW_ADDED" and g.proven is False and not s.predictors[g.v21_column].replaces
+        assert g.evidence["v1_sql_expression"].startswith("NOT AVAILABLE") and g.evidence["v1_registry_ids"] == "NOT DOCUMENTED"
+        assert g.evidence["v21_registry_ids"] and g.evidence["comparison"] and g.evidence["conclusion"]
+    L = load_all("configs/meuhedet/phase3.yaml")
+    d = schema_diff(list(s.header), s, L["contract"], L["dictionary"], sealed_patterns=_patterns(), feature_inputs=universe_inputs(L))
+    t = d.table.set_index("column")
+    for v1c, g in s.lineage.items():                                            # documented in SCHEMA_DIFF_V1_V21.csv on BOTH columns of the pair
+        for c in (v1c, g.v21_column):
+            assert t.loc[c, "lineage_class"] == "OLD_REMOVED_NEW_ADDED" and t.loc[c, "lineage_proven"] is False
+            assert "registry_ids: NOT DOCUMENTED" in t.loc[c, "lineage_v1_evidence"] and g.evidence["v21_registry_ids"] in t.loc[c, "lineage_v21_evidence"]
+            assert t.loc[c, "lineage_comparison"] and t.loc[c, "lineage_conclusion"]
+        assert t.loc[v1c, "successor_in_v21"] == "" and t.loc[g.v21_column, "predecessor_in_v1"] == ""
+    rm = d.removed.set_index("column")
+    assert rm.loc["Registry_Blood_Pressure_Ind", "lineage_class"] == "OLD_REMOVED_NEW_ADDED"
+    assert "genuinely new V21 predictor" in rm.loc["Registry_Blood_Pressure_Ind", "consequence"]
+    # a same-lineage class is refused without proof / the V1 SQL evidence, and so is a 'replaces' without a proven lineage
+    src = (ROOT / "configs/meuhedet/phase5_v21_schema.yaml").read_text(encoding="utf-8")
+    defn = (ROOT / "configs/meuhedet/phase5_v21_view_definition.txt").as_posix()
+    src = src.replace("definition_file: configs/meuhedet/phase5_v21_view_definition.txt", f"definition_file: {defn}")
+    one = "      v21_column: Registry_Corona_Ind\n      class: OLD_REMOVED_NEW_ADDED\n      lineage_proven: false\n"
+    assert src.count(one) == 1
+    for bad in (src.replace(one, one.replace("OLD_REMOVED_NEW_ADDED", "CORRECTED_LABEL_SAME_SOURCE")),
+                src.replace(one, one.replace("OLD_REMOVED_NEW_ADDED", "TRUE_RENAME_SAME_SEMANTICS").replace("false", "true")),
+                src.replace(one, one.replace("OLD_REMOVED_NEW_ADDED", "MATERIAL_DEFINITION_CHANGE").replace("false", "true")),
+                src.replace("provenance: DEFENSIBLE,\n        definition: '1 = valid membership at the index day in registries 116 / 118",
+                            "provenance: DEFENSIBLE, replaces: Registry_Blood_Pressure_Ind,\n        definition: '1 = valid membership at the index day in registries 116 / 118")):
+        assert bad != src
+        p = tmp_path / "schema.yaml"
+        p.write_text(bad, encoding="utf-8")
+        with pytest.raises(ConfigError):
+            load_v21_schema(p)
+
+
+def test_positive_after_followup_end_stops_with_zero_tolerance(tmp_path: Path) -> None:
+    import json
+
+    from falls_ml.errors import ConfigError
+    from falls_ml.phase5.config import load_phase5_config
+    from falls_ml.phase5.runner import STOP_LINE, run_phase5
+    from falls_ml.phase5.synthetic import make_v21, write_v21_csv
+
+    df, facts = make_v21(1500, scenario="null", seed=5, traps=("positive_after_followup",))
+    assert 0 < facts["positives_after_followup"] <= 7                         # a handful (< 0.5% of the positives at real scale): still a STOP
+    el = (pd.to_numeric(df["Is_Eligible_Cohort"], errors="coerce") == 1) & (pd.to_datetime(df["Index_Date"], errors="coerce").dt.normalize()
+                                                                            == pd.Timestamp("2026-01-01"))
+    pos_before = int((pd.to_numeric(df.loc[el, "Fall_Next_180D_Ind"], errors="coerce") == 1).sum())
+    (tmp_path / "in").mkdir()
+    src = write_v21_csv(df, tmp_path / "in" / "v21.csv")
+    out = tmp_path / "out"
+    r = run_phase5(src, out, mode="quick", preflight_only=True, overrides={"eligibility": {"min_known_observed_rows": 20}})
+    assert r["status"] == "STOPPED_PREFLIGHT" and r["exit_code"] == 2
+    pf = out / "preflight"
+    md = (pf / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8")
+    assert md.rstrip().endswith(STOP_LINE) and "zero tolerance" in md
+    oc = json.loads((pf / "OUTCOME_CONTRACT_2026.json").read_text(encoding="utf-8"))
+    o4 = oc["checks"]["O4_positive_after_followup_end"]
+    assert o4["passed"] is False and o4["limit"] == 0 and o4["positives_event_after_followup_end"] == "<10"     # small cell, aggregate only
+    assert str(o4["pct_of_positives"]).startswith("<") and "<10 positive(s)" in md
+    assert o4["positives"] == pos_before                                       # labels untouched, nobody excluded (aggregate only)
+    assert any(str(h).startswith("O4:") for h in oc["hard_failures"]) and not oc["passed"]
+    assert not (out / "work" / "PLAN.json").exists()
+    # any tolerance is refused by the configuration
+    for v in (0.005, 0.0001):
+        with pytest.raises(ConfigError):
+            load_phase5_config(overrides={"outcome_contract": {"max_positive_after_followup_share": v}})
+
+
 def test_known_new_features_are_new_and_mefi_stays_old(prepared: dict[str, Any]) -> None:
     P, S = prepared["P"], prepared["S"]
     cls = P.diff.classes
     for c in ("Dizziness_Ind", "Gait_Abnormality_Ind", "Syncope_Ind", "Tremor_Ind", "Cataract_Ind", "Hearing_Loss_Dx_Ind", "Vision_Impairment_Dx_Ind",
               "Osteoporosis_Ind", "Parkinsonism_Ind", "Stroke_Dx_Ind", "Registry_Smoking_Ind", "Registry_Obesity_Ind", "Registry_Oncology_Ind",
               "Registry_IBD_Ind", "Registry_Opiate_Ind", "Registry_Severe_Function_Ind", "Registry_Smoking_SubCode", "Registry_Obesity_SubCode",
-              "Deficit_Count_Proxy"):
-        assert cls[c] == "NEW_CANDIDATE_PREDICTOR", c
-    for c in ("Registry_Dialysis_Ind", "Registry_Corona_Ind", "Registry_Immunosuppressant_Ind"):
-        assert cls[c] == "RENAMED_OR_REPLACED", c
+              "Deficit_Count_Proxy", "Registry_Dialysis_Ind", "Registry_Corona_Ind", "Registry_Immunosuppressant_Ind"):
+        assert cls[c] == "NEW_CANDIDATE_PREDICTOR", c                         # lineage of the last three to V1 registries NOT proven: genuinely new
     for c in ("MEFI_Group_At_Index", "MEFI_Assessed_Ind", "Days_In_Current_MEFI_Group", "MEFI_Worsened_Ind", "Frailty_Not_Assessed_Ind"):
         assert cls[c] == "OLD_UNCHANGED", c                                     # MEFI is NOT new
     assert "frail_mefi_group" in S["sets"]["OLD"] and not any(f.startswith("new_mefi") for f in P.meta)
     reg = P.registry.set_index("feature")
     assert "new_dizziness_ind" in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and "new_dizziness_ind" in S["sets"]["OLD_PLUS_NEW_SAFE"]
     assert "new_dizziness_ind" not in S["sets"]["OLD"] and reg.loc["new_dizziness_ind", "class"] == "SAFE_VERIFIED"
-    # OLD under V21: 'falls' kept (removed validation input bridged); the three relabelled-registry features are not reproducible
+    # OLD under V21: 'falls' kept (removed validation input bridged); the three removed V1 registry features are not reproducible
     assert "falls" in S["sets"]["OLD"]
     for f in ("hypertension", "chronic_kidney_disease", "com_registry_transplant"):
         assert reg.loc[f, "class"] == "INELIGIBLE_DATA" and f not in S["sets"]["OLD"]
     # every genuine new predictor is in a set or excluded, always with a reason
     nw = P.registry[P.registry["origin"] == "NEW_V21"]
     assert len(nw) == 22 and nw["set_reason"].str.len().gt(10).all()
-    for c in ("Registry_Corona_Ind", "Registry_Smoking_SubCode"):
+    f = "new_registry_smoking_subcode"                                        # unvalidated raw code: ALL_NEW only
+    assert f in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and f not in S["sets"]["OLD_PLUS_NEW_SAFE"]
+    for c in ("Registry_Corona_Ind", "Registry_Dialysis_Ind", "Registry_Immunosuppressant_Ind"):   # genuinely new, documented V21 registries
         f = "new_" + c.lower()
-        assert f in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and f not in S["sets"]["OLD_PLUS_NEW_SAFE"], c
+        assert reg.loc[f, "domain"] == "NEW_REGISTRY" and reg.loc[f, "new_provenance"] == "DEFENSIBLE", c
+        assert f in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"] and (f in S["sets"]["OLD_PLUS_NEW_SAFE"]) == (reg.loc[f, "class"] == "SAFE_ATTESTED"), c
     assert "Diagnosis_Source_Absent_Ind" not in " ".join(P.registry["raw_columns"]) and cls["Diagnosis_Source_Absent_Ind"] == "METADATA_OR_ADMIN"
     cat = P.catalogue.set_index("raw_column")
     assert set(cat.index) >= {c for c in P.diff.classes if c not in set(prepared["L"]["contract"].names)}
@@ -249,7 +332,7 @@ def test_post_index_or_ineligible_feature_in_x_hard_stops(prepared: dict[str, An
     P, S, cfg = prepared["P"], prepared["S"], prepared["cfg"]
     x_guard(S["sets"], P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)          # the real sets pass
     for bad in ({**S["sets"], "OLD_PLUS_ALL_NEW_ELIGIBLE": [*S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"], "new_deficit_count_proxy"]},     # leaky
-                {**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_registry_corona_ind"]},                     # not SAFE
+                {**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_registry_smoking_subcode"]},                # not SAFE
                 {**S["sets"], "OLD": [*S["sets"]["OLD"], "new_dizziness_ind"]},                                                      # NEW in OLD
                 {**S["sets"], "OLD": [*S["sets"]["OLD"], "hypertension"]}):                                                          # removed in V21
         with pytest.raises(Phase2Stop) as e:

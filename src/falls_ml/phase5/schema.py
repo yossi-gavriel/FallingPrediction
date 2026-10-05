@@ -10,12 +10,18 @@ Every column of the extract gets exactly one class:
 
     OLD_UNCHANGED               V1 predictor column, same meaning in V21
     OLD_CHANGED_DEFINITION      V1 predictor column whose V21 definition is a different quantity (handled explicitly, never silently as OLD)
-    RENAMED_OR_REPLACED         V21 column that replaces a removed V1 column (probable rename with a corrected meaning)
+    RENAMED_OR_REPLACED         V21 column whose LINEAGE to a removed V1 column is PROVEN (V1 and V21 SQL, registry IDs, source and logic compared)
+                                with a MATERIAL_DEFINITION_CHANGE (a proven TRUE_RENAME / CORRECTED_LABEL stops for review: OLD inputs are never aliased)
     NEW_CANDIDATE_PREDICTOR     V21 predictor column that V1 did not have
     METADATA_OR_ADMIN           cohort / QA / provenance / record-date-check column (V1 roles QA_CONTROL, COHORT_ELIGIBILITY at or before the index)
     OUTCOME_OR_FUTURE_FORBIDDEN label, follow-up, censoring, post-index or V1 FORBIDDEN_LEAKAGE column
     IDENTIFIER                  member / row identifier
     REQUIRES_SEMANTIC_REVIEW    a column the authoritative schema does not define (or a shared predictor column without a review): STOP before training
+
+A rename is NEVER inferred from a column position or from one name replacing another: the reviewed ``lineage`` section classifies every examined
+(removed V1 column, V21 column) pair as TRUE_RENAME_SAME_SEMANTICS / CORRECTED_LABEL_SAME_SOURCE / OLD_REMOVED_NEW_ADDED / MATERIAL_DEFINITION_CHANGE,
+and a same-lineage class is accepted only with ``lineage_proven: true`` and the V1 SQL evidence. Unproven -> OLD_REMOVED_NEW_ADDED: the V1 column is
+removed and the V21 column is a genuinely new predictor (NEW_CANDIDATE_PREDICTOR).
 """
 
 from __future__ import annotations
@@ -40,7 +46,15 @@ EVIDENCE = ("DOCUMENTED_MATCH", "CLARIFIED_NO_CONFLICT", "CHANGED")
 NEW_ROLES = ("PREDICTOR", META, IDENT, FORBIDDEN)
 KINDS = ("binary", "count", "days", "ordinal", "categorical", "continuous")
 TIMINGS = ("record_date", "attested", "uncertain")
-PROVENANCE = ("DEFENSIBLE", "UNVALIDATED_CODES", "PROBABLE_RENAME_OF_V1", "EXPERIMENTAL_COMPOSITE")
+PROVENANCE = ("DEFENSIBLE", "UNVALIDATED_CODES", "EXPERIMENTAL_COMPOSITE")
+TRUE_RENAME, CORRECTED_LABEL, REMOVED_ADDED, MATERIAL_CHANGE = ("TRUE_RENAME_SAME_SEMANTICS", "CORRECTED_LABEL_SAME_SOURCE", "OLD_REMOVED_NEW_ADDED",
+                                                               "MATERIAL_DEFINITION_CHANGE")
+LINEAGE_CLASSES = (TRUE_RENAME, CORRECTED_LABEL, REMOVED_ADDED, MATERIAL_CHANGE)
+SAME_LINEAGE = (TRUE_RENAME, CORRECTED_LABEL, MATERIAL_CHANGE)     # each needs lineage_proven: true + the V1 SQL evidence
+SAME_SOURCE = (TRUE_RENAME, CORRECTED_LABEL)                       # each also needs identical registry IDs and source table
+LINEAGE_FIELDS = ("v21_column", "class", "lineage_proven", "v1_sql_expression", "v1_registry_ids", "v1_source_table", "v1_logic", "v21_sql_expression",
+                  "v21_registry_ids", "v21_source_table", "v21_logic", "comparison", "conclusion")
+V1_EVIDENCE = ("v1_sql_expression", "v1_registry_ids", "v1_source_table")
 MISSING = ("no_event", "not_assessed", "unexpected")
 PREDICTOR_ROLES = ("EFALLS_BASELINE_FEATURE", "MEUHEDET_ENHANCED_FEATURE")
 SELECT_RE = re.compile(r"^\s*,?\[(\w+)\]\s*--\s*(.*)$", re.M)
@@ -69,6 +83,26 @@ class NewPredictor:
 
 
 @dataclass(frozen=True)
+class Lineage:
+    v1_column: str
+    v21_column: str
+    klass: str
+    proven: bool
+    evidence: dict[str, str]
+
+    def v1_evidence(self) -> str:
+        return " | ".join(f"{k[3:]}: {self.evidence[k]}" for k in ("v1_sql_expression", "v1_registry_ids", "v1_source_table", "v1_logic"))
+
+    def v21_evidence(self) -> str:
+        return " | ".join(f"{k[4:]}: {self.evidence[k]}" for k in ("v21_sql_expression", "v21_registry_ids", "v21_source_table", "v21_logic"))
+
+
+def _documented(v: Any) -> bool:
+    s = str(v or "").strip().upper()
+    return bool(s) and not s.startswith(("NOT AVAILABLE", "NOT DOCUMENTED", "UNKNOWN"))
+
+
+@dataclass(frozen=True)
 class V21Schema:
     path: str
     sha256: str
@@ -83,6 +117,7 @@ class V21Schema:
     caveats: tuple[str, ...]
     predictors: dict[str, NewPredictor]
     source_view: str
+    lineage: dict[str, Lineage]             # removed V1 column -> its examined V21 counterpart and the proven-or-not lineage class
 
     def risk_of(self, p: NewPredictor) -> tuple[str, str]:
         a = self.availability.get(p.source) or {}
@@ -150,8 +185,6 @@ def load_v21_schema(path: str | Path) -> V21Schema:
                 problems.append(f"{c}: record_date {n.get('record_date')!r} is not a V21 column")
             if n.get("timing") == "uncertain" and not n.get("timing_reason"):
                 problems.append(f"{c}: uncertain timing needs timing_reason")
-            if (n.get("provenance") == "PROBABLE_RENAME_OF_V1") != bool(n.get("replaces")):
-                problems.append(f"{c}: provenance PROBABLE_RENAME_OF_V1 and replaces go together")
             if n.get("kind") == "ordinal" and not n.get("levels"):
                 problems.append(f"{c}: ordinal needs levels")
             preds[c] = NewPredictor(column=c, domain=str(n.get("domain")), source=str(n.get("source")), kind=str(n.get("kind")), missing=str(n.get("missing")),
@@ -159,6 +192,42 @@ def load_v21_schema(path: str | Path) -> V21Schema:
                                     text=str(n.get("text", c)), text_he=str(n.get("text_he", n.get("text", c))), record_date=n.get("record_date"),
                                     replaces=n.get("replaces"), timing_reason=str(n.get("timing_reason", "")),
                                     levels=tuple(float(x) for x in n["levels"]) if n.get("levels") else None)
+    lineage: dict[str, Lineage] = {}
+    if list(raw.get("lineage_classes") or LINEAGE_CLASSES) != list(LINEAGE_CLASSES):
+        problems.append(f"lineage_classes must be {list(LINEAGE_CLASSES)}")
+    for v1c, spec in (raw.get("lineage") or {}).items():
+        spec = spec or {}
+        miss = [k for k in LINEAGE_FIELDS if k not in spec or (k != "lineage_proven" and not str(spec[k]).strip())]
+        if miss:
+            problems.append(f"lineage {v1c}: missing {miss}")
+            continue
+        k, v21c, proven = spec["class"], spec["v21_column"], spec["lineage_proven"]
+        if k not in LINEAGE_CLASSES:
+            problems.append(f"lineage {v1c}: class {k!r} not in {LINEAGE_CLASSES}")
+        if not isinstance(proven, bool):
+            problems.append(f"lineage {v1c}: lineage_proven must be true / false")
+        if v1c in header:
+            problems.append(f"lineage {v1c}: the V1 column is still in V21 (lineage is only for a removed V1 column)")
+        if v21c not in preds:
+            problems.append(f"lineage {v1c}: {v21c!r} is not a new V21 predictor")
+        if k in SAME_LINEAGE:
+            if proven is not True:
+                problems.append(f"lineage {v1c}: {k} requires lineage_proven: true")
+            undoc = [f for f in V1_EVIDENCE if not _documented(spec[f])]
+            if undoc:
+                problems.append(f"lineage {v1c}: {k} requires the V1 evidence {undoc} (a rename is never inferred from a position or a name)")
+        if k in SAME_SOURCE and (str(spec["v1_registry_ids"]).strip() != str(spec["v21_registry_ids"]).strip()
+                                 or str(spec["v1_source_table"]).strip() != str(spec["v21_source_table"]).strip()):
+            problems.append(f"lineage {v1c}: {k} requires identical V1 / V21 registry IDs and source table")
+        lineage[v1c] = Lineage(v1_column=v1c, v21_column=str(v21c), klass=str(k), proven=bool(proven),
+                               evidence={f: str(spec[f]) for f in LINEAGE_FIELDS if f not in ("v21_column", "class", "lineage_proven")})
+    by_v21 = {g.v21_column: g for g in lineage.values()}
+    for c, pr in preds.items():
+        g = by_v21.get(c)
+        if pr.replaces and not (g and g.v1_column == pr.replaces and g.klass in SAME_LINEAGE and g.proven):
+            problems.append(f"{c}: replaces {pr.replaces!r} without a PROVEN same-lineage entry in lineage (renames are never inferred)")
+        if g and g.klass in SAME_LINEAGE and pr.replaces != g.v1_column:
+            problems.append(f"{c}: lineage {g.v1_column} is {g.klass}: declare replaces: {g.v1_column}")
     for b, spec in (raw.get("bridges") or {}).items():
         if b in header:
             problems.append(f"bridge {b}: the column exists in V21 (a bridge is only for a removed V1 column)")
@@ -168,7 +237,8 @@ def load_v21_schema(path: str | Path) -> V21Schema:
         raise ConfigError(f"{p}: invalid V21 schema: " + "; ".join(problems))
     return V21Schema(path=str(p), sha256=_sha_text(p), definition_path=str(dp), definition_sha256=dsha, header=tuple(header), meaning_he=meaning,
                      columns={c: dict(e or {}) for c, e in cols.items()}, domains=domains, availability=avail, bridges=dict(raw.get("bridges") or {}),
-                     caveats=tuple(str(x) for x in raw.get("global_caveats") or []), predictors=preds, source_view=str(raw.get("source_view", "")))
+                     caveats=tuple(str(x) for x in raw.get("global_caveats") or []), predictors=preds, source_view=str(raw.get("source_view", "")),
+                     lineage=lineage)
 
 
 # ============================================================================ the diff
@@ -207,7 +277,9 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
     for f, ins in feature_inputs.items():
         for c in ins:
             used_by.setdefault(c, []).append(f)
-    successors = {p.replaces: p.column for p in schema.predictors.values() if p.replaces}
+    successors = {p.replaces: p.column for p in schema.predictors.values() if p.replaces}     # PROVEN same-lineage pairs only
+    lin_v1 = schema.lineage
+    lin_v21 = {g.v21_column: g for g in lin_v1.values()}
     classes: dict[str, str] = {}
     reasons: dict[str, str] = {}
     rows = []
@@ -233,12 +305,20 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
             n = e["new"]
             if n["role"] == "PREDICTOR":
                 p = schema.predictors[c]
-                if p.replaces and p.replaces in v1s and p.replaces not in hdr:
-                    cls, why = RENAMED, (f"replaces the removed V1 column {p.replaces} (probable rename, corrected meaning): {p.definition}")
+                g = lin_v21.get(c)
+                if p.replaces and p.replaces in v1s and p.replaces not in hdr and g is not None and g.klass in SAME_SOURCE:
+                    cls, why = REVIEW, (f"PROVEN {g.klass} of the removed V1 column {p.replaces}: the Phase 3 feature would be reproducible under the V21 "
+                                        "name, which this package never does silently (OLD inputs are not aliased) - review required")
+                elif p.replaces and p.replaces in v1s and p.replaces not in hdr:
+                    cls, why = RENAMED, (f"PROVEN lineage {g.klass if g else '?'} of the removed V1 column {p.replaces} (V1 / V21 SQL, registry IDs, source and "
+                                         f"logic compared): {p.definition}")
                 else:
                     cls, why = NEW_CAND, f"V21 predictor not in V1: {p.definition}"
                     if p.replaces:
                         why += f" (declared predecessor {p.replaces} is still in the extract: not treated as a rename)"
+                    if g is not None and g.klass == REMOVED_ADDED:
+                        why += (f" [lineage to the removed V1 column {g.v1_column} examined: OLD_REMOVED_NEW_ADDED, "
+                                f"{'proven different' if g.proven else 'equivalence NOT proven'} - a genuinely new predictor, never a rename]")
             else:
                 cls, why = n["role"], f"new V21 column: {n.get('reason', '')}"
         elif any(pt.search(c) for pt in pats):
@@ -252,6 +332,7 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
         cc = contract.get(c) if in1 else None
         e = schema.columns.get(c) or {}
         dm = dictionary.columns.get(c) if (in1 and c in dictionary.columns) else None
+        g = lin_v1.get(c) or lin_v21.get(c)
         rows.append({"column": c, "in_v1_contract": in1, "in_v21_authoritative": inA, "in_extract": inE, "name_status": status,
                      "v21_position": schema.header.index(c) + 1 if inA else None, "v1_role": cc.role if cc else "", "v1_sql_type": cc.sql if cc else "",
                      "v1_timing": cc.timing if cc else "", "v1_meaning_status": (dm or {}).get("status", ""),
@@ -259,7 +340,11 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
                      "class_in_extract": classes.get(c, ""), "successor_in_v21": successors.get(c, ""),
                      "predecessor_in_v1": (schema.predictors[c].replaces or "") if c in schema.predictors else "",
                      "review_note": e.get("note", "") or (e.get("new") or {}).get("reason", "") or (e.get("new") or {}).get("definition", ""),
-                     "phase3_features_reading_it": "; ".join(used_by.get(c, []))})
+                     "phase3_features_reading_it": "; ".join(used_by.get(c, [])),
+                     "lineage_pair": (f"{g.v1_column} (V1) -> {g.v21_column} (V21)" if g else ""), "lineage_class": g.klass if g else "",
+                     "lineage_proven": (g.proven if g else ""), "lineage_v1_evidence": g.v1_evidence() if g else "",
+                     "lineage_v21_evidence": g.v21_evidence() if g else "", "lineage_comparison": g.evidence["comparison"] if g else "",
+                     "lineage_conclusion": g.evidence["conclusion"] if g else ""})
     table = pd.DataFrame(rows)
     cl = []
     for c in header:
@@ -279,29 +364,40 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
         dm = dictionary.columns.get(c) if c in dictionary.columns else None
         feats = used_by.get(c, [])
         succ = successors.get(c, "")
+        g = lin_v1.get(c)
         bridged = c in schema.bridges
+        lin_txt = (f"; lineage to V21 {g.v21_column} examined: {g.klass} ({'proven' if g.proven else 'NOT proven'})" if g else "")
         if bridged:
             cons = f"bridged: {schema.bridges[c]['reason']}"
         elif feats:
-            cons = (f"Phase 3 feature(s) {feats} cannot be reproduced with the same meaning -> excluded from OLD (INELIGIBLE_DATA)"
-                    + (f"; V21 has {succ} with a corrected meaning (RENAMED_OR_REPLACED, a NEW candidate)" if succ else ""))
+            cons = (f"Phase 3 feature(s) {feats} cannot be reproduced with the same meaning -> excluded from OLD (INELIGIBLE_DATA)" + lin_txt
+                    + (f"; {g.v21_column} is a genuinely new V21 predictor (NEW_CANDIDATE_PREDICTOR)" if g and g.klass == REMOVED_ADDED else ""))
         else:
-            cons = "not read by any Phase 3 feature: no effect on OLD" + (f"; successor {succ}" if succ else "")
+            cons = "not read by any Phase 3 feature: no effect on OLD" + lin_txt
         rem.append({"column": c, "v1_role": cc.role, "v1_timing": cc.timing, "v1_meaning": (dm or {}).get("meaning", ""),
-                    "v1_note": getattr(cc, "note", "") or "", "successor_in_v21": succ, "bridged": bridged, "phase3_features_affected": "; ".join(feats),
-                    "consequence": cons})
-    removed = pd.DataFrame(rem, columns=["column", "v1_role", "v1_timing", "v1_meaning", "v1_note", "successor_in_v21", "bridged", "phase3_features_affected",
-                                         "consequence"])
+                    "v1_note": getattr(cc, "note", "") or "", "successor_in_v21": succ, "lineage_v21_column": g.v21_column if g else "",
+                    "lineage_class": g.klass if g else "", "lineage_proven": (g.proven if g else ""), "bridged": bridged,
+                    "phase3_features_affected": "; ".join(feats), "consequence": cons})
+    removed = pd.DataFrame(rem, columns=["column", "v1_role", "v1_timing", "v1_meaning", "v1_note", "successor_in_v21", "lineage_v21_column", "lineage_class",
+                                         "lineage_proven", "bridged", "phase3_features_affected", "consequence"])
     rc = []
     for c in header:
         if classes[c] == RENAMED:
             p = schema.predictors[c]
             dm = dictionary.columns.get(p.replaces) if p.replaces in dictionary.columns else None
-            rc.append({"v21_column": c, "change": RENAMED, "v1_column": p.replaces, "v1_meaning": (dm or {}).get("meaning", ""),
-                       "v1_note": getattr(contract.get(p.replaces), "note", "") or "", "v21_definition": p.definition,
+            g = lin_v21[c]
+            rc.append({"v21_column": c, "change": RENAMED, "v1_column": p.replaces, "lineage_class": g.klass, "lineage_proven": g.proven,
+                       "v1_meaning": (dm or {}).get("meaning", ""), "v1_note": getattr(contract.get(p.replaces), "note", "") or "", "v21_definition": p.definition,
                        "phase3_features_of_v1_column": "; ".join(used_by.get(p.replaces, [])),
-                       "handling": "NOT in OLD (meaning differs from the V1 label); NEW candidate in OLD_PLUS_ALL_NEW_ELIGIBLE only (probable rename: not "
-                                   "verifiably new information, so excluded from OLD_PLUS_NEW_SAFE); domain NEW_REGISTRY_RELABELLED"})
+                       "handling": f"PROVEN {g.klass}: the V1 Phase 3 feature is not reproducible (NOT in OLD); the V21 column is a NEW candidate under the "
+                                   "ordinary eligibility rules"})
+        elif c in lin_v21 and classes[c] == NEW_CAND:
+            g = lin_v21[c]
+            dm = dictionary.columns.get(g.v1_column) if g.v1_column in dictionary.columns else None
+            rc.append({"v21_column": c, "change": f"NOT_A_RENAME ({g.klass})", "v1_column": g.v1_column, "lineage_class": g.klass, "lineage_proven": g.proven,
+                       "v1_meaning": (dm or {}).get("meaning", ""), "v1_note": getattr(contract.get(g.v1_column), "note", "") or "",
+                       "v21_definition": schema.predictors[c].definition, "phase3_features_of_v1_column": "; ".join(used_by.get(g.v1_column, [])),
+                       "handling": f"lineage examined and {'proven different' if g.proven else 'NOT proven'}: {g.evidence['conclusion']}"})
         elif classes[c] == OLD_CHANGED:
             dm = dictionary.columns.get(c) if c in dictionary.columns else None
             feats = used_by.get(c, [])
@@ -310,8 +406,8 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
                        "phase3_features_of_v1_column": "; ".join(feats),
                        "handling": ("Phase 3 feature(s) kept with the V21 definition, flagged OLD_CHANGED_DEFINITION, present in EVERY feature set (cannot create "
                                     "an OLD vs NEW difference)" if feats else "not read by any Phase 3 feature: never in X")})
-    renamed_changed = pd.DataFrame(rc, columns=["v21_column", "change", "v1_column", "v1_meaning", "v1_note", "v21_definition", "phase3_features_of_v1_column",
-                                                "handling"])
+    renamed_changed = pd.DataFrame(rc, columns=["v21_column", "change", "v1_column", "lineage_class", "lineage_proven", "v1_meaning", "v1_note", "v21_definition",
+                                                "phase3_features_of_v1_column", "handling"])
     unresolved = [c for c in header if classes[c] == REVIEW]
     vc = pd.Series(list(classes.values())).value_counts().to_dict()
     shared = [c for c in header if c in v1s]
@@ -320,6 +416,7 @@ def schema_diff(header: list[str], schema: V21Schema, contract: Any, dictionary:
               "removed_v1_columns": int(len(removed)), "new_columns": int(sum(c not in v1s for c in header)),
               "renamed_or_replaced": int(vc.get(RENAMED, 0)), "changed_definition": int(vc.get(OLD_CHANGED, 0)),
               "new_candidate_predictors": int(vc.get(NEW_CAND, 0)), "unresolved_requires_semantic_review": len(unresolved),
+              "lineage_pairs_examined": len(lin_v1), "lineage_by_class": {k: int(sum(g.klass == k for g in lin_v1.values())) for k in LINEAGE_CLASSES},
               "by_class": {k: int(vc.get(k, 0)) for k in CLASSES}}
     return SchemaDiff(classes=classes, reasons=reasons, table=table, classification=classification, removed=removed, renamed_changed=renamed_changed,
                       counts=counts, unresolved=unresolved, missing_from_extract=[c for c in schema.header if c not in hdr],

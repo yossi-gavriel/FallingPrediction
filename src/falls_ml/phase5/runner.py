@@ -402,6 +402,8 @@ def _write_preflight(out: Path, P: Any, res: dict[str, Any], sets_info: dict[str
                   f"(authoritative {sc.get('v21_authoritative_columns')}; header {'identical' if sc.get('header_matches_authoritative_v21') else 'DIFFERENT'}) |",
                   f"| unchanged columns | {sc.get('unchanged_columns')} |", f"| removed V1 columns | {sc.get('removed_v1_columns')} |",
                   f"| new columns | {sc.get('new_columns')} |", f"| changed definition / renamed or replaced | {sc.get('changed_definition')} / {sc.get('renamed_or_replaced')} |",
+                  f"| removed V1 columns examined for lineage to a V21 column | {sc.get('lineage_pairs_examined', 0)} ("
+                  + ", ".join(f"{k} {v}" for k, v in (sc.get("lineage_by_class") or {}).items() if v) + "; a rename is never inferred from position / name) |",
                   f"| genuine new predictors (NEW_CANDIDATE + RENAMED) | {len(nw) if len(nw) else sc.get('new_candidate_predictors', 0) + sc.get('renamed_or_replaced', 0)} |",
                   f"| eligible new predictors: {SET_ALL} / {SET_SAFE} | {int(tf(nw['in_OLD_PLUS_ALL_NEW_ELIGIBLE']).sum()) if len(nw) else '—'} / "
                   f"{int(tf(nw['in_OLD_PLUS_NEW_SAFE']).sum()) if len(nw) else '—'} |",

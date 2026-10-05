@@ -295,12 +295,21 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     Oe = O.loc[elig].reset_index(drop=True)
     contract_res = outcome_contract(Oe, ocfg)
     contract_res["extra_audit"] = _outcome_extra(Oe, oc, idx)
+    fz = _followup_zero_tolerance(Oe, oc)
+    contract_res["checks"]["O4_positive_after_followup_end"] = fz
+    contract_res["hard_failures"] = [h for h in contract_res["hard_failures"] if not str(h).startswith("O4")]
+    if not fz["passed"]:
+        contract_res["hard_failures"].append(fz["message"])
+    contract_res["passed"] = not contract_res["hard_failures"]
+    P.facts["followup_end_audit"] = {k: fz[k] for k in ("positives", "positives_event_after_followup_end", "pct_of_positives", "rule")}
     P.outcome = contract_res
     yv = pd.to_numeric(Oe[oc["label_column"]], errors="coerce").to_numpy(dtype=float)
     usable = np.isin(yv, (0.0, 1.0))
     P.add("P5", "2026 outcome contract (before any model is fitted)", "OK" if contract_res["passed"] else "STOP",
           [*(contract_res["hard_failures"] or ["O1-O6 passed: outcome strictly after the index day, within Index_Date + 180, consistent dates, enough usable "
-                                              "events; positives after the personal follow-up end within the declared limit"]),
+                                              "events; NO positive after the personal Followup_End_Date (zero tolerance)"]),
+           f"positives with the event after Followup_End_Date: {fz['count_text']} of {fz['positives']} ({fz['pct_text']}; zero tolerance - labels "
+           "never altered, patients never excluded)",
            f"usable labelled patients {int(usable.sum())}, events {int((yv == 1).sum())}, censored / unlabelled {int((~usable).sum())} (labels never rewritten)"])
     if not contract_res["passed"]:
         return P
@@ -340,11 +349,11 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
         meta[f] = {"kind": kind, "linear": lin, "levels": lev, "missing": miss_sem, "op": op, "domain": dom, "origin": "OLD"}
     for f, cs in absent.items():
         dom = cat.get(f).domain if f in cat.names else "BASELINE_15"
-        succ = [diff.table.loc[diff.table["column"] == c, "successor_in_v21"].iloc[0] for c in cs if (diff.table["column"] == c).any()]
-        succ = [s for s in succ if s]
+        lin = [schema.lineage[c] for c in cs if c in schema.lineage]
+        lin_txt = "; ".join(f"lineage to V21 {g.v21_column}: {g.klass} ({'proven' if g.proven else 'equivalence NOT proven'})" for g in lin)
         reg_rows.append({"feature": f, "raw_columns": "; ".join(uinp[f]), "origin": "OLD_PHASE3_UNIVERSE", "domain": dom, "kind": "", "v21_class": "REMOVED_IN_V21",
                          "class": I_DATA, "reason": f"V1 input column(s) {cs} removed in V21: not reproducible with an equivalent meaning"
-                         + (f" (V21 successor {succ} has a corrected, different meaning: a NEW candidate, never relabelled as this OLD feature)" if succ else ""),
+                         + (f" ({lin_txt}: the V21 field is a separate, genuinely new candidate, never relabelled as this OLD feature)" if lin else ""),
                          "availability_risk": "", "availability_assumption": "", "n_unknown_cells": 0, "phase3_class": "", "provenance": "", "new_provenance": ""})
 
     # ---- NEW V21 predictors
@@ -631,6 +640,38 @@ def _dist_text(x: np.ndarray, kind: str) -> str:
         return f"{len(np.unique(obs))} distinct codes"
     q = np.percentile(obs, [25, 50, 75])
     return f"median {q[1]:g} (IQR {q[0]:g}-{q[2]:g})"
+
+
+def _followup_zero_tolerance(o: pd.DataFrame, oc: dict[str, Any]) -> dict[str, Any]:
+    """O4 (Phase 5, zero tolerance): ANY positive whose event lies after the personal Followup_End_Date stops the run (aggregate count / percent only).
+
+    V21 labels a fall even after the personal follow-up end by construction; Phase 5 neither relabels nor excludes such patients - it stops for review.
+    A NULL / 2999 sentinel Followup_End_Date is open follow-up (V21: NULL = no end candidate). The column itself is required.
+    """
+    from falls_ml.phase4.evaluate import SENTINEL_YEAR
+
+    rule = ("zero tolerance: any positive with its event after the personal Followup_End_Date -> STOP - REVIEW REQUIRED (no tolerance, no relabelling, "
+            "no exclusion; aggregate count and percentage only)")
+    y = pd.to_numeric(o[oc["label_column"]], errors="coerce") if oc["label_column"] in o else pd.Series(np.nan, index=o.index)
+    pos = (y == 1).fillna(False).to_numpy()
+    npos = int(pos.sum())
+    if oc["followup_end_column"] not in o or oc["event_date_column"] not in o:
+        return {"passed": False, "positives": npos, "positives_event_after_followup_end": 0, "pct_of_positives": 0.0, "rule": rule, "count_text": "n/a",
+                "pct_text": "n/a",
+                "message": f"O4: {oc['followup_end_column']} / {oc['event_date_column']} not in the extract: positives after the follow-up end cannot be ruled out"}
+    fe = o[oc["followup_end_column"]]
+    ev = o[oc["event_date_column"]].dt.normalize()
+    real = fe.notna() & (fe.dt.year < SENTINEL_YEAR)
+    after = pos & (real & (ev > fe.dt.normalize())).fillna(False).to_numpy()
+    n = int(after.sum())
+    pct = 100.0 * n / npos if npos else 0.0
+    small = 0 < n < 10                                       # the share small-cell rule: 1-9 is reported as '<10' (and the % as an upper bound)
+    count_text = "<10" if small else str(n)
+    pct_text = (f"<{100.0 * 10 / npos:.2f}%" if small else f"{pct:.2f}%") if npos else "0.00%"
+    return {"passed": n == 0, "positives": npos, "positives_event_after_followup_end": n, "pct_of_positives": pct_text if small else round(pct, 4),
+            "count_text": count_text, "pct_text": pct_text, "limit": 0, "rule": rule, "positives_followup_end_open": int((pos & ~real.to_numpy()).sum()),
+            "message": (f"O4: {count_text} positive(s) ({pct_text} of {npos} positives) have the event after the personal Followup_End_Date "
+                        "(zero tolerance) - STOP, review the V21 label definition; labels are not altered and no patient is excluded")}
 
 
 def _outcome_extra(o: pd.DataFrame, oc: dict[str, Any], idx: pd.Timestamp) -> dict[str, Any]:

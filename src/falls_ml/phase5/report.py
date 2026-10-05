@@ -423,8 +423,7 @@ def figures(fig_dir: Path, A: dict[str, Any], y: np.ndarray, perm: pd.DataFrame,
 
 
 # ============================================================================ summaries
-REASON_HE = (("PROBABLE_RENAME_OF_V1", "ככל הנראה שינוי שם של עמודת רשם שהוסרה מ-V1 (עם משמעות מתוקנת) – לא בהכרח מידע חדש"),
-             ("UNVALIDATED_CODES", "תת-קוד גולמי ללא מילון מאומת"), ("EXPERIMENTAL_COMPOSITE", "מדד מורכב ניסויי"),
+REASON_HE = (("UNVALIDATED_CODES", "תת-קוד גולמי ללא מילון מאומת"), ("EXPERIMENTAL_COMPOSITE", "מדד מורכב ניסויי"),
              ("timing uncertain", "תזמון לא ודאי ביום המדד (כולל חשיפה תרופתית שאינה מוגבלת בתאריך רכישה)"),
              ("INELIGIBLE_LEAKAGE", "חשד לדליפת מידע מהעתיד (חזק מדי לבדו)"), ("INELIGIBLE_TIMING", "רשומות אחרי תאריך המדד"),
              ("INELIGIBLE_DATA", "מעט מדי נתונים / ערך קבוע"), ("INELIGIBLE_SEMANTICS", "הערכים אינם תואמים את ההגדרה"))
@@ -461,7 +460,7 @@ def management_he(A: dict[str, Any], plan: dict[str, Any], synthetic: bool, inte
           f"- **מטופלים שנותחו:** {num(n)} (כל הזכאים עם תוצא ידוע, תאריך מדד 01/01/2026, תחזית בסוף יום המדד).",
           f"- **נפילות:** {num(ev)} ב-180 הימים שאחרי יום המדד ({pct(ev / n if n else float('nan'))} מהמטופלים).",
           f"- **השוואה מדויקת V1 → V21:** {sc.get('v1_columns', '—')} עמודות ב-V1, {sc.get('extract_columns', '—')} ב-V21; "
-          f"{sc.get('new_columns', '—')} עמודות חדשות, {sc.get('removed_v1_columns', '—')} הוסרו, {sc.get('renamed_or_replaced', '—')} הוחלפו (שינוי שם ומשמעות), "
+          f"{sc.get('new_columns', '—')} עמודות חדשות, {sc.get('removed_v1_columns', '—')} הוסרו, {sc.get('renamed_or_replaced', '—')} הוחלפו בשושלת מוכחת, "
           f"{sc.get('changed_definition', '—')} שינו הגדרה. שדות MEFI אינם חדשים (קיימים ב-V1).",
           f"- **פיצ'רים חדשים אמיתיים שנמצאו ב-V21:** {np_.get('genuine_new_predictors', '—')}.",
           f"- **נכנסו ל-OLD + כל החדשים הכשירים (ההשוואה העסקית):** {np_.get('all_new_eligible', '—')}.",
@@ -613,8 +612,11 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
           "information-availability lag (registry backdating, coding / billing lag) is not verifiable from the extract.",
           "- V21 documents timing caveats for OLD inputs too (medication purchase status not bounded by Index_Date; visit counters may settle after it); "
           "these inputs are identical in every feature set, so they cannot create the OLD vs NEW difference, but they are not proven pre-index.",
-          "- Fall outcomes are diagnosis records (falls and fractures); positives may lie after the personal follow-up end (audited, limited by the contract).",
-          "- Three registry columns are probable renames of removed V1 columns (relabelled meaning); they are excluded from OLD_PLUS_NEW_SAFE.",
+          "- Fall outcomes are diagnosis records (falls and fractures); a positive after the personal follow-up end stops the run (zero tolerance, audited "
+          "before any fit).",
+          "- Three removed V1 registry flags (hypertension, chronic renal failure, transplant) were compared with the V21 COVID-19 (116 / 118), dialysis "
+          "(101 / 1) and immunosuppression (130 / 131) registries: the V1 SQL / registry IDs are not available and V21 contradicts the V1 labels, so lineage "
+          "is NOT proven (OLD_REMOVED_NEW_ADDED): the V1 features are removed from OLD and the V21 fields are genuinely new predictors.",
           "- The leakage screen (single-feature AUROC >= 0.80) uses every label but can only exclude, never select, a predictor.",
           "- Importance, coefficients and SHAP are descriptive, never causal.",
           f"- Historical 2025 reference (context only): threshold 0.02, sensitivity {pct(HISTORICAL['sensitivity'])}, PPV {pct(HISTORICAL['ppv'])}, "

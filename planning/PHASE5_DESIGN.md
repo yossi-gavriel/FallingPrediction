@@ -1,6 +1,6 @@
 # Phase 5 design – 2026 redevelopment + incremental value of the new V21 information
 
-falls_ml 0.12.0, Phase 5 2.0.0 (revision of 0.11.0 / 1.0.0 after the authoritative V21 schema was supplied). Branch `phase5`. Settings:
+falls_ml 0.12.1, Phase 5 2.1.0 (0.12.0 / 2.0.0 after the authoritative V21 schema was supplied; 0.12.1: registry lineage proven-or-not, zero-tolerance follow-up stop). Branch `phase5`. Settings:
 `configs/meuhedet/phase5.yaml`; authoritative V21 schema: `configs/meuhedet/phase5_v21_view_definition.txt` (the VIEW definition with its Hebrew
 business definitions, sha256-pinned) + `configs/meuhedet/phase5_v21_schema.yaml` (the column-by-column review). Code: `src/falls_ml/phase5/`.
 Runbook: `docs/meuhedet/PHASE5_WORK_PC_RUNBOOK.md`.
@@ -16,15 +16,21 @@ sensitivity analysis. Design label: INTERNAL NESTED CROSS-VALIDATION ON 2026 SNA
 Computed at every preflight from three column lists: the V1 contract (221), the authoritative V21 header (224) and the header of the file read.
 The reviewed schema supplies only semantics: for each shared column the V1 -> V21 equivalence evidence (DOCUMENTED_MATCH / CLARIFIED_NO_CONFLICT
 / CHANGED, with notes), for each new column its role, definition, domain, kind, timing basis (record_date / attested / uncertain) and provenance
-(DEFENSIBLE / UNVALIDATED_CODES / PROBABLE_RENAME_OF_V1 / EXPERIMENTAL_COMPOSITE). Classes (exactly one per column): OLD_UNCHANGED,
+(DEFENSIBLE / UNVALIDATED_CODES / EXPERIMENTAL_COMPOSITE). Classes (exactly one per column): OLD_UNCHANGED,
 OLD_CHANGED_DEFINITION, RENAMED_OR_REPLACED, NEW_CANDIDATE_PREDICTOR, METADATA_OR_ADMIN, OUTCOME_OR_FUTURE_FORBIDDEN, IDENTIFIER,
 REQUIRES_SEMANTIC_REVIEW (any column the schema does not define -> STOP before training). Shared-column classes follow the V1 role (IDENTIFIER;
 LABEL / FORBIDDEN_LEAKAGE / post-index -> forbidden; QA / cohort -> metadata; predictor roles -> OLD_*).
 
 Findings on the authoritative header: 201 shared, 20 removed, 23 new. Removed V1 predictors: Registry_Blood_Pressure_Ind (eFalls hypertension),
-Registry_Chronic_Renal_Failure_Ind (CKD), Registry_Transplant_Ind, Siudi_Status; the V21 definitions of Registry_Corona_Ind (116 / 118, "not
-hypertension"), Registry_Dialysis_Ind (101 / 1) and Registry_Immunosuppressant_Ind (130 / 131, "not a transplant flag") identify them as probable
-renames with corrected meanings (RENAMED_OR_REPLACED). Changed definitions: Last_Hosp_Length (max, not last stay), Fall_Self_Report_Value (binary,
+Registry_Chronic_Renal_Failure_Ind (CKD), Registry_Transplant_Ind, Siudi_Status. Registry LINEAGE (0.12.1): a rename is never inferred from a
+column position or a name replacement. The schema's `lineage` section compares, for each removed V1 registry flag and the V21 column in its place,
+the V1 / V21 SQL expression, registry IDs, source table and logic. The V1 contract has no SQL, registry ID or source table (only a DDL / S2T label;
+Q-M-04 never answered), while V21 defines Registry_Corona_Ind (116 / 118, "not hypertension"), Registry_Dialysis_Ind (101 / 1, "not all kidney
+failure") and Registry_Immunosuppressant_Ind (130 / 131, "not a transplant flag"): lineage NOT proven -> OLD_REMOVED_NEW_ADDED for all three (the
+V1 features leave OLD; the V21 fields are genuinely new NEW_CANDIDATE_PREDICTORs, domain NEW_REGISTRY, DEFENSIBLE). The loader refuses a
+same-lineage class (TRUE_RENAME_SAME_SEMANTICS / CORRECTED_LABEL_SAME_SOURCE / MATERIAL_DEFINITION_CHANGE) without lineage_proven and the V1 SQL
+evidence, and refuses `replaces` without a proven lineage; a proven same-source pair stops for review (OLD inputs are never aliased).
+Changed definitions: Last_Hosp_Length (max, not last stay), Fall_Self_Report_Value (binary,
 not unconfirmed codes); neither is a Phase 3 input. Prior_Fall_Missing_Ind (the removed VALIDATION-only input of eFalls 'falls') is bridged as 0
 (V21 COUNT gives 0 without a record), so 'falls' is reproduced exactly. Definition_Version no longer exists: the extract is identified by its
 header. MEFI is not new.
@@ -34,18 +40,19 @@ header. MEFI is not new.
 * X and the outcome are read separately (Phase 4 sealed reader; a sealed column request raises). Sealed: the brief's outcome / follow-up columns,
   V1 LABEL / FORBIDDEN_LEAKAGE / post-index columns, every OUTCOME_OR_FUTURE_FORBIDDEN / IDENTIFIER column of the diff, unknown future-looking names.
 * Outcome: Phase 4 reader + contract O1-O7 on the eligible rows (strictly after the index day, within 180 days, positives after the personal
-  Followup_End_Date <= 0.5% of positives, label / date consistency, >= 100 usable events; episode audit descriptive); labels never rewritten.
+  Followup_End_Date: ZERO tolerance (any one -> STOP - REVIEW REQUIRED, aggregate count / % only; the config refuses any other limit), label /
+  date consistency, >= 100 usable events; episode audit descriptive); labels never rewritten, patients never excluded by O4.
 * Cohort: Index_Date 2026-01-01, Is_Eligible_Cohort = 1; duplicate / NULL Customer_Full_ID -> HARD STOP; Leakage_Check_Ind non-zero -> STOP.
 * OLD = the Phase 3 universe rebuilt with the unchanged Phase 1-3 code; features whose V1 VALUE input was removed are INELIGIBLE_DATA (hypertension,
   chronic_kidney_disease, com_registry_transplant); OLD_CHANGED_DEFINITION inputs would be kept with the V21 definition in every set.
-* NEW = every NEW_CANDIDATE_PREDICTOR / RENAMED_OR_REPLACED column: diagnosis flags verified row by row against Last_Dx_Date (post-index source
+* NEW = every NEW_CANDIDATE_PREDICTOR / RENAMED_OR_REPLACED (proven lineage only; none in V21) column: diagnosis flags verified row by row against Last_Dx_Date (post-index source
   records -> UNKNOWN -> no-record state; Phase 3 gates G2 / G3), registry flags SAFE_ATTESTED (V3), Deficit_Count_Proxy UNCERTAIN_TIMING
   (composite incl. medication exposure whose purchase status is not bounded by Index_Date). Coverage (>= 100 known rows) and the single-feature
   AUROC >= 0.80 leakage safety screen (exclusion only).
 * Sets: OLD (SAFE classes); OLD_PLUS_ALL_NEW_ELIGIBLE (+ every new SAFE or UNCERTAIN_TIMING predictor); OLD_PLUS_NEW_SAFE (+ new SAFE predictors
-  with DEFENSIBLE provenance: no raw sub-codes, no probable renames, no composite). Every inclusion / exclusion carries its reason
+  with DEFENSIBLE provenance: no raw sub-codes, no composite). Every inclusion / exclusion carries its reason
   (FEATURE_ELIGIBILITY.csv, NEW_FEATURE_CATALOGUE.csv, ALL_V21_COLUMN_CLASSIFICATION.csv x_use). `x_guard` re-checks the sets (HARD STOP X_LEAKAGE).
-* Domains: NEW_DIAGNOSIS, NEW_VISION_HEARING, NEW_REGISTRY, NEW_REGISTRY_RELABELLED, NEW_FRAILTY_OR_RISK_PROXY (from the schema). Ablations (ENET):
+* Domains: NEW_DIAGNOSIS, NEW_VISION_HEARING, NEW_REGISTRY, NEW_FRAILTY_OR_RISK_PROXY (from the schema). Ablations (ENET):
   NO_<each domain>, NO_FALL_RECENCY, NO_TIMING_UNCERTAIN.
 
 ## Nested CV (`engine.py`, `models.py`, `design.py`)
@@ -65,9 +72,8 @@ EVERY outer fold; (4) OLD_PLUS_NEW_SAFE also lower (the gain does not rest on ti
 materially worse. USEFUL = all five; PROMISING = (1) and ((2) or (3)); otherwise NO ROBUST GAIN. The answer is the ENET verdict (USEFUL -> YES,
 PROMISING -> UNCERTAIN, otherwise NO); LASSO / XGBoost secondary; the best family is exploratory only. No minimum effect size is invented.
 
-Synthetic lesson: the relabelled registries and the composite proxy can give a small, "significant" gain that is not new information (the old
-columns under a new name; a sum of OLD flags). Criterion (4), the NEW_REGISTRY_RELABELLED / NEW_FRAILTY_OR_RISK_PROXY domain tests and the
-NO_<domain> / NO_TIMING_UNCERTAIN ablations make that visible.
+Synthetic lesson: the composite proxy can give a small, "significant" gain that is not new information (a sum of OLD flags). Criterion (4), the
+NEW_FRAILTY_OR_RISK_PROXY domain test and the NO_<domain> / NO_TIMING_UNCERTAIN ablations make that visible.
 
 ## Operations, outputs, privacy
 

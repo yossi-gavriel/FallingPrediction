@@ -5,9 +5,9 @@
 #   shared columns:  v1_equivalence DOCUMENTED_MATCH | CLARIFIED_NO_CONFLICT | CHANGED (+ note)
 #   new columns:     new.role PREDICTOR | METADATA_OR_ADMIN | IDENTIFIER | OUTCOME_OR_FUTURE_FORBIDDEN; a PREDICTOR declares domain, source, kind,
 #                    missing (no_event | not_assessed | unexpected), timing (record_date | attested | uncertain), provenance (DEFENSIBLE |
-#                    UNVALIDATED_CODES | PROBABLE_RENAME_OF_V1 | EXPERIMENTAL_COMPOSITE) and, for a renamed column, replaces: <V1 column>
+#                    UNVALIDATED_CODES | EXPERIMENTAL_COMPOSITE) and, ONLY for a lineage-proven pair (see lineage), replaces: <V1 column>
 phase5_v21_schema:
-  version: 1.0.0
+  version: 1.1.0                     # 1.1.0: registry lineage proven-or-not (no rename inferred from position / name replacement)
   status: AUTHORITATIVE V21 SCHEMA (header + business definitions supplied by the user, 2026-10-04) + the Phase 5 column-by-column review against the V1 contract (configs/meuhedet/wide_v1_columns.yaml)
     and data dictionary (wide_v1_data_dictionary.yaml). Written without any row of real data.
   source_view: '[Meuhedet_DWH].[dbo].[V_Falls_Prediction_Wide_3] (definition V21; the definition file creates V_Falls_Prediction_Wide - the extracted object must implement the same definition)'
@@ -28,12 +28,64 @@ phase5_v21_schema:
     NEW_DIAGNOSIS: {label: new diagnosis-derived predictors (neurological / balance / bone), label_he: אבחנות חדשות (נוירולוגיה / שיווי משקל / עצם)}
     NEW_VISION_HEARING: {label: new vision / hearing diagnoses, label_he: אבחנות ראייה / שמיעה חדשות}
     NEW_REGISTRY: {label: new registry flags and sub-codes, label_he: רשמים חדשים}
-    NEW_REGISTRY_RELABELLED: {label: 'registry flags that replace a removed V1 registry column (probable rename, corrected meaning)', label_he: רשמים שהחליפו עמודת רשם של V1 (שינוי שם ומשמעות)}
     NEW_FRAILTY_OR_RISK_PROXY: {label: experimental deficit-count proxy, label_he: מדד ליקויים ניסויי}
   availability:
     DIAGNOSES: {risk: MEDIUM, assumption: recorded at the visit; retrospective coding would move information after Index_Date (Phase 3 time contract)}
     REGISTRIES: {risk: HIGH, assumption: memberships can be created after clinical review with an earlier start date (backdating) (Phase 3 time contract)}
     COMPOSITE: {risk: HIGH, assumption: inherits the registry backdating risk and the unbounded medication purchase status}
+  # V1 -> V21 LINEAGE of the three removed V1 registry columns and the V21 registry columns that took their places in the column list.
+  # A V21 column is NEVER called a rename because it occupies a similar position or replaced a name. A pair is classified only after
+  # comparing the actual V1 and V21 SQL expressions, registry IDs / codes, source tables and logic; a same-lineage class
+  # (TRUE_RENAME_SAME_SEMANTICS, CORRECTED_LABEL_SAME_SOURCE, MATERIAL_DEFINITION_CHANGE) requires lineage_proven: true and the V1 SQL
+  # evidence (the loader refuses it otherwise). Unproven -> OLD_REMOVED_NEW_ADDED: the V1 feature is removed, the V21 field is a genuinely
+  # new predictor (NEW_CANDIDATE_PREDICTOR). Documented in SCHEMA_DIFF_V1_V21.csv (lineage_* columns) and RENAMED_OR_CHANGED_COLUMNS.csv.
+  lineage_classes: [TRUE_RENAME_SAME_SEMANTICS, CORRECTED_LABEL_SAME_SOURCE, OLD_REMOVED_NEW_ADDED, MATERIAL_DEFINITION_CHANGE]
+  lineage_evidence_sources:
+    v1: 'configs/meuhedet/wide_v1_columns.yaml + wide_v1_data_dictionary.yaml (V_Falls_Prediction_Wide_1 V1.0 contract, written from the DDL / S2T notes): column name, SQL type, nullability, role, allowed values and a short meaning; NO SQL expression, NO registry ID / sub-type, NO source table and NO selection logic for any registry flag. The V1 VIEW SQL is not available to this package.'
+    v21: 'configs/meuhedet/phase5_v21_view_definition.txt (authoritative V21, sha256 above): the column SELECT with the business definition of each computation (registry type / sub-type IDs, validity-date rule, no STATUS filter); the CTE bodies are summarised by those definitions, the outer SELECT reads V_Falls_Prediction_Wide_3.'
+  lineage:
+    Registry_Blood_Pressure_Ind:
+      v21_column: Registry_Corona_Ind
+      class: OLD_REMOVED_NEW_ADDED
+      lineage_proven: false
+      v1_sql_expression: NOT AVAILABLE (only the V1 column contract; int, NOT NULL, allowed 0/1)
+      v1_registry_ids: NOT DOCUMENTED
+      v1_source_table: 'NOT DOCUMENTED beyond the source family REGISTRIES (record date First_Registry_Date)'
+      v1_logic: '"1 = hypertension registry" (dictionary status DOCUMENTED from the S2T label only; open question Q-M-04 "confirm it is the hypertension registry (diagnosis-based), not a measurement flag" was never answered)'
+      v21_sql_expression: 'SELECT [Registry_Corona_Ind]: 1 for a valid membership at the index day in registry 116 or 118 (COVID-19 load), else 0; validity dates, no STATUS filter'
+      v21_registry_ids: '116, 118'
+      v21_source_table: registry membership source of the V21 VIEW (validity dates, no STATUS filter)
+      v21_logic: 'COVID-19 load registries; the V21 definition states explicitly: NOT hypertension, not proof of an active infection'
+      comparison: 'registry IDs: V1 unknown vs V21 116 / 118 - cannot be matched; source table: both from the registry family, the specific registry of V1 is undocumented; logic / semantics: V1 label hypertension vs V21 COVID-19 load, and V21 explicitly denies hypertension - contradictory'
+      conclusion: 'lineage NOT proven (no V1 SQL / registry ID; contradictory semantics) -> OLD_REMOVED_NEW_ADDED: Registry_Blood_Pressure_Ind is removed (Phase 3 feature hypertension is not reproducible -> not in OLD); Registry_Corona_Ind is a genuinely new V21 predictor'
+    Registry_Chronic_Renal_Failure_Ind:
+      v21_column: Registry_Dialysis_Ind
+      class: OLD_REMOVED_NEW_ADDED
+      lineage_proven: false
+      v1_sql_expression: NOT AVAILABLE (only the V1 column contract; int, NOT NULL, allowed 0/1)
+      v1_registry_ids: NOT DOCUMENTED
+      v1_source_table: 'NOT DOCUMENTED beyond the source family REGISTRIES (record date First_Registry_Date)'
+      v1_logic: '"1 = chronic renal failure registry" (dictionary status DOCUMENTED from the S2T label only; mapped in Phase 1-3 to eFalls chronic_kidney_disease as APPROXIMATE)'
+      v21_sql_expression: 'SELECT [Registry_Dialysis_Ind]: 1 for a valid membership at the index day in registry 101 sub-type 1 (dialysis load), else 0; validity dates, no STATUS filter'
+      v21_registry_ids: '101 / sub-type 1'
+      v21_source_table: registry membership source of the V21 VIEW (validity dates, no STATUS filter)
+      v21_logic: 'dialysis load registry; the V21 definition states explicitly: NOT a flag for all kidney failure, does not verify treatment at the index day'
+      comparison: 'registry IDs: V1 unknown vs V21 101 / sub-type 1 - cannot be matched; source table: both from the registry family, the specific registry of V1 is undocumented; logic / semantics: V1 chronic renal failure (all CRF) vs V21 dialysis sub-type only, and V21 explicitly denies "all kidney failure" - at best a subset, equivalence not shown'
+      conclusion: 'lineage NOT proven (no V1 SQL / registry ID; V21 is a narrower, explicitly different population) -> OLD_REMOVED_NEW_ADDED: Registry_Chronic_Renal_Failure_Ind is removed (Phase 3 feature chronic_kidney_disease is not reproducible -> not in OLD); Registry_Dialysis_Ind is a genuinely new V21 predictor'
+    Registry_Transplant_Ind:
+      v21_column: Registry_Immunosuppressant_Ind
+      class: OLD_REMOVED_NEW_ADDED
+      lineage_proven: false
+      v1_sql_expression: NOT AVAILABLE (only the V1 column contract; int, NOT NULL, allowed 0/1)
+      v1_registry_ids: NOT DOCUMENTED
+      v1_source_table: 'NOT DOCUMENTED beyond the source family REGISTRIES (record date First_Registry_Date)'
+      v1_logic: '"1 = transplant registry" (dictionary status NAME_ONLY: a literal reading of the column name)'
+      v21_sql_expression: 'SELECT [Registry_Immunosuppressant_Ind]: 1 for a valid membership at the index day in registry 130 or 131 (immunosuppression), else 0; validity dates, no STATUS filter'
+      v21_registry_ids: '130, 131'
+      v21_source_table: registry membership source of the V21 VIEW (validity dates, no STATUS filter)
+      v21_logic: 'immunosuppression registries; the V21 definition states explicitly: NOT a transplant flag, not proof of drug intake'
+      comparison: 'registry IDs: V1 unknown vs V21 130 / 131 - cannot be matched; source table: both from the registry family, the specific registry of V1 is undocumented; logic / semantics: V1 transplant (name only) vs V21 immunosuppression, and V21 explicitly denies "transplant" - different concept'
+      conclusion: 'lineage NOT proven (no V1 SQL / registry ID; different concept) -> OLD_REMOVED_NEW_ADDED: Registry_Transplant_Ind is removed (Phase 3 feature com_registry_transplant is not reproducible -> not in OLD); Registry_Immunosuppressant_Ind is a genuinely new V21 predictor'
   bridges:
     Prior_Fall_Missing_Ind: {value: 0, reason: 'removed in V21; it was only the VALIDATION input of the eFalls ''falls'' predictor (counted NULL -> 0 conversions, never part of the value). V21 has no fall-source-absence
         state (COUNT = 0 without a record), so the indicator is 0 on every row and ''falls'' = Prior_Fall_Since_Study_Start_Ind exactly as in Phase 3'}
@@ -242,7 +294,7 @@ phase5_v21_schema:
     Registry_Diabetes_T2_Ind: {pos: 161, v1_equivalence: DOCUMENTED_MATCH, note: registry 105 sub-type 92}
     Registry_Dialysis_Ind:
       pos: 162
-      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Chronic_Renal_Failure_Ind,
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE,
         definition: '1 = valid membership at the index day in registry 101 sub-type 1 (dialysis load), else 0; V21: not a flag for all kidney failure, does not verify treatment at the index day', text: dialysis
           registry (101 / 1), text_he: רשם דיאליזה (101 / 1)}
     Registry_Kidneys_Ind: {pos: 163, v1_equivalence: CLARIFIED_NO_CONFLICT, note: registry 122}
@@ -251,12 +303,12 @@ phase5_v21_schema:
     Registry_Asthma_Ind: {pos: 166, v1_equivalence: DOCUMENTED_MATCH, note: registry 109}
     Registry_Corona_Ind:
       pos: 167
-      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Blood_Pressure_Ind,
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE,
         definition: '1 = valid membership at the index day in registries 116 / 118 (COVID-19 load), else 0; V21 states explicitly: not hypertension', text: COVID-19 registry (registries 116 / 118), text_he: רשם
           קורונה (116 / 118)}
     Registry_Immunosuppressant_Ind:
       pos: 168
-      new: {role: PREDICTOR, domain: NEW_REGISTRY_RELABELLED, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: PROBABLE_RENAME_OF_V1, replaces: Registry_Transplant_Ind,
+      new: {role: PREDICTOR, domain: NEW_REGISTRY, source: REGISTRIES, kind: binary, missing: unexpected, timing: attested, provenance: DEFENSIBLE,
         definition: '1 = valid membership at the index day in registries 130 / 131 (immunosuppression), else 0; V21: not a transplant flag, not proof of drug intake', text: immunosuppression registry (130
           / 131), text_he: רשם דיכוי חיסוני (130 / 131)}
     Registry_Stoma_Ind: {pos: 169, v1_equivalence: CLARIFIED_NO_CONFLICT, note: 'registry type 11: its association with a stoma is NOT verified (V21) - do not read the column name clinically'}
