@@ -25,8 +25,8 @@ def L() -> dict[str, Any]:
     return load_definitions("configs/meuhedet/phase3.yaml", "configs/meuhedet/phase4.yaml")
 
 
-def test_phase3_files_are_byte_identical_to_the_delivered_0_9_0_package() -> None:
-    """Phase 4 must never change what the delivered Phase 3 uses (its code also defines the classes of the persisted Phase 3 models)."""
+def test_phase3_source_is_frozen_except_reviewed_lifecycle_patch(protected_source_matches) -> None:
+    """Persisted-model classes stay frozen; one fingerprinted 0.12.3 resource fix."""
     lines = (ROOT / "configs/meuhedet/PHASE3_0.9.0_PROTECTED.sha256").read_text(encoding="utf-8").splitlines()
     bad = []
     for line in lines:
@@ -34,7 +34,7 @@ def test_phase3_files_are_byte_identical_to_the_delivered_0_9_0_package() -> Non
             continue
         digest, rel = line.split("  ", 1)
         data = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")
-        if hashlib.sha256(data).hexdigest() != digest:
+        if not protected_source_matches(rel, digest, data):
             bad.append(rel)
     assert not bad, f"Phase 3 files changed: {bad}"
     assert len([x for x in lines if x.strip() and not x.startswith("#")]) >= 100

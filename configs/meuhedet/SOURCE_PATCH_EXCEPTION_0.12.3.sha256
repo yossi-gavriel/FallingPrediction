@@ -1,0 +1,7 @@
+# Reviewed 0.12.3 exception: explicit SQLite/Optuna ownership and cleanup only.
+# Original historical fingerprint: 60617bff8d1389242c227e7629a74f646d86d64521e254f87f774f6b2a129da1
+# The frozen Phase4 test guard is updated solely to check this source exception.
+# Its original fingerprint: 20385302f5ddf17b3c691a5ce38787f5a77f0610dc1a4e995abb7bca2e854798
+# Historical PHASE2/3/4 protection manifests stay unchanged; no other exceptions.
+1a489723a6c44068cf5e952c26e27383fb62f1d820c2ee6e9523de597ded7837  src/falls_ml/phase2/xgb_tuning.py
+249866ad5e0b8f3a3a5633a9eac67f2d20707e95ee7322964aa808f321b60481  tests/unit/test_phase4_contract.py

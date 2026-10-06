@@ -11,7 +11,7 @@ Brief section 22 acceptance proofs covered here (the rest in tests/unit/test_pha
  9-10 inner selection / threshold never see the outer labels      test_unit_choices_do_not_depend_on_outer_labels (LASSO, ENET, XGB)
  13 USEFUL needs an improvement in every outer fold               test_decision_rule_enet_primary_and_every_fold
  15 the privacy scan blocks patient-level outputs                 test_share_publication_fails_closed_on_an_identifier
- 16 Phase 2 / 3 / 4 unchanged                                     test_phase2_3_4_files_are_unchanged
+ 16 Earlier source frozen except reviewed SQLite lifecycle fix   test_phase2_3_4_source_is_frozen_except_reviewed_lifecycle_patch
  +  the first real-data action is the preflight alone             test_real_data_modelling_requires_a_preflight_first
  +  a rename is never inferred from position / name               test_registry_lineage_is_proven_never_inferred
  +  any positive after Followup_End_Date stops (zero tolerance)   test_positive_after_followup_end_stops_with_zero_tolerance
@@ -663,13 +663,13 @@ def test_out_folder_guards(tmp_path: Path) -> None:
 
 # ============================================================================ 18 Phase 2 / 3 / 4 unchanged
 @pytest.mark.parametrize("manifest", ["PHASE2_0.8.1_PROTECTED.sha256", "PHASE3_0.9.0_PROTECTED.sha256", "PHASE4_0.10.0_PROTECTED.sha256"])
-def test_phase2_3_4_files_are_unchanged(manifest: str) -> None:
+def test_phase2_3_4_source_is_frozen_except_reviewed_lifecycle_patch(manifest: str, protected_source_matches) -> None:
     lines = [ln for ln in (ROOT / "configs/meuhedet" / manifest).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")]
     assert len(lines) > 10
     bad = []
     for ln in lines:
         digest, rel = ln.split("  ", 1)
         p = ROOT / rel
-        if not p.is_file() or hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest() != digest:
+        if not p.is_file() or not protected_source_matches(rel, digest, p.read_bytes()):
             bad.append(rel)
     assert not bad, f"protected earlier-phase files changed: {bad[:10]}"

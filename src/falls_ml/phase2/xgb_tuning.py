@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ def distributions(space: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dic
 
 
 class TrialStore:
-    """The SQLite cache and the ledger of one run attempt."""
+    """The SQLite cache paths and ledger of one attempt; owns no live connections."""
 
     def __init__(self, run: Run):
         self.run = run
@@ -69,7 +70,6 @@ class TrialStore:
     def fresh(self) -> None:
         if self._fresh:
             return
-        self._fresh = True
         prev = self.dir / "_previous"
         for suffix in ("", "-journal", "-wal", "-shm"):
             p = Path(str(self.sqlite) + suffix)
@@ -79,6 +79,7 @@ class TrialStore:
         tail = D.repair_jsonl(self.ledger, self.dir / f"xgb_trials.jsonl.torn-attempt-{self.run.attempt}")
         if tail is not None:
             self.run.events("S08_xgb", "ledger_torn_tail_moved", "RECOVERED")
+        self._fresh = True
 
     def ledger_keys(self) -> set[str]:
         records, _ = D.read_jsonl(self.ledger)
@@ -86,6 +87,41 @@ class TrialStore:
 
     def append(self, rec: dict[str, Any]) -> None:
         D.append_jsonl(self.ledger, rec)
+
+
+@contextmanager
+def _study_storage(url: str) -> Iterator[Any]:
+    """One study invocation owns one RDB engine, including its exception path.
+
+    String URLs passed to create/load_study create independent RDBStorage
+    engines each time. Passing the same explicit storage keeps ownership here.
+    Optuna accesses storage on this thread; objectives do not receive it.
+    Remove its scoped session before disposing the pool so checked-out as well
+    as idle DBAPI connections close before a subsequent attempt archives SQLite.
+    """
+    class OwnedRDBStorage(_optuna().storages.RDBStorage):
+        def __init__(self) -> None:
+            try:
+                super().__init__(url=url)
+            except BaseException:
+                # Schema/version initialization can fail after opening SQLite.
+                # Keep ownership even when the constructor never returns.
+                self.close()
+                raise
+
+        def close(self) -> None:
+            try:
+                if getattr(self, "scoped_session", None) is not None:
+                    self.remove_session()
+            finally:
+                if getattr(self, "engine", None) is not None:
+                    self.engine.dispose()
+
+    storage = OwnedRDBStorage()
+    try:
+        yield storage
+    finally:
+        storage.close()
 
 
 def run_study(stage: Stage, store: TrialStore, *, name: str, space: dict[str, dict[str, Any]], n_trials: int, n_startup: int, seed_base: int,
@@ -109,28 +145,29 @@ def run_study(stage: Stage, store: TrialStore, *, name: str, space: dict[str, di
             store.append({**_ledger_row(name, t, r, meta, records.get(safe_item_id(ids[t]), {})), "reconciled": True})
     if k == n_trials:
         return results
-    if name not in store._rebuilt:
-        study = optuna.create_study(study_name=name, storage=store.url, direction="minimize", load_if_exists=True)
-        if len(study.trials) == 0:
-            for r in results:
-                study.add_trial(optuna.trial.create_trial(params=r["suggested"], distributions=dist, value=float(r["value"]),
-                                                          user_attrs={"trial_index": r["trial_index"]}))
-        store._rebuilt.add(name)
-    for t in range(k, n_trials):
-        sampler = optuna.samplers.TPESampler(seed=trial_seed(seed_base, name, t), n_startup_trials=int(n_startup), multivariate=True)
-        study = optuna.load_study(study_name=name, storage=store.url, sampler=sampler)
-        trial = study.ask(dist)
-        suggested = dict(trial.params)
-        params = {**fixed, **suggested}
+    with _study_storage(store.url) as storage:
+        if name not in store._rebuilt:
+            study = optuna.create_study(study_name=name, storage=storage, direction="minimize", load_if_exists=True)
+            if len(study.trials) == 0:
+                for r in results:
+                    study.add_trial(optuna.trial.create_trial(params=r["suggested"], distributions=dist, value=float(r["value"]),
+                                                              user_attrs={"trial_index": r["trial_index"]}))
+            store._rebuilt.add(name)
+        for t in range(k, n_trials):
+            sampler = optuna.samplers.TPESampler(seed=trial_seed(seed_base, name, t), n_startup_trials=int(n_startup), multivariate=True)
+            study = optuna.load_study(study_name=name, storage=storage, sampler=sampler)
+            trial = study.ask(dist)
+            suggested = dict(trial.params)
+            params = {**fixed, **suggested}
 
-        def fn(tmp: Path, seed: int, params: dict[str, Any] = params, suggested: dict[str, Any] = suggested, t: int = t) -> dict[str, Any]:
-            out = objective(params, seed, tmp)
-            return {**out, "trial_index": t, "params": params, "suggested": suggested, "study": name}
+            def fn(tmp: Path, seed: int, params: dict[str, Any] = params, suggested: dict[str, Any] = suggested, t: int = t) -> dict[str, Any]:
+                out = objective(params, seed, tmp)
+                return {**out, "trial_index": t, "params": params, "suggested": suggested, "study": name}
 
-        r = stage.item(ids[t], fn)
-        study.tell(trial, float(r["value"]))
-        store.append(_ledger_row(name, t, r, meta, stage.records().get(safe_item_id(ids[t]), {})))
-        results.append(r)
+            r = stage.item(ids[t], fn)
+            study.tell(trial, float(r["value"]))
+            store.append(_ledger_row(name, t, r, meta, stage.records().get(safe_item_id(ids[t]), {})))
+            results.append(r)
     return results
 
 

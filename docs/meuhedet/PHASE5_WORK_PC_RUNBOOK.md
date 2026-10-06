@@ -1,4 +1,6 @@
-# Phase 5 on the work PC – 2026 redevelopment + incremental value of the new V21 information (falls_ml 0.12.2, Phase 5 2.2.0)
+# Phase 5 on the work PC – 2026 redevelopment + incremental value of the new V21 information (falls_ml 0.12.3, Phase 5 2.2.0)
+
+For an **already completed Phase 5 folder**, use only the dashboard command in step 10. This 0.12.3 patch fixes SQLite ownership in the shared Phase 2/3 tuning helper and audits the unchanged Phase 5 preprocessing. It does not require a new model run. See `docs/phase5/SQLITE_LIFECYCLE_PATCH_0.12.3.md` for the focused existing-output instructions and audit limitations.
 
 Phase 5 answers one question on the 2026 extract (Index_Date 2026-01-01, prediction at the END of the index day): **at approximately the same
 >= 70% fall sensitivity, does adding the new V21 information reduce the number and the percentage of false alerts?** The pre-declared primary
@@ -27,13 +29,13 @@ All commands are CMD. The real data never leave the work PC; only `share\` (and,
 
 ## 1. Restore and set up (once, about 10-20 minutes)
 
-1. Save `falls_ml_phase5_0.12.2_mailsafe.zip` to `%USERPROFILE%\Downloads` and extract it there. You get the NEW folder
-   `%USERPROFILE%\Downloads\falls_ml_phase5_0.12.2` (the earlier `falls_ml_phase5_0.11.0` / `0.12.0` / `0.12.1` package folders are not used
+1. Save `falls_ml_phase5_0.12.3_mailsafe.zip` to `%USERPROFILE%\Downloads` and extract it there. You get the NEW folder
+   `%USERPROFILE%\Downloads\falls_ml_phase5_0.12.3` (the earlier `falls_ml_phase5_0.11.0` / `0.12.0` / `0.12.1` package folders are not used
    any more; do not mix them. An OUTPUT folder completed by 0.12.1 stays valid: step 10 builds its dashboard with this package).
 2. Restore the mail-safe files and verify every file (sha256):
 
 ```bat
-cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.12.2"
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.12.3"
 py -3.11 RESTORE_FILES.py.txt
 ```
 
@@ -46,7 +48,7 @@ setup_windows.cmd
 
    Wait for `INSTALLATION SUCCESSFUL`. Without internet access: run `prepare_offline_package.cmd --target windows-amd64-cp311` in this folder on a
    connected computer, copy the resulting `offline_packages` folder next to `setup_windows.cmd`, and run `setup_windows.cmd --offline`.
-   Check the version (expected `0.12.2 3.2.0 5.0.0`):
+   Check the version (expected `0.12.3 3.2.0 5.0.0`):
 
 ```bat
 .venv\Scripts\python.exe -c "import falls_ml, xgboost, optuna; print(falls_ml.__version__, xgboost.__version__, optuna.__version__)"
@@ -57,7 +59,7 @@ setup_windows.cmd
 Replace only the 2026 file name if it differs:
 
 ```bat
-cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.12.2"
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.12.3"
 set PYTHONUTF8=1
 set INPUT_2026=%USERPROFILE%\Downloads\60k_falling_db_2026.csv
 set OUT5=%USERPROFILE%\Downloads\60k_falling_db_phase5_v2

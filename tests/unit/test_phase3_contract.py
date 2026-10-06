@@ -193,8 +193,8 @@ def test_phase3_production_run_is_refused_in_this_package(L: dict[str, Any]) -> 
     assert e.value.gate == "PHASE3_FROZEN_CONFIG_MISMATCH"
 
 
-def test_phase2_files_are_byte_identical_to_the_running_0_8_1_package() -> None:
-    """Phase 3 must never change what the running Phase 2 experiment uses (configs/meuhedet/PHASE2_0.8.1_PROTECTED.sha256)."""
+def test_phase2_source_is_frozen_except_reviewed_lifecycle_patch(protected_source_matches) -> None:
+    """Historical Phase 2 source freeze; one fingerprinted 0.12.3 resource fix."""
     lines = (ROOT / "configs/meuhedet/PHASE2_0.8.1_PROTECTED.sha256").read_text(encoding="utf-8").splitlines()
     bad = []
     for line in lines:
@@ -202,7 +202,7 @@ def test_phase2_files_are_byte_identical_to_the_running_0_8_1_package() -> None:
             continue
         digest, rel = line.split("  ", 1)
         data = (ROOT / rel).read_bytes().replace(b"\r\n", b"\n")
-        if hashlib.sha256(data).hexdigest() != digest:
+        if not protected_source_matches(rel, digest, data):
             bad.append(rel)
     assert not bad, f"Phase 2 files changed: {bad}"
     assert len([x for x in lines if x.strip() and not x.startswith("#")]) >= 30

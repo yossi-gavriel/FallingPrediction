@@ -92,6 +92,7 @@ DATA_SUFFIXES = frozenset({".parquet", ".csv", ".tsv", ".json", ".jsonl", ".feat
                            ".rds", ".rdata"})
 #: data-like files allowed outside data/fixtures, each with the reason it is not individual-level data
 DATA_FILE_ALLOWLIST = {
+    "docs/phase5/PREPROCESSING_FEATURE_AUDIT_0.12.2.csv": "source-based feature semantics and CV-boundary audit; no individual data",
     "data/example_schema.csv": "column template generated from the feature spec by tools/generate_data_schema.py; no data rows",
     "data/example_header_only.csv": "header row only; the build checks it has exactly one line",
     "tools/source_table_s3_2.csv": "published aggregate coefficients (Archer et al. 2024 Table S3.2, CC BY 4.0); no individual data",
