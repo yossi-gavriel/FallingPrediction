@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -664,6 +665,21 @@ def _cmd_meuhedet_phase5_synthetic(a: argparse.Namespace) -> int:
     return int(r["exit_code"])
 
 
+def _cmd_meuhedet_phase5_dashboard(a: argparse.Namespace) -> int:
+    from falls_ml.errors import FallsMLError
+    from falls_ml.phase5.dashboard import run_dashboard
+
+    t0 = time.time()
+    try:
+        r = run_dashboard(a.out, input_path=a.input, n_boot=int(a.bootstrap))
+    except FallsMLError as exc:
+        return _phase5_stop(exc)
+    print(json.dumps({k: v for k, v in r.items() if k != "share"}, indent=2, ensure_ascii=False))
+    print(f"OPERATING DASHBOARD READY in {time.time() - t0:.0f} s (no model was fitted). Open: {Path(a.out) / 'share' / 'PHASE5_OPERATING_DASHBOARD.html'}")
+    print(f"SEND BACK ONLY: {Path(a.out) / 'share'}")
+    return int(r["exit_code"])
+
+
 def _add_phase5_parsers(sub: Any) -> None:
     p = sub.add_parser("meuhedet-phase5", help="Phase 5 (2026 redevelopment + incremental value of the new V21 information): exact V1 -> V21 schema "
                                                "diff, nested CV on identical folds of OLD vs OLD_PLUS_ALL_NEW_ELIGIBLE (primary: elastic net; secondary: "
@@ -696,6 +712,14 @@ def _add_phase5_parsers(sub: Any) -> None:
     p.add_argument("--jobs", type=int)
     p.add_argument("--accept-code-change", help=argparse.SUPPRESS)
     p.set_defaults(func=_cmd_meuhedet_phase5_synthetic)
+    p = sub.add_parser("meuhedet-phase5-dashboard", help="OPERATING DASHBOARD of a COMPLETED Phase 5 run (analysis / reporting only - no model is "
+                                                         "fitted): outer-fold capacity curves 0.5-20%%, the exact 3%% capacity report with a paired "
+                                                         "bootstrap, 'what drives the model', a standalone HTML dashboard; share/ rebuilt behind the "
+                                                         "privacy scan")
+    p.add_argument("--out", required=True, help="the COMPLETED Phase 5 output folder (its share/ is extended, its results are only read)")
+    p.add_argument("--input", help="the run's 2026 extract (default: the file of the plan next to --out); read only for the identifier scan")
+    p.add_argument("--bootstrap", type=int, default=2000, help="paired bootstrap replicates at 3%% (default 2000)")
+    p.set_defaults(func=_cmd_meuhedet_phase5_dashboard)
 
 
 def _cmd_meuhedet_eda(a: argparse.Namespace) -> int:

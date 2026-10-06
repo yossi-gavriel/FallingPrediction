@@ -645,7 +645,7 @@ def publish(out: Path, tmp: Path, src: Path, frame: pd.DataFrame) -> dict[str, A
     needles = [x for x in needles if x and len(x) >= 3]
     path_hits, row_level = [], []
     for p in sorted(tmp.rglob("*")):
-        if p.is_file() and p.suffix.lower() in (".csv", ".md", ".json", ".txt", ".svg"):
+        if p.is_file() and p.suffix.lower() in (".csv", ".md", ".json", ".txt", ".svg", ".html"):
             h = _path_hits(p.read_text(encoding="utf-8", errors="ignore"), needles)
             if h:
                 path_hits.append(f"{p.relative_to(tmp).as_posix()}: {sorted(set(h))}")
@@ -752,6 +752,10 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
         "best_family_exploratory": A["best_family_exploratory"], "jobs": status.get("jobs"), "device": status.get("device"), "sessions": status.get("sessions"),
         "failures": [{"item": f.get("item"), "error": f.get("error")} for f in status.get("failures", [])], "figures": figs,
         "row_level_outputs_kept_locally": ["work/analysis/OOF_PREDICTIONS_LOCAL.parquet", "work/analysis/THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", "work/units/*"]})
+    if not interim:
+        from falls_ml.phase5.dashboard import add_to_report
+
+        add_to_report(tmp, ctx, plan, n_boot=int(cfg.budget["bootstrap_n"]), synthetic=synthetic, log=(mon.log if mon is not None else print))
     res = publish(out, tmp, src, ctx.frame)
     n_files = sum(1 for p in (out / "share").rglob("*") if p.is_file())
     return {"files": n_files, "privacy_passed": bool(res["passed"]), "overall": A["overall"], "interim": interim,

@@ -1,6 +1,6 @@
 # Phase 5 design – 2026 redevelopment + incremental value of the new V21 information
 
-falls_ml 0.12.1, Phase 5 2.1.0 (0.12.0 / 2.0.0 after the authoritative V21 schema was supplied; 0.12.1: registry lineage proven-or-not, zero-tolerance follow-up stop). Branch `phase5`. Settings:
+falls_ml 0.12.2, Phase 5 2.2.0 (0.12.0 / 2.0.0 after the authoritative V21 schema was supplied; 0.12.1: registry lineage proven-or-not, zero-tolerance follow-up stop; 0.12.2: operating-capacity dashboard). Branch `phase5`. Settings:
 `configs/meuhedet/phase5.yaml`; authoritative V21 schema: `configs/meuhedet/phase5_v21_view_definition.txt` (the VIEW definition with its Hebrew
 business definitions, sha256-pinned) + `configs/meuhedet/phase5_v21_schema.yaml` (the column-by-column review). Code: `src/falls_ml/phase5/`.
 Runbook: `docs/meuhedet/PHASE5_WORK_PC_RUNBOOK.md`.
@@ -81,3 +81,22 @@ The first real-data action must be `--preflight-only` (fits nothing; final line 
 folder without a SAFE preflight plan stops with PREFLIGHT_REQUIRED (the synthetic smoke may do both). Resumable units (COMPLETE.json last),
 RUN_STATUS.json heartbeat / ETA, RUN_TIMINGS.csv, OVERNIGHT_PROGRESS.log, interim report after PRIMARY, Ctrl+C -> exit 130, one retry per unit.
 `share/` behind the fail-closed scan (identifiers, row keys, local paths, file types, row-level tables; counts 1-9 suppressed; 0.5% grid).
+
+## Operating-capacity dashboard (`capacity.py`, `dashboard.py`, `dashboard_html.py`) - 0.12.2
+
+Question: "if we can intervene on X% of the population, how many falls do we capture?" (3% = the operational target). Analysis / reporting
+only: the committed outer-OOF predictions of the PRIMARY units are read (COMPLETE.json hashes checked; holdout rows must equal the frozen
+fold); nothing is fitted, tuned or re-validated (an e2e test replaces every fitting entry point with a failing stub). PRIMARY curve = outer-fold
+capacity: T = round(c x N) (half up, integer arithmetic), allocated across the outer folds by largest remainder (ties -> lower fold), top-k_f by
+that fold's own model, counts summed - probability scales of different outer models are never mixed; POOLED OOF (global ranking) is a
+separately labelled descriptive view. Grid 0.5-20% in 0.1% steps (coarsened so neighbouring points differ by >= 10 patients; 3.0% always
+exact) + 20.5-100% in 0.5% steps for the secondary "target fall capture" read-off. At 3%: a paired patient bootstrap (2000 replicates,
+identical multinomial weights for every model; the capacity re-allocated from the resampled fold sizes and the top-k re-selected within each
+fold in every replicate) for delta falls captured / sensitivity / PPV / false interventions (at fixed capacity delta FP = -delta TP).
+"What drives the model": ENET / LASSO |median standardised coefficient| of the stability refits, XGB mean |SHAP| (permutation importance as
+fallback), OLD vs NEW, SAFE vs ALL_NEW_ONLY, stability - descriptive. Privacy: a capacity point is shared only if every model's four cells are
+0 or >= 10; a row with a small cell suppresses all its counts, rates and differences; the HTML embeds only per-point counts (no patient, score,
+date or key), uses no external resource and passes the same identifier / path scan. The management summary opens with the 3% question; the
+~70% sensitivity analysis follows unchanged as the secondary analysis. `meuhedet-phase5-dashboard --out <completed folder>` adds all this to
+a folder completed by 0.12.1 (earlier share files byte-identical; the previous share kept in work/dashboard/); the full report of a new run
+builds it too.

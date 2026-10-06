@@ -34,7 +34,10 @@ REQUIRED_SHARE = ["MANAGEMENT_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY_HE.md", "SCIEN
                   "FEATURE_STABILITY.csv", "PERMUTATION_IMPORTANCE.csv", "SHAP_SUMMARY.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
                   "RUN_MANIFEST.json", "RUN_TIMINGS.csv", "ENVIRONMENT.json", "PRIVACY_SCAN.json",     # brief section 24
                   "REMOVED_V1_COLUMNS.csv", "RENAMED_OR_CHANGED_COLUMNS.csv", "V21_UNDECLARED_COLUMNS.csv", "CAPACITY_CURVE.csv", "OOF_PREDICTION_SUMMARY.csv",
-                  "OUTER_FOLD_RESULTS.csv"]
+                  "OUTER_FOLD_RESULTS.csv",
+                  # the operating-capacity dashboard and the exact 3% report
+                  "PHASE5_OPERATING_DASHBOARD.html", "CAPACITY_CURVE_FINE.csv", "TOP3_CAPACITY_PRIMARY.csv", "TOP3_CAPACITY_BY_FOLD.csv",
+                  "TOP3_CAPACITY_COMPARISON.csv", "TOP3_CAPACITY_BOOTSTRAP.csv", "TOP3_CAPACITY_SUMMARY_HE.md", "FEATURE_DRIVERS.csv"]
 PRIMARY_CMP = "OLD vs OLD_PLUS_ALL_NEW_ELIGIBLE"
 
 
@@ -153,8 +156,8 @@ def test_share_is_aggregate_only(planted: dict[str, Any], worlds: dict[str, Any]
     for p in share.rglob("*"):
         if p.is_dir():
             continue
-        assert p.suffix.lower() in (".csv", ".md", ".json", ".png", ".txt"), p.name
-        if p.suffix.lower() in (".csv", ".md", ".json", ".txt"):
+        assert p.suffix.lower() in (".csv", ".md", ".json", ".png", ".txt", ".html"), p.name
+        if p.suffix.lower() in (".csv", ".md", ".json", ".txt", ".html"):
             text = p.read_text(encoding="utf-8")
             assert not any(i in text for i in list(ids)[:400]), p.name
             assert not any(k in text for k in list(keys)[:400]), p.name
@@ -172,6 +175,98 @@ def test_report_only_rebuilds_share_without_fitting(planted: dict[str, Any], wor
     r = run_phase5(worlds["planted"], planted["out"], mode="quick", report_only=True, overrides=OV, synthetic=True)
     assert r["status"] == "REPORT_COMPLETE" and r["report"]["privacy_passed"]
     assert _digest(planted["out"] / "work" / "units") == units_before
+
+
+FIT_FUNCTIONS = (("falls_ml.phase5.engine", "run_unit"), ("falls_ml.phase5.engine", "tune_and_fit"), ("falls_ml.phase5.engine", "_tune_linear"),
+                 ("falls_ml.phase5.engine", "_tune_xgb"), ("falls_ml.phase5.engine", "fit_linear"), ("falls_ml.phase5.engine", "fit_xgb"),
+                 ("falls_ml.phase5.models", "fit_linear"), ("falls_ml.phase5.models", "fit_xgb"), ("falls_ml.phase5.models", "linear_path"),
+                 ("falls_ml.phase5.models", "linear_path_task"), ("falls_ml.phase5.models", "xgb_inner_fold"), ("falls_ml.phase5.models", "_train"),
+                 ("falls_ml.phase5.explain", "run_fold_explain"), ("falls_ml.phase5.explain", "run_stability"),
+                 ("falls_ml.phase5.explain", "permutation_importance"), ("falls_ml.phase5.explain", "shap_importance"),
+                 ("falls_ml.phase5.runner", "_execute"), ("falls_ml.phase5.runner", "run_preflight"), ("falls_ml.phase2.enet", "enet_logistic_path"),
+                 ("xgboost", "train"), ("optuna", "create_study"))
+
+
+def _block_fitting(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    import importlib
+
+    calls: list[str] = []
+    for mod, name in FIT_FUNCTIONS:
+        m = importlib.import_module(mod)
+        if hasattr(m, name):
+            def boom(*a: Any, _n: str = f"{mod}.{name}", **k: Any) -> Any:
+                calls.append(_n)
+                raise AssertionError(f"model-fitting function {_n} was called by the dashboard")
+            monkeypatch.setattr(m, name, boom)
+    return calls
+
+
+def test_operating_dashboard_in_the_final_report(planted: dict[str, Any]) -> None:
+    from falls_ml.phase5.dashboard import CAP_QUESTION, SECONDARY_HEADING
+
+    share = planted["out"] / "share"
+    mg = (share / "MANAGEMENT_SUMMARY_HE.md").read_text(encoding="utf-8")
+    assert mg.index(CAP_QUESTION) < mg.index(SECONDARY_HEADING) < mg.index("האם הפיצ'רים הנוספים של V21") and mg.count(CAP_QUESTION) == 1
+    c = pd.read_csv(share / "TOP3_CAPACITY_COMPARISON.csv")
+    e = c[(c["family"] == "ENET") & (c["comparison"] == "OLD_PLUS_ALL_NEW_ELIGIBLE minus OLD")].iloc[0]
+    assert e["role"] == "PRIMARY" and float(e["delta_falls_captured"]) > 0 and float(e["delta_false_interventions"]) == -float(e["delta_falls_captured"])
+    p3 = pd.read_csv(share / "TOP3_CAPACITY_PRIMARY.csv")
+    assert set(p3["capacity_pct"]) == {3.0} and len(p3) == 9 and (p3["method"] == "OUTER_FOLD_CAPACITY_PRIMARY").all()
+    fine = pd.read_csv(share / "CAPACITY_CURVE_FINE.csv")
+    assert fine["capacity_pct"].max() <= 20.0 and 3.0 in set(fine["capacity_pct"]) and len(fine) <= 2000
+    man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
+    assert man["operating_capacity_dashboard"]["no_model_fitted"] is True
+    html = (share / "PHASE5_OPERATING_DASHBOARD.html").read_text(encoding="utf-8")
+    assert "INTERVENTION CAPACITY" in html and "מה מניע את המודל?" in html and "<script src" not in html
+
+
+def test_dashboard_command_never_fits_and_keeps_the_results(planted: dict[str, Any], worlds: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    """The work-PC command on a COMPLETED run made WITHOUT the dashboard (as by 0.12.1): no model-fitting function is ever invoked, the committed
+    units and OOF predictions are byte-identical, the earlier share files are unchanged, the 70% analysis stays as the secondary section."""
+    from falls_ml.cli import main
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase5.dashboard import CAP_QUESTION, NEW_SHARE_FILES, SECONDARY_HEADING, original_management, run_dashboard
+
+    out = worlds["base"] / "out dashboard command"
+    shutil.copytree(planted["out"], out)
+    share = out / "share"
+    for n in NEW_SHARE_FILES:                                       # make it look like a folder finished by 0.12.1
+        (share / n).unlink(missing_ok=True)
+    mp = share / "MANAGEMENT_SUMMARY_HE.md"
+    mp.write_text(original_management(mp.read_text(encoding="utf-8")), encoding="utf-8")
+    man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
+    man.pop("operating_capacity_dashboard", None)
+    (share / "RUN_MANIFEST.json").write_text(json.dumps(man), encoding="utf-8")
+    old_share = {p.name: p.read_bytes() for p in share.iterdir() if p.is_file() and p.name not in ("MANAGEMENT_SUMMARY_HE.md", "RUN_MANIFEST.json",
+                                                                                                     "PRIVACY_SCAN.json")}
+    units, expl = _digest(out / "work" / "units"), _digest(out / "work" / "explain")
+    oof = (out / "work" / "analysis" / "OOF_PREDICTIONS_LOCAL.parquet").read_bytes()
+    calls = _block_fitting(monkeypatch)
+    with pytest.raises(Phase2Stop) as e:                            # the input is not next to the output folder here
+        run_dashboard(out, n_boot=50)
+    assert e.value.gate == "INPUT_NEEDED"
+    rc = main(["meuhedet-phase5-dashboard", "--out", str(out), "--input", str(worlds["planted"]), "--bootstrap", "200"])
+    assert rc == 0 and calls == []
+    assert _digest(out / "work" / "units") == units and _digest(out / "work" / "explain") == expl
+    assert (out / "work" / "analysis" / "OOF_PREDICTIONS_LOCAL.parquet").read_bytes() == oof
+    for n, b in old_share.items():
+        assert (share / n).read_bytes() == b, n                    # every earlier result file is byte-identical
+    for n in NEW_SHARE_FILES:
+        assert (share / n).is_file(), n
+    scan = json.loads((share / "PRIVACY_SCAN.json").read_text(encoding="utf-8"))
+    assert scan["passed"] and scan["files_scanned"] >= len(old_share)
+    mg = mp.read_text(encoding="utf-8")
+    assert mg.index(CAP_QUESTION) < mg.index(SECONDARY_HEADING) < mg.index("האם הפיצ'רים הנוספים של V21")
+    ids = set(worlds["df_planted"]["Customer_Full_ID"].astype(str))
+    keys = set(pd.read_parquet(out / "work" / "ANALYSIS_FRAME.parquet", columns=["row_key"])["row_key"])
+    html = (share / "PHASE5_OPERATING_DASHBOARD.html").read_text(encoding="utf-8")
+    assert not any(i in html for i in ids) and not any(k in html for k in keys) and str(worlds["base"]) not in html
+    boot = pd.read_csv(share / "TOP3_CAPACITY_BOOTSTRAP.csv")
+    assert set(boot["n_boot"]) == {200} and len(boot) <= 2000
+    r2 = run_dashboard(out, input_path=worlds["planted"], n_boot=50)        # idempotent: one 3% section, the original summary kept once
+    mg2 = mp.read_text(encoding="utf-8")
+    assert r2["status"] == "DASHBOARD_COMPLETE" and mg2.count(CAP_QUESTION) == 1 and mg2.count(SECONDARY_HEADING) == 1 and calls == []
+    assert any(p.name.startswith("share_before_dashboard_") for p in (out / "work" / "dashboard").iterdir())
 
 
 def test_status_and_estimate(planted: dict[str, Any], worlds: dict[str, Any], tmp_path: Path) -> None:

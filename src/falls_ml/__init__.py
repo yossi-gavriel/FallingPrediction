@@ -9,4 +9,4 @@ Public entry points are imported lazily to keep ``import falls_ml`` cheap:
     from falls_ml.inference import predict_risk
 """
 
-__version__ = "0.12.1"
+__version__ = "0.12.2"
