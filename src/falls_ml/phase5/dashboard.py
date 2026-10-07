@@ -37,6 +37,7 @@ NEW_SHARE_FILES = (DASHBOARD_FILE, "CAPACITY_CURVE_FINE.csv", "CAPACITY_CURVE_EX
                    "TOP3_CAPACITY_SUMMARY_HE.md", "CAPTURE_TARGET_CAPACITY.csv", "FEATURE_DRIVERS.csv")
 CAP_QUESTION = "אם ניתן להתערב רק אצל 3% מהמטופלים, כמה מהנפילות נתפוס?"
 SECONDARY_HEADING = "## ניתוח משני: כ-70% רגישות (הניתוח הראשי המקורי של שלב 5 – ללא שינוי)"
+HISTORICAL_HEADING_51 = "## ביקורת היסטורית בלבד: כלל ה-70% רגישות של שלב 5 2.2.0 – אינו תוצאת שלב 5.1 ואינו כלל הצלחה"
 ORIGINAL_MARK = "<!-- phase5-original-management-summary -->"
 SET_HE = {SET_OLD: "OLD (ישן)", SET_ALL: "OLD + כל החדשים הכשירים", SET_SAFE: "OLD + חדשים בטוחים"}
 FAM_HE = {"LASSO": "LASSO", "ENET": "Elastic Net", "XGB": "XGBoost"}
@@ -328,7 +329,8 @@ def compose_management(original: str, A: dict[str, Any], plan: dict[str, Any]) -
         head, body = "", text
     else:
         body = body.split("\n", 1)[1] if "\n" in body else ""
-    return "\n".join([head.rstrip("\n"), "", *capacity_section_he(A, plan), SECONDARY_HEADING, ORIGINAL_MARK, body.lstrip("\n")]).rstrip("\n") + "\n"
+    heading = HISTORICAL_HEADING_51 if str(plan.get("phase5_major", "2")) == "3" else SECONDARY_HEADING
+    return "\n".join([head.rstrip("\n"), "", *capacity_section_he(A, plan), heading, ORIGINAL_MARK, body.lstrip("\n")]).rstrip("\n") + "\n"
 
 
 def original_management(composed: str) -> str:

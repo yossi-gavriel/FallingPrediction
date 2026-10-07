@@ -196,7 +196,10 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
                           "folds_worse_without_block": c["folds_improved"],
                           "note": f"delta = ({plan.get('ablation_base_set', SET_ALL)} minus the block) - ({plan.get('ablation_base_set', SET_ALL)}): > 0 means the "
                                   "block helped; SECONDARY DIAGNOSTIC only - never part of the headline or a verdict"})
-    A["domains"], A["ablations"] = pd.DataFrame(drows), pd.DataFrame(arows)
+    # Phase 5.1 has no DOMAIN units (domain_families: []): the table is published with its header and no rows, never as an empty file
+    DOMAIN_COLS = ["family", "role", "domain", "n_new_features", "new_features", "status"]
+    A["domains"] = pd.DataFrame(drows) if drows else pd.DataFrame(columns=DOMAIN_COLS)
+    A["ablations"] = pd.DataFrame(arows)
     A["subgroups"] = subgroup_rows(ctx, runs, cfg)
     A["calibration"] = calibration_rows(y, runs, 10)
     A["pred_summary"] = prediction_summary(y, runs)
@@ -541,6 +544,7 @@ def management_he(A: dict[str, Any], plan: dict[str, Any], synthetic: bool, inte
 
 def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: bool, interim: bool, he: bool) -> str:
     n, ev = plan["n"], plan["events"]
+    fams = list(A.get("families") or plan_families(plan))
     t = A["models"]
     sc = plan.get("schema_counts") or {}
     np_ = plan.get("new_predictors") or {}
@@ -553,9 +557,12 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
           (f"- {DESIGN_LABEL}: {n} מטופלים, {ev} נפילות; {plan['cv']['outer_folds']} קפלים חיצוניים × {plan['cv']['inner_folds']} פנימיים, שיוך קפלים קבוע אחד לכל המודלים והקבוצות." if he else
            f"- {DESIGN_LABEL}: {n} patients, {ev} events (Fall_Next_180D_Ind, strictly after the index day); {plan['cv']['outer_folds']} outer x "
            f"{plan['cv']['inner_folds']} inner stratified folds, one fixed assignment shared by every family and feature set."),
-          ("- שאלה ראשית: ב-~70% רגישות, האם OLD_PLUS_ALL_NEW_ELIGIBLE מפחית התראות שווא לעומת OLD? משפחה ראשית מוצהרת מראש: Elastic Net; LASSO ו-XGBoost משניים." if he else
-           f"- Primary question: at ~70% sensitivity, does {SET_ALL} reduce false alerts versus {SET_OLD}? Pre-declared primary family: ENET (elastic net); "
-           "LASSO and XGBoost are secondary analyses of the same sets."),
+          ((f"- שאלה ראשית (שלב 5.1, ניסוי 1): מה קורה לתוצאת 2.2.0 עבור OLD ו-{SET_SAFE} (ADMISSIBLE) כאשר הפגמים המתודולוגיים מתוקנים (טבלת הכותרת למעלה; "
+            f"אין כלל הצלחה). משפחות שהותאמו: {', '.join(fams)} בלבד (LASSO / XGBoost לא הותאמו). טבלאות כלל ה-70% להלן הן ביקורת היסטורית של 2.2.0; "
+            f"{SET_ALL} לביקורת בלבד.") if he else
+           (f"- Primary question (Phase 5.1, Experiment 1): what happens to the 2.2.0 result for {SET_OLD} and {SET_SAFE} (ADMISSIBLE) when the "
+            f"methodological defects are corrected (the headline table above; no success verdict). Families fitted: {', '.join(fams)} only (LASSO / XGBoost "
+            f"not fitted). The 70%-sensitivity tables below are the historical 2.2.0 audit; {SET_ALL} is audit only.")),
           ("- כיוונון, early stopping, עיבוד מקדים, בחירת קונפיגורציה וספים – רק על תחזיות OOF פנימיות של נתוני האימון החיצוניים." if he else
            "- Preprocessing (medians, scaling, learned code levels), tuning, early stopping, configuration choice and every threshold use INNER out-of-fold "
            "predictions of the outer-training patients only."),
@@ -564,7 +571,10 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
           f"{sc.get('changed_definition')}, unresolved {sc.get('unresolved_requires_semantic_review')}.",
           f"- OLD = {plan['n_old']} Phase 3 universe features reproducible on V21; {SET_ALL} adds {plan['n_all_new']} of the "
           f"{np_.get('genuine_new_predictors', '—')} genuine new V21 predictors; {SET_SAFE} adds {plan['n_new_safe']} (SAFE timing and DEFENSIBLE provenance).", ""]
-    L += [("## תוצאה ראשית (כלל 70% מקונן)" if he else "## Primary result (nested 70% rule)"), "",
+    L += [("## נקודת הפעולה ב-70% רגישות – כלל 2.2.0 ההיסטורי (ביקורת בלבד)" if he else
+           "## 70%-sensitivity operating point - the historical 2.2.0 rule (audit only)"), "",
+          ("> `role` = התפקיד לפי כלל 2.2.0 ההיסטורי. בשלב 5.1 זרועות ה-PRE / POST הראשיות הן OLD ו-OLD_PLUS_NEW_SAFE (ADMISSIBLE); OLD_PLUS_ALL_NEW_ELIGIBLE לביקורת בלבד." if he else
+           f"> `role` = the role under the historical 2.2.0 rule. In Phase 5.1 the primary PRE / POST arms are {SET_OLD} and {SET_SAFE} (ADMISSIBLE); {SET_ALL} is audit only."), "",
           "| family | role | set | sensitivity | PPV | false-alert share | flagged | AP | AUROC | Brier | BSS | cal. slope | cal. intercept |",
           "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in t[t["feature_set"].isin(list(PRIMARY_SETS))].itertuples():

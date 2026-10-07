@@ -94,7 +94,9 @@ def test_planted_run_completes_with_every_output(planted: dict[str, Any]) -> Non
     share = out / "share"
     for n in REQUIRED_SHARE:
         assert (share / n).is_file(), n
-    assert len(list((share / "figures").glob("*.png"))) >= 12
+    figs = sorted(q.name for q in (share / "figures").glob("*.png"))
+    assert len(figs) == 11 and "08_domain_incremental_value.png" not in figs                       # Phase 5.1: no DOMAIN units -> no figure 08
+    assert figs[0] == "01_sensitivity_vs_false_alert_share.png" and figs[-1] == "12_false_alerts_per_10000.png"
     for n in ("RUN_STATUS.json", "RUN_TIMINGS.csv", "OVERNIGHT_PROGRESS.log"):
         assert (out / n).is_file()
     st = json.loads((out / "RUN_STATUS.json").read_text(encoding="utf-8"))
@@ -140,7 +142,7 @@ def test_planted_new_feature_lowers_the_false_alert_burden(planted: dict[str, An
     man = json.loads((planted["out"] / "share" / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
     assert man["historical_overall_answer_2_2_0_rule"] == "YES" and "overall_answer" not in man       # historical audit only, no 5.1 verdict
     dom = pd.read_csv(planted["out"] / "share" / "DOMAIN_INCREMENTAL_VALUE.csv")
-    assert len(dom) == 0                                                                               # Phase 5.1: no DOMAIN units
+    assert len(dom) == 0 and {"family", "domain", "status"} <= set(dom.columns)                       # Phase 5.1: no DOMAIN units (header only)
     p3 = pd.read_csv(planted["out"] / "share" / "TOP3_CAPACITY_PRIMARY.csv")
     assert set(p3["family"]) == {"ENET"} and set(p3["feature_set"]) == {"OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"}
 
@@ -217,11 +219,12 @@ def _block_fitting(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def test_operating_dashboard_in_the_final_report(planted: dict[str, Any]) -> None:
-    from falls_ml.phase5.dashboard import CAP_QUESTION, SECONDARY_HEADING
+    from falls_ml.phase5.dashboard import CAP_QUESTION, HISTORICAL_HEADING_51, SECONDARY_HEADING
 
     share = planted["out"] / "share"
     mg = (share / "MANAGEMENT_SUMMARY_HE.md").read_text(encoding="utf-8")
-    assert mg.index(CAP_QUESTION) < mg.index(SECONDARY_HEADING) < mg.index("האם הפיצ'רים הנוספים של V21") and mg.count(CAP_QUESTION) == 1
+    assert mg.index(CAP_QUESTION) < mg.index(HISTORICAL_HEADING_51) < mg.index("האם הפיצ'רים הנוספים של V21") and mg.count(CAP_QUESTION) == 1
+    assert SECONDARY_HEADING not in mg                                   # Phase 5.1: the 70% section is labelled a historical audit, never 'unchanged primary'
     c = pd.read_csv(share / "TOP3_CAPACITY_COMPARISON.csv")
     e = c[(c["family"] == "ENET") & (c["comparison"] == "OLD_PLUS_ALL_NEW_ELIGIBLE minus OLD")].iloc[0]
     assert e["role"] == "PRIMARY" and float(e["delta_falls_captured"]) > 0 and float(e["delta_false_interventions"]) == -float(e["delta_falls_captured"])
@@ -240,7 +243,7 @@ def test_dashboard_command_never_fits_and_keeps_the_results(planted: dict[str, A
     units and OOF predictions are byte-identical, the earlier share files are unchanged, the 70% analysis stays as the secondary section."""
     from falls_ml.cli import main
     from falls_ml.phase2.state import Phase2Stop
-    from falls_ml.phase5.dashboard import CAP_QUESTION, NEW_SHARE_FILES, SECONDARY_HEADING, original_management, run_dashboard
+    from falls_ml.phase5.dashboard import CAP_QUESTION, HISTORICAL_HEADING_51, NEW_SHARE_FILES, SECONDARY_HEADING, original_management, run_dashboard
 
     out = worlds["base"] / "out dashboard command"
     shutil.copytree(planted["out"], out)
@@ -271,7 +274,7 @@ def test_dashboard_command_never_fits_and_keeps_the_results(planted: dict[str, A
     scan = json.loads((share / "PRIVACY_SCAN.json").read_text(encoding="utf-8"))
     assert scan["passed"] and scan["files_scanned"] >= len(old_share)
     mg = mp.read_text(encoding="utf-8")
-    assert mg.index(CAP_QUESTION) < mg.index(SECONDARY_HEADING) < mg.index("האם הפיצ'רים הנוספים של V21")
+    assert mg.index(CAP_QUESTION) < mg.index(HISTORICAL_HEADING_51) < mg.index("האם הפיצ'רים הנוספים של V21") and SECONDARY_HEADING not in mg
     ids = set(worlds["df_planted"]["Customer_Full_ID"].astype(str))
     keys = set(pd.read_parquet(out / "work" / "ANALYSIS_FRAME.parquet", columns=["row_key"])["row_key"])
     html = (share / "PHASE5_OPERATING_DASHBOARD.html").read_text(encoding="utf-8")
@@ -280,7 +283,7 @@ def test_dashboard_command_never_fits_and_keeps_the_results(planted: dict[str, A
     assert set(boot["n_boot"]) == {200} and len(boot) <= 2000
     r2 = run_dashboard(out, input_path=worlds["planted"], n_boot=50)        # idempotent: one 3% section, the original summary kept once
     mg2 = mp.read_text(encoding="utf-8")
-    assert r2["status"] == "DASHBOARD_COMPLETE" and mg2.count(CAP_QUESTION) == 1 and mg2.count(SECONDARY_HEADING) == 1 and calls == []
+    assert r2["status"] == "DASHBOARD_COMPLETE" and mg2.count(CAP_QUESTION) == 1 and mg2.count(HISTORICAL_HEADING_51) == 1 and calls == []
     assert any(p.name.startswith("share_before_dashboard_") for p in (out / "work" / "dashboard").iterdir())
 
 
