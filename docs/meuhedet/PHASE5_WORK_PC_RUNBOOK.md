@@ -1,4 +1,4 @@
-# Phase 5.1 on the work PC – REPAIR-ONLY correction of the completed Phase 5 2.2.0 run (falls_ml 0.13.0, Phase 5 3.0.0)
+# Phase 5.1 on the work PC – REPAIR-ONLY correction of the completed Phase 5 2.2.0 run (falls_ml 0.13.1, Phase 5 3.0.0)
 
 **Do NOT start the real run before the PI's explicit approval of the implementation evidence.** This package implements Experiment 1 of
 `docs/phase6/FINAL_CONSENSUS.md` exactly as approved in `docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md` (registration:
@@ -16,25 +16,26 @@ diagnostic (ADMISSIBLE minus NEW_REGISTRY), explanation / stability on ENET. No 
 ## 0. Prerequisites (confirm before step 4)
 
 - the January 2026 extract on this PC is byte-identical to the file the PRE run used (the preflight checks its sha256 against the PRE plan);
-- the PRE folder is complete (`RUN_STATUS.json` COMPLETE, `share\RUN_MANIFEST.json` FINAL) and holds `share\TOP3_CAPACITY_PRIMARY.csv`
+- the PRE folder is complete (`RUN_STATUS.json` COMPLETE, or REPORT_COMPLETE after the approved 0.12.3 `--report-only` regeneration —
+  amendment A-1; `share\RUN_MANIFEST.json` FINAL) and holds `share\TOP3_CAPACITY_PRIMARY.csv`
   (written by the 0.12.3 dashboard command; if it is missing, run `meuhedet-phase5-dashboard` from the 0.12.3 package on the PRE folder first);
 - `OUT51` is a NEW folder (never the PRE folder, never OneDrive).
 
 ## 1. Restore and set up (once)
 
 ```bat
-cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.0"
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.1"
 py -3.11 RESTORE_FILES.py.txt
 setup_windows.cmd
 .venv\Scripts\python.exe -c "import falls_ml; from falls_ml.phase5 import PHASE5_VERSION; print(falls_ml.__version__, PHASE5_VERSION)"
 ```
 
-Expected `PACKAGE VERIFIED`, `INSTALLATION SUCCESSFUL`, then `0.13.0 3.0.0`.
+Expected `PACKAGE VERIFIED`, `INSTALLATION SUCCESSFUL`, then `0.13.1 3.0.0`.
 
 ## 2. The paths (every new CMD window)
 
 ```bat
-cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.0"
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.1"
 set PYTHONUTF8=1
 set INPUT_2026=%USERPROFILE%\Downloads\100k_falling_db_2026.csv
 set PRE=%USERPROFILE%\Downloads\100k_falling_db_phase5_v3

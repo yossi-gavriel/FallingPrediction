@@ -2,7 +2,8 @@
 
 Phase 5.1 R-10 (docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md): a real-data POST run refuses to fit unless every check below passes:
 
-    (a) a completed PRE run exists: work/PLAN.json of Phase 5 2.x, RUN_STATUS.json COMPLETE*, share/RUN_MANIFEST.json of a FINAL report
+    (a) a completed PRE run exists: work/PLAN.json of Phase 5 2.x, RUN_STATUS.json COMPLETE* - or REPORT_COMPLETE, the state the approved
+        0.12.3 --report-only regeneration leaves (compatibility amendment A-1, falls_ml 0.13.1) - and share/RUN_MANIFEST.json of a FINAL report
     (b) the PRE input sha256 equals the POST input sha256 (the same 2026 extract, byte for byte)
     (c) the POST usable cohort equals the PRE cohort: the same pseudonymous row keys and the same labels (counts AND identity)
     (d) sha256(PRE work/FOLDS.parquet) equals folds_sha256 of the PRE plan; the POST run ADOPTS these outer folds - it never regenerates them
@@ -34,6 +35,13 @@ GATE = "PRE_VERIFICATION_FAILED"
 PRE_SETS = (SET_OLD, SET_ALL, SET_SAFE)
 TOP3_TABLE = "TOP3_CAPACITY_PRIMARY.csv"
 TARGET_PERMILLE = 30
+# Compatibility amendment A-1 (falls_ml 0.13.1; docs/phase6/AMENDMENTS.md): the approved 0.12.3 `meuhedet-phase5 --report-only` command
+# rebuilds the FINAL share of a completed 2.x run and leaves RUN_STATUS.json status = REPORT_COMPLETE. That state is accepted as a
+# completed PRE ONLY together with everything else in (a)-(f), unchanged: a FINAL share/RUN_MANIFEST.json (checked below for every
+# state), the input sha256, cohort and labels, the frozen fold hash, every ENET PRIMARY unit against its COMPLETE.json, and the exact
+# reproduction of TOP3_CAPACITY_PRIMARY.csv. Report-only always writes a FINAL manifest, so the manifest alone proves nothing about the
+# units: checks (e) and (f) are what carry the PRE result. Not a methodological change.
+REPORT_ONLY_STATE = "REPORT_COMPLETE"
 
 
 class _Units:
@@ -63,7 +71,8 @@ def pre_summary(pre: Path) -> dict[str, Any]:
     if not status_p.is_file():
         _fail("the PRE folder has no RUN_STATUS.json")
     status = _read_json(status_p)
-    if not str(status.get("status", "")).startswith("COMPLETE"):
+    st = str(status.get("status", ""))
+    if not (st.startswith("COMPLETE") or st == REPORT_ONLY_STATE):
         _fail(f"the PRE run is not complete (RUN_STATUS.json status = {status.get('status')!r})")
     if not man_p.is_file():
         _fail("the PRE folder has no share/RUN_MANIFEST.json: its report was never published")
@@ -73,7 +82,7 @@ def pre_summary(pre: Path) -> dict[str, Any]:
     for name in ("FOLDS.parquet", "Y_FOLDS.npz"):
         if not (pre / "work" / name).is_file():
             _fail(f"the PRE folder has no work/{name}")
-    return {"plan": plan, "status": status, "manifest": man, "phase5_version": ver}
+    return {"plan": plan, "status": status, "run_status": st, "manifest": man, "phase5_version": ver}
 
 
 def pre_folds(pre: Path, plan: dict[str, Any]) -> pd.DataFrame:
@@ -144,6 +153,7 @@ def verify_pre_run(pre: Path, *, post_input_sha256: str, post_row_keys: np.ndarr
         f"{TOP3_TABLE} reproduced for {len(repro['rows'])} ENET arm(s)")
     digest = pre_digest(pre)
     block = {"folder_name": pre.name, "phase5_version": S["phase5_version"], "falls_ml_version": plan.get("falls_ml_version"),
+             "run_status": S["run_status"],
              "plan_sha256": D.sha256_file(pre / "work" / "PLAN.json"), "folds_sha256": str(plan.get("folds_sha256")), "frame_sha256": plan.get("frame_sha256"),
              "input_sha256": pre_sha, "code_sha256": plan.get("code_sha256"), "config_sha256": plan.get("config_sha256"), "seed": plan.get("seed"),
              "cv": plan.get("cv"), "n": int(plan.get("n", len(keys_post))), "events": int(plan.get("events", int(y_pre.sum()))),

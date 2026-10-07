@@ -348,6 +348,122 @@ def test_r10_pre_verification_passes_and_each_failure_stops(pre_world: dict[str,
     assert e.value.gate == "PRE_RUN_MODIFIED"
 
 
+# ============================================================================ compatibility amendment A-1 (falls_ml 0.13.1)
+def _completed_then_0123_report_only(src: Path, dst: Path) -> Path:
+    """A completed Phase 5 2.2.0 PRE -> the approved 0.12.3 `meuhedet-phase5 --report-only` regeneration -> the 0.12.3 dashboard.
+
+    RUN_STATUS.json is written by the SAME Monitor class (byte-identical at 2398fb9 / 0.12.3 and here) through the same updates the 0.12.3
+    report-only branch makes (a new session; status RUNNING; then status REPORT_COMPLETE, stage REPORT, report). The share is rebuilt as a
+    FINAL report (report-only always calls build_reports(interim=False)) and the dashboard rewrites TOP3_CAPACITY_PRIMARY.csv from the same
+    committed arrays (identical content). Units, plan, folds and labels are untouched, as on the real PRE (units_unchanged = true)."""
+    import shutil
+
+    from falls_ml.phase5.runner import Monitor
+
+    shutil.copytree(src, dst)
+    run = Monitor(dst, 60.0)                                            # the original run, finished
+    run.update(status="COMPLETE", stage="DONE", mode="quick", jobs=1, progress={"PRIMARY": {"done": 9, "total": 9}, "FINAL": {"done": 3, "total": 3}},
+               finished_at="2026-09-30T06:00:00+00:00")
+    ro = Monitor(dst, 60.0)                                             # a new session: the 0.12.3 report-only command
+    ro.update(status="RUNNING", mode="quick", jobs=1, device={"requested": "auto", "device": "cpu", "reason": "report only"})
+    ro.update(status="REPORT_COMPLETE", stage="REPORT", report={"files": 57, "privacy_passed": True, "interim": False})
+    mp = dst / "share" / "RUN_MANIFEST.json"
+    man = json.loads(mp.read_text(encoding="utf-8"))
+    man.update(report_kind="FINAL", created_at="2026-10-07T09:00:00+00:00")
+    mp.write_text(json.dumps(man), encoding="utf-8")
+    return dst
+
+
+def test_a1_report_only_pre_state_is_accepted_only_with_every_other_check(pre_world: dict[str, Any], prepared: dict[str, Any], tmp_path: Path) -> None:
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase5.prerun import REPORT_ONLY_STATE, verify_pre_run
+    from falls_ml.phase5.runner import run_phase5
+
+    keys, y, outer = pre_world["keys"], pre_world["y"], pre_world["outer"]
+    sha = _sha(prepared["csv"])
+    checks = ["a_completed_pre_run", "b_input_sha256", "c_cohort_and_labels", "d_fold_hash_adopted", "e_enet_units_complete",
+              "f_top3_capacity_table_reproduced"]
+    # completed PRE -> 0.12.3 report-only -> REPORT_COMPLETE + FINAL manifest (the observed Windows state) -> verify_pre_run passes
+    ro = _completed_then_0123_report_only(pre_world["pre"], tmp_path / "pre 2.2.0 after 0.12.3 report-only")
+    st = json.loads((ro / "RUN_STATUS.json").read_text(encoding="utf-8"))
+    man = json.loads((ro / "share" / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
+    assert st["status"] == REPORT_ONLY_STATE == "REPORT_COMPLETE" and st["stage"] == "REPORT" and st["sessions"] == 2
+    assert st["report"]["interim"] is False and man["report_kind"] == "FINAL"
+    V = verify_pre_run(ro, post_input_sha256=sha, post_row_keys=keys, post_y=y, log=lambda m: None)
+    assert V["pre"]["verified"] and V["pre"]["run_status"] == "REPORT_COMPLETE" and V["pre"]["checks"] == checks
+    assert np.array_equal(V["outer"], outer) and len(V["pre"]["top3_reproduced"]) == 3 and all(r["reproduced"] for r in V["pre"]["top3_reproduced"])
+    # the same PRE through the real preflight path: P10 OK, the PRE folds ADOPTED, nothing fitted
+    ov = {"eligibility": {"min_known_observed_rows": 20}, "cv": {"outer_folds": 3, "inner_folds": 3}}
+    out = tmp_path / "post"
+    r = run_phase5(prepared["csv"], out, mode="quick", preflight_only=True, overrides=ov, synthetic=True, pre_run=ro, jobs=1)
+    assert r["status"] == "PREFLIGHT_COMPLETE"
+    plan = json.loads((out / "work" / "PLAN.json").read_text(encoding="utf-8"))
+    assert plan["folds_source"].startswith("PRE") and plan["pre_run"]["verified"] and plan["pre_run"]["run_status"] == "REPORT_COMPLETE"
+    assert np.array_equal(pd.read_parquet(out / "work" / "FOLDS.parquet")["outer_fold"].to_numpy(), outer)
+    assert not (out / "work" / "units").exists() or not any((out / "work" / "units").iterdir())
+    assert (out / "preflight" / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8").rstrip().endswith("SAFE TO MODEL")
+
+    n = iter(range(100))
+
+    def failing(mutate: Any, post_y: np.ndarray | None = None) -> str:
+        copy = _completed_then_0123_report_only(pre_world["pre"], tmp_path / f"report-only copy {next(n)}")
+        mutate(copy)
+        with pytest.raises(Phase2Stop) as e:
+            verify_pre_run(copy, post_input_sha256=sha, post_row_keys=keys, post_y=y if post_y is None else post_y, log=lambda m: None)
+        assert e.value.gate == "PRE_VERIFICATION_FAILED"
+        return e.value.message
+
+    def manifest(c: Path, **kw: Any) -> None:
+        mp = c / "share" / "RUN_MANIFEST.json"
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        m.update(kw)
+        mp.write_text(json.dumps(m), encoding="utf-8")
+
+    def plan_set(c: Path, **kw: Any) -> None:
+        pp = c / "work" / "PLAN.json"
+        pl = json.loads(pp.read_text(encoding="utf-8"))
+        pl.update(kw)
+        pp.write_text(json.dumps(pl), encoding="utf-8")
+
+    def tamper_top3(c: Path) -> None:
+        t = pd.read_csv(c / "share" / "TOP3_CAPACITY_PRIMARY.csv")
+        t.loc[t["feature_set"] == "OLD_PLUS_NEW_SAFE", "tp"] = t.loc[t["feature_set"] == "OLD_PLUS_NEW_SAFE", "tp"] - 1
+        t.to_csv(c / "share" / "TOP3_CAPACITY_PRIMARY.csv", index=False)
+
+    def tamper_unit_arrays(c: Path) -> None:                           # arrays changed, COMPLETE.json not re-signed
+        d = c / "work" / "units" / "PRIMARY__ENET__OLD_PLUS_NEW_SAFE__outer2"
+        a = np.load(d / "arrays.npz")
+        np.savez(d / "arrays.npz", train_idx=a["train_idx"], test_idx=a["test_idx"], inner_oof=a["inner_oof"], p_test=a["p_test"][::-1].copy())
+
+    # REPORT_COMPLETE is no exemption from any other check
+    assert "not the FINAL one" in failing(lambda c: manifest(c, report_kind="INTERIM"))                              # non-FINAL manifest
+    assert "RUN_MANIFEST.json" in failing(lambda c: (c / "share" / "RUN_MANIFEST.json").unlink())                    # no manifest
+    assert "COMPLETE.json" in failing(lambda c: (c / "work" / "units" / "PRIMARY__ENET__OLD__outer1" / "COMPLETE.json").unlink())  # missing unit
+    assert "COMPLETE.json" in failing(tamper_unit_arrays)                                                            # unit fails its hashes
+    assert "NOT reproduced" in failing(tamper_top3)                                                                  # wrong Top-3% table
+    assert "TOP3_CAPACITY_PRIMARY" in failing(lambda c: (c / "share" / "TOP3_CAPACITY_PRIMARY.csv").unlink())        # no Top-3% table
+    assert "input" in failing(lambda c: plan_set(c, input={"name": "x", "sha256": "0" * 64, "bytes": 1}))            # different extract
+    assert "fold hash" in failing(lambda c: plan_set(c, folds_sha256="f" * 64))                                      # fold hash
+    assert "labels" in failing(lambda c: None, post_y=1 - y)                                                         # labels differ
+
+    def status(c: Path, s: str) -> None:
+        sp = c / "RUN_STATUS.json"
+        d = json.loads(sp.read_text(encoding="utf-8"))
+        d["status"] = s
+        sp.write_text(json.dumps(d), encoding="utf-8")
+
+    # exactly one extra state: every other non-COMPLETE* state still stops
+    for s in ("STOPPED", "RUNNING", "INTERRUPTED", "PREFLIGHT_COMPLETE", "STOPPED_PREFLIGHT", "PAUSED_TEST_LIMIT", "report_complete",
+              "REPORT_COMPLETE_PARTIAL", ""):
+        assert "not complete" in failing(lambda c, s=s: status(c, s)), s
+    # COMPLETE / COMPLETE_WITH_FAILURES: unchanged
+    for i, s in enumerate(("COMPLETE", "COMPLETE_WITH_FAILURES")):
+        c = _completed_then_0123_report_only(pre_world["pre"], tmp_path / f"completed {i}")
+        status(c, s)
+        V = verify_pre_run(c, post_input_sha256=sha, post_row_keys=keys, post_y=y, log=lambda m: None)
+        assert V["pre"]["verified"] and V["pre"]["run_status"] == s and V["pre"]["checks"] == checks
+
+
 def test_r10_preflight_adopts_pre_folds_and_refuses_the_out_folder(pre_world: dict[str, Any], prepared: dict[str, Any], tmp_path: Path) -> None:
     from falls_ml.phase2.state import Phase2Stop
     from falls_ml.phase5.runner import run_phase5

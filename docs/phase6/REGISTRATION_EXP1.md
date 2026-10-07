@@ -3,7 +3,7 @@
 | Item | Value |
 |---|---|
 | Status | REGISTERED SETTINGS of the approved contract (`docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md`, commit `d7ab81d`). Frozen before any real-data preflight. Any later change is a dated entry in `docs/phase6/AMENDMENTS.md` **before** the affected data are read, and a new output folder. |
-| Software | falls_ml **0.13.0**, Phase 5 **3.0.0** (`PHASE5_VERSION`), settings `configs/meuhedet/phase5.yaml` version 3 (its sha256 is recorded in every plan; a run refuses any other settings file) |
+| Software | falls_ml **0.13.1** (0.13.0 + compatibility amendment A-1, `docs/phase6/AMENDMENTS.md`), Phase 5 **3.0.0** (`PHASE5_VERSION`), settings `configs/meuhedet/phase5.yaml` version 3 (its sha256 is recorded in every plan; a run refuses any other settings file) |
 | Real data | **none read** at registration; nothing trained. The real run waits for the PI's explicit approval after the implementation evidence is reviewed. |
 
 ## 1. The question
@@ -42,7 +42,7 @@ Everything else (Policy B, new l1 ratios, new families, additive bases, clusteri
 
 | Control | Setting |
 |---|---|
-| PRE verification (R-10) | checks (a) completed 2.x PRE run, (b) input sha256, (c) cohort and labels, (d) fold hash adopted, (e) ENET PRIMARY units complete and hash-verified, (f) `share/TOP3_CAPACITY_PRIMARY.csv` reproduced exactly from the PRE arrays; any failure → `PRE_VERIFICATION_FAILED` before anything is fitted; the PRE folder digest is re-checked at report time (`PRE_RUN_MODIFIED`) |
+| PRE verification (R-10) | checks (a) completed 2.x PRE run (`RUN_STATUS.json` `COMPLETE*`, or `REPORT_COMPLETE` left by the approved 0.12.3 `--report-only` regeneration — amendment A-1; with a FINAL `share/RUN_MANIFEST.json` in every case), (b) input sha256, (c) cohort and labels, (d) fold hash adopted, (e) ENET PRIMARY units complete and hash-verified, (f) `share/TOP3_CAPACITY_PRIMARY.csv` reproduced exactly from the PRE arrays; any failure → `PRE_VERIFICATION_FAILED` before anything is fitted; the PRE folder digest is re-checked at report time (`PRE_RUN_MODIFIED`) |
 | Negative controls (R-12) | 10 frozen-fold label permutations (ENET, ADMISSIBLE, quick budget); **registered, fixed thresholds** mean AUROC ≤ 0.55 and mean Recall@Top3 ≤ 0.05 (the loader refuses any other value); a failure → `NEGATIVE_CONTROL_FAILED`: nothing is fitted and no scientific report is published; a real run without passed controls → `NEGATIVE_CONTROLS_REQUIRED` |
 | Boundary traps (N-1) | synthetic test suite: `unknown_column`, `future_column`, `forbidden_lineage` → fail closed; `leaky_new` → legacy ALL only by provenance, forensic WARN; `weak_proxy` → retained (no numeric gate exists); `strong_legit` → retained, forensic WARN |
 | Label-mutation tests (N-3, N-4) | flipped holdout labels leave the coverage gate, forensic values, designs, grids, selection and holdout scores unchanged; flipped inner-validation labels never reach the inner design or grid |
