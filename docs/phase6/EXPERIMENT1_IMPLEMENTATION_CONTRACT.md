@@ -1,14 +1,16 @@
-# Experiment 1 — implementation contract (Phase 5.1 methodological correction)
+# Experiment 1 — implementation contract (Phase 5.1 methodological correction, REPAIR-ONLY)
 
 | Item | Value |
 |---|---|
-| Status | CONTRACT FOR APPROVAL. No code has been changed. Implementation starts only after the PI approves this document. |
-| Scope | Experiment 1 of `docs/phase6/FINAL_CONSENSUS.md` only. Experiments 2–5 are not implemented. |
-| Base | falls_ml 0.12.3, Phase 5 2.2.0, commit `c30065d` on `research/phase6-strategy` |
+| Status | REVISION 2, incorporating the PI's three required changes and decisions of 2026-10-07. No code has been changed. Implementation starts only after the PI approves this revision. |
+| Scope | Experiment 1 of `docs/phase6/FINAL_CONSENSUS.md` only, **repair-only**. Every new selection or optimisation strategy is deferred to Experiment 2. |
+| Base | falls_ml 0.12.3, Phase 5 2.2.0, commit `d150204` on `research/phase6-strategy` |
 | Target | falls_ml **0.13.0**, Phase 5 **3.0.0** (scientific-graph change → major Phase version) |
-| Author | Lead Scientist (Claude), 2026-10-07 |
+| Author | Lead Scientist (Claude) |
 
-Terminology: **PRE** = the completed Phase 5 2.2.0 run on the work PC (folder `100k_falling_db_phase5_v3`, read-only). **POST** = the Phase 5.1 run of this contract, in a new output folder. **ADMISSIBLE** = the existing set `OLD_PLUS_NEW_SAFE` (OLD + new predictors with a SAFE timing class and DEFENSIBLE provenance). **Legacy ALL** = the existing set `OLD_PLUS_ALL_NEW_ELIGIBLE` (adds UNCERTAIN_TIMING and non-defensible-provenance predictors). Internal set names are kept; the report shows the aliases.
+**The one question Experiment 1 answers:** *what happens to the existing Phase 5 result when the methodological defects are corrected while changing as little else as possible?* Experiment 1 has **no success verdict**. Its deliverables are the corrected ENET comparator and the PRE/POST tables of section 7.
+
+Terminology: **PRE** = the completed Phase 5 2.2.0 run on the work PC (folder `100k_falling_db_phase5_v3`, read-only). **POST** = the Phase 5.1 run of this contract, in a new output folder. **ADMISSIBLE** = the existing set `OLD_PLUS_NEW_SAFE` (OLD + new predictors with a SAFE timing class and DEFENSIBLE provenance), approved by the PI. **Legacy ALL** = the existing set `OLD_PLUS_ALL_NEW_ELIGIBLE`, audit/exploratory only. Internal set names are kept; the report shows the aliases.
 
 ---
 
@@ -16,23 +18,24 @@ Terminology: **PRE** = the completed Phase 5 2.2.0 run on the work PC (folder `1
 
 | # | Change | Where (current code) | Nature |
 |---|---|---|---|
-| R-1 | **Cohort-level outcome-dependent AUROC exclusion removed.** `prepare` no longer calls `_univariate_auroc`; no feature can receive class `INELIGIBLE_LEAKAGE` from a number. The registry column `univariate_auroc` is kept, empty at preflight, with the note "see FORENSIC_UNIVARIATE_AUROC_BY_FOLD". | `src/falls_ml/phase5/data.py:161–168, 392–396` | Repair |
-| R-2 | **Per-fold label-free coverage gate.** Inside every unit, before tuning: a feature with < `min_known_observed_rows` (100) finite values **on that unit's outer-training rows**, or constant on them, is dropped from that unit's X; the drop is recorded in `result.json` (`dropped_coverage`). The cohort-level coverage/constant/unreadable gates stay as label-free QA (identical to PRE). | `src/falls_ml/phase5/engine.py: run_unit` (before `tune_and_fit`) | Repair |
-| R-3 | **Lambda grid inside each inner training fold.** `linear_path_task` computes `lambda_max` from its own inner-training design and the dimensionless grid `lambda_max × logspace(0, log10(lambda_min_ratio), n_lambda)`; candidates are aligned by grid index (ratio). The outer refit recomputes the grid on outer-training rows and uses the selected index. `_tune_linear` no longer builds `A_full`/`grids`. Per-fold `lambda_max` recorded in `trials.csv`. | `engine.py:208–209, 232`; `models.py:23–27, 36–54` | Repair |
-| R-4 | **CCI_Group encoded by documented semantics or quarantined** (section 4). | `configs/meuhedet/phase5.yaml` (new `feature_overrides`), `phase5/config.py`, `phase5/runner.py` (override applied to the Phase 5 copy of the catalogue) | Repair |
-| R-5 | **Explicit `other` level for nominal codes.** Linear path: learned-level one-hot gets an `f__other` column for rare (< 10 training rows) and unseen finite codes; missing stays zeros + NA indicator. Tree path: declared-level one-hot gets an `other` column. (Trees are not fitted in Experiment 1; the change is made once so Experiment 2 inherits it.) | `src/falls_ml/phase5/design.py:45–47, 81–95, 127–149` | Repair |
-| R-6 | **Forensic univariate AUROC diagnostic (report-only).** Inside every unit, after R-2: AUROC of each feature in the unit's X against the **outer-training** labels, `max(a, 1−a)`; written to `result.json` (`forensic_auroc`), aggregated by the report into `FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv`; any value ≥ 0.80 → WARN line in `OVERNIGHT_PROGRESS.log` and a report section. It never changes membership. | `engine.py: run_unit`; `report.py` | Assurance |
-| R-7 | **Two selection policies on the same inner path.** The inner ENET path is computed once per inner fold (as now). Policy A (**HISTORICAL_70**, the repair arm): the 2.2.0 objective — highest threshold reaching ≥ 70% inner-OOF sensitivity, minimise share flagged, ties as in 2.2.0 — restricted to the PRE l1 ratios {0.1, 0.25, 0.5, 0.75, 0.9}. Policy B (**LOGLOSS_TOP3**, the improvement arm): unweighted inner-OOF log loss → shortlist within one SE of the best (SE = standard deviation of the per-inner-fold log loss of that configuration / √5) → among the shortlist, within-inner-fold Recall@Top3 (k_f = round-half-up(0.03 · n_f) per inner validation fold, TP summed) → near ties (fewer than one captured patient per inner fold on average, i.e. ΔTP < 5 over the five inner folds) resolved toward fewer non-zero coefficients, then the larger lambda; over all six ratios including the LASSO endpoint 1.0. Each unit refits both selected configurations on outer training and predicts the holdout twice: `p_test_A`, `p_test_B`, two pickles. | `engine.py: _tune_linear`; `thresholds.py` (new `objective_logloss_top3`) | Repair arm = A; improvement arm = B |
-| R-8 | **l1 ratio 1.0 added to the inner path** (one extra path per inner fold). Policy A ignores it (exact PRE candidate set); Policy B uses it. LASSO is no longer a separate family. | `phase5.yaml: modes.*.enet.l1_ratios`; `_tune_linear` | Repair (policy B only) |
-| R-9 | **Families restricted to ENET; sets unchanged; units reduced.** Config v3 allows `families` to be a non-empty subset of {LASSO, ENET, XGB} containing `primary_family`; the plan records it; `plan_units` iterates the plan's families. Experiment 1: `families: [ENET]`. FINAL units for all three PRIMARY sets (today: OLD and ALL only). | `phase5/config.py:101–102`; `runner.py:436–458` | Scope |
-| R-10 | **Ablation base set configurable; single contrast.** `ablations.base_set: OLD_PLUS_NEW_SAFE`, `remove_each_domain: false`, one block `NO_NEW_REGISTRY: {domains: [NEW_REGISTRY]}`. `domain_families: []` (no DOMAIN units). | `runner.py:189–236 (build_sets)`; `phase5.yaml: ablations, domain_families` | Scope |
-| R-11 | **PRE/POST machinery.** New CLI option `--pre-run <PRE folder>`: read-only; verifies the PRE plan (phase5_version 2.x, same input sha256), asserts the POST usable cohort equals the PRE cohort (row-key set and labels), adopts the PRE outer folds (`work/FOLDS.parquet`, sha256 recorded in the POST plan as `folds_source: PRE`), reads the committed PRE ENET unit arrays (COMPLETE.json hashes verified) and builds `PRE_POST_CORRECTION.csv` and the paired tables of section 7. The PRE folder's digest is recorded before and after; the POST run never writes into it. | `runner.py` (preflight, report), `report.py`, `cli.py` | Assurance |
-| R-12 | **Within-fold Top3 promoted into the main analysis.** The capacity machinery (`capacity.py`, unchanged arithmetic) runs inside the main report for every arm and both policies, with the paired ADMISSIBLE-vs-OLD bootstrap and discordance/overlap tables; the historical 70% tables remain as secondary audit outputs. | `analysis.py`, `report.py` | Reporting |
-| R-13 | **Negative controls on real data** (`--negative-controls N`, default 10, quick budget; section 8). | `runner.py` (new stage NEGATIVE_CONTROLS between PREFLIGHT and PRIMARY) | Assurance |
-| R-14 | **Versioning and plan guards.** `PHASE5_VERSION = "3.0.0"`, falls_ml 0.13.0, `phase5.yaml: version: 3`; the loader refuses v2 settings; `_verify_plan` and the dashboard refuse a plan of another Phase 5 major version; new keys hashed into `config_sha256`. | `phase5/__init__.py`, `config.py`, `runner.py:549–572`, `dashboard.py` | Governance |
-| R-15 | **Disclosure block** in `SCIENTIFIC_SUMMARY.md` / `_HE.md`: boundary table (what is cohort-level label-free QA, what is per-fold, what is inner), the combined-repair statement for PRE/POST, CCI disposition, lost OLD predictors, label caveats. | `report.py` | Reporting |
+| R-1 | **Cohort-level outcome-dependent AUROC exclusion removed.** `prepare` no longer calls `_univariate_auroc`; no feature can receive class `INELIGIBLE_LEAKAGE` from a number. The registry column `univariate_auroc` is kept, empty at preflight, with the note "see the forensic table in work\". | `src/falls_ml/phase5/data.py:161–168, 392–396` | Repair |
+| R-2 | **Per-fold label-free coverage gate.** Inside every unit, before tuning: a feature with < `min_known_observed_rows` (100) finite values **on that unit's outer-training rows**, or constant on them, is dropped from that unit's X; recorded in `result.json` (`dropped_coverage`). The cohort-level coverage/constant/unreadable gates stay as label-free QA (identical to PRE). | `src/falls_ml/phase5/engine.py: run_unit` (before `tune_and_fit`) | Repair |
+| R-3 | **Lambda grid inside each inner training fold.** `linear_path_task` computes `lambda_max` from its own inner-training design and the dimensionless grid `lambda_max × logspace(0, log10(lambda_min_ratio), n_lambda)`; candidates are aligned by grid index (ratio). The outer refit recomputes the grid on outer-training rows and uses the selected index. `_tune_linear` no longer builds `A_full`/`grids`. Per-fold `lambda_max` recorded in `trials.csv`. The hyper-parameter space (5 l1 ratios × 40 ratio steps, `lambda_min_ratio` 1e-3) is unchanged. | `engine.py:208–209, 232`; `models.py:23–27, 36–54` | Repair |
+| R-4 | **CCI_Group quarantined unless an authoritative DWH dictionary exists before the run** (section 4). No ordinal spacing is inferred. | `configs/meuhedet/phase5.yaml` (new `feature_overrides`), `phase5/config.py`, `phase5/runner.py` | Repair |
+| R-5 | **Explicit `other` level for nominal codes with learned levels.** Linear path: rare (< 10 training rows) and unseen finite codes → `f__other` column; missing stays zeros + NA indicator. Affects only features with learned levels: the smoking/obesity sub-codes (legacy ALL only) and CCI if the `nominal` branch is ever activated. **The OLD and ADMISSIBLE arms are unaffected.** Tree path untouched in Experiment 1. | `src/falls_ml/phase5/design.py:45–47, 81–95` | Repair (legacy ALL only) |
+| R-6 | **Forensic univariate AUROC diagnostic (local, report-only).** Inside every unit, after R-2: AUROC of each feature in the unit's X against the **outer-training** labels, `max(a, 1−a)`; written to `result.json` (`forensic_auroc`) and aggregated into `work\FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv`. Any value ≥ 0.80 → WARN line in `OVERNIGHT_PROGRESS.log` and a one-line count in the scientific summary (number of features and folds flagged, no names). Kept in `work\` by default; published to `share\` only with `--share-forensic` after the privacy scan. It never changes membership. | `engine.py: run_unit`; `report.py` | Assurance |
+| R-7 | **Selection policy unchanged.** The 2.2.0 inner objective (highest threshold reaching ≥ 70% inner-OOF sensitivity, then minimise share flagged; ties → lower false-alert share → lower share flagged → higher AP → lower Brier → simpler; tie resolution 1e-4), the same candidate set (l1 ratios {0.1, 0.25, 0.5, 0.75, 0.9} × 40 grid steps), one refit per unit, one holdout prediction per unit. No shortlist, no Top3-based selection, no near-tie rule, no added l1 ratio. | `engine.py: _tune_linear`, `thresholds.py: objective` | Unchanged |
+| R-8 | **Families restricted to ENET; sets unchanged; units reduced.** Config v3 allows `families` to be a non-empty subset of {LASSO, ENET, XGB} containing `primary_family`; the plan records it; `plan_units` iterates the plan's families. Experiment 1: `families: [ENET]`. FINAL units for all three PRIMARY sets (today: OLD and ALL only). | `phase5/config.py:101–102`; `runner.py:436–458` | Scope |
+| R-9 | **Single secondary contrast.** `ablations.base_set: OLD_PLUS_NEW_SAFE`, `remove_each_domain: false`, one block `NO_NEW_REGISTRY: {domains: [NEW_REGISTRY]}`, labelled SECONDARY DIAGNOSTIC in every table. `domain_families: []` (no DOMAIN units). It never enters the PRE/POST headline or any verdict. | `runner.py:189–236 (build_sets)`; `phase5.yaml: ablations, domain_families` | Scope |
+| R-10 | **PRE verification and PRE/POST machinery (mandatory).** New CLI option `--pre-run <PRE folder>` (required for a real-data run; the preflight stops without it). Read-only. Before any fitting the preflight verifies: (a) the PRE plan is Phase 5 2.x and complete; (b) the PRE input sha256 equals the POST input sha256; (c) the POST usable cohort equals the PRE cohort (row-key set and labels); (d) `work\FOLDS.parquet` sha256 equals `folds_sha256` in the PRE plan, and the POST run **adopts** these folds (`folds_source: PRE` in the POST plan); (e) every PRE ENET PRIMARY unit of OLD / ALL / SAFE verifies against its `COMPLETE.json`; (f) `share\TOP3_CAPACITY_PRIMARY.csv` exists and is **reproduced exactly** (T, TP, PPV per model) from the PRE unit arrays by the POST capacity code. Any failure → STOP `PRE_VERIFICATION_FAILED`. The PRE folder digest is recorded before and after the POST run; POST never writes into it. | `runner.py` (preflight, report), `report.py`, `cli.py` | Assurance |
+| R-11 | **Top 3% promoted into the main analysis, absolute numbers first.** The capacity machinery (`capacity.py`, arithmetic unchanged) runs inside the main report for every arm, with the paired bootstrap and discordance/overlap tables; the headline table is section 7's `TOP3_PRE_POST_HEADLINE.csv`. The historical 70% tables remain secondary audit outputs. | `analysis.py`, `report.py` | Reporting |
+| R-12 | **Negative controls on real data** (`--negative-controls 10`, quick budget; section 8). | `runner.py` (new stage NEGATIVE_CONTROLS between PREFLIGHT and PRIMARY) | Assurance |
+| R-13 | **Versioning and plan guards.** `PHASE5_VERSION = "3.0.0"`, falls_ml 0.13.0, `phase5.yaml: version: 3`; the loader refuses v2 settings; `_verify_plan` and the dashboard refuse a plan of another Phase 5 major version; new keys hashed into `config_sha256`. | `phase5/__init__.py`, `config.py`, `runner.py:549–572`, `dashboard.py` | Governance |
+| R-14 | **Disclosure block** in `SCIENTIFIC_SUMMARY.md` / `_HE.md`: boundary table (what is cohort-level label-free QA, what is per-fold, what is inner), the combined-repair statement for PRE/POST, CCI disposition, lost OLD predictors, label caveats. | `report.py` | Reporting |
 
 Phase 2/3/4 source and configuration files are not touched (the protected-manifest tests must keep passing). The CCI override lives in the Phase 5 settings, not in `phase2_features.yaml`.
+
+**Deferred to Experiment 2 (not implemented here):** the log-loss one-SE shortlist, within-inner-fold Recall@Top3 selection, the near-tie rule, l1 ratio 1.0, any other selection or optimisation change, XGBoost's registered library, the additive basis, the tree-path `other` level. Experiment 2 will recompute the inner path on the same folds and recipe; Experiment 1 caches nothing for it.
 
 ## 2. What is removed from the current pipeline
 
@@ -41,7 +44,7 @@ Phase 2/3/4 source and configuration files are not touched (the protected-manife
 - LASSO as a separately tuned family; XGBoost units and the Optuna path (not run in Experiment 1; code retained for Experiment 2).
 - The DOMAIN stage (OLD + each domain), the per-domain ablations other than NO_NEW_REGISTRY, and the NO_FALL_RECENCY / NO_TIMING_UNCERTAIN blocks.
 - SHAP tasks (no tree model); permutation importance is kept for the ENET folds (cheap).
-- The five-criterion 70% verdict as the headline: it is still computed and printed as "historical audit (2.2.0 rule)"; the management summary opens with the Top3 tables.
+- The five-criterion 70% verdict as the headline: it is still computed and printed as "historical audit (2.2.0 rule)"; the management summary opens with the Top 3% headline table.
 - The synthetic trap semantics "`leaky_new` → excluded by AUROC": replaced by "excluded from ADMISSIBLE by provenance/timing, retained in legacy ALL, flagged by the forensic diagnostic".
 
 ## 3. Exact replacement for the AUROC eligibility screen
@@ -58,73 +61,75 @@ Membership is decided **only** by label-free rules, all of which already exist:
 
 Assurance that replaces the screen's safety purpose:
 
-- the forensic diagnostic R-6 (training-fold AUROC per feature, report and WARN, never exclusion; a value ≥ 0.80 on the real data requires a **written adjudication of availability** by the DWH before the POST result is used for any claim — an adjudicated violation is a logged amendment and a new run, never a fold-union veto);
+- the forensic diagnostic R-6 (training-fold AUROC per feature, local, WARN, never exclusion; a value ≥ 0.80 on the real data requires a **written adjudication of availability** by the DWH before the POST result is used for any claim — an adjudicated violation is a logged amendment and a new run, never a fold-union veto);
 - the boundary traps and permutation controls of section 8.
 
 ## 4. CCI_Group
 
-Mechanism implemented now (independent of the dictionary):
+PI decision: **quarantine unless an authoritative DWH dictionary is available before the run; never infer ordinal spacing.**
 
-- `phase5.yaml: feature_overrides` — a Phase 5-only override of catalogue metadata for named features, applied to the in-memory copy of the Phase 3 catalogue after `load_all`, hashed into `config_sha256`, recorded in the plan and in `FEATURE_ELIGIBILITY.csv` (`override: yes`). The protected Phase 2/3 files are not edited.
-- Three selectable branches for `com_cci_group`:
+Mechanism implemented now: `phase5.yaml: feature_overrides` — a Phase 5-only override of catalogue metadata for named features, applied to the in-memory copy of the Phase 3 catalogue after `load_all`, hashed into `config_sha256`, recorded in the plan and in `FEATURE_ELIGIBILITY.csv` (`override: yes`). The protected Phase 2/3 files are not edited.
 
-| Branch | Condition | Linear path | Tree path (Experiment 2) | Missing / rare / unseen |
-|---|---|---|---|---|
-| `ordinal` | DWH documents an **ordered** group scale with its levels | `kind: ordinal, levels: [...], linear: thermometer` (as MEFI) | raw numeric code | missing → zeros + NA indicator |
-| `nominal` | DWH documents **meanings without order** | `kind: categorical, levels: [...], linear: onehot` with reference level = the documented "no comorbidity / lowest" group | one-hot with `other` | rare (< 10 training rows) and unseen → `other`; missing → NA indicator |
-| `quarantine` | **no dictionary at registration** (default) | not in any set; registry class INELIGIBLE_SEMANTICS, reason "CCI_Group dictionary pending (DWH)" | — | — |
+| Branch | Condition | Linear path | Missing / rare / unseen |
+|---|---|---|---|
+| `quarantine` | **default; no authoritative dictionary at registration** | not in any set; registry class INELIGIBLE_SEMANTICS, reason "CCI_Group dictionary pending (DWH)" | — |
+| `ordinal` | DWH documents an **ordered** group scale with its levels | `kind: ordinal, levels: [...], linear: thermometer` (as MEFI; order only, no spacing assumed) | missing → zeros + NA indicator |
+| `nominal` | DWH documents **meanings without order** | `kind: categorical, levels: [...], linear: onehot`, reference = the documented lowest/"no comorbidity" group | rare and unseen → `other`; missing → NA indicator |
 
-- No branch is ever chosen by an outer result; the branch is fixed in the registration before the POST preflight and cannot change on resume (config hash).
-
-**Blocked pending the DWH dictionary**: which branch is active. If the dictionary is not delivered before registration, Experiment 1 runs with `quarantine`; CCI's PRE contribution (continuous) versus its POST absence is then part of the combined repair effect and is stated in the disclosure block.
+The branch is fixed in `REGISTRATION_EXP1.md` before the POST preflight and cannot change on resume (config hash). No branch is ever chosen by an outer result. Under `quarantine`, CCI's PRE contribution (continuous) versus its POST absence is part of the combined repair effect and is stated in the disclosure block.
 
 ## 5. What stays identical for a fair PRE/POST comparison
 
 | Element | PRE (2.2.0) | POST (3.0.0) |
 |---|---|---|
-| Input file | `60k/100k_falling_db_2026.csv`, sha256 in PRE plan | the same file; sha256 must match (STOP otherwise) |
-| Cohort, outcome contract, usable patients, labels | as computed by unchanged code | asserted equal to PRE (row-key set and labels), STOP `COHORT_MISMATCH` otherwise |
-| Outer folds | `work/FOLDS.parquet`, seed 20261201 | **adopted from PRE**, sha256 recorded; not regenerated |
+| Input file | sha256 in the PRE plan | the same file; sha256 must match (STOP otherwise) |
+| Cohort, outcome contract, usable patients, labels | as computed by unchanged code | asserted equal to PRE (row-key set and labels), STOP otherwise |
+| Outer folds | `work\FOLDS.parquet`, seed 20261201 | **adopted from PRE**, sha256 verified against the PRE plan and recorded; not regenerated |
 | Unit seeds, inner splits | `unit_seed(seed, family, outer)`, `inner_splits(y_tr, 5, seed+1)` | identical code and inputs → identical splits |
-| ENET budget (overnight) | n_lambda 40, l1 ratios {0.1, 0.25, 0.5, 0.75, 0.9}, lambda_min_ratio 1e-3, tol 1e-7, max_iter 10,000 | identical for policy A; ratio 1.0 added for policy B only |
-| Tuning objective of the repair arm | ≥ 70% sensitivity objective, tie resolution 1e-4 | identical (policy A) |
-| Set membership rules | safe/all classes, safe provenance | identical |
-| Feature sets | OLD, OLD_PLUS_ALL_NEW_ELIGIBLE, OLD_PLUS_NEW_SAFE | identical names and rules (membership may differ only through R-1 and R-4, both reported) |
+| Family | ENET (primary); LASSO and XGB also fitted | ENET only |
+| Tuning objective and tie resolution | ≥ 70% sensitivity objective, 1e-4 | identical |
+| Hyper-parameter space and budget (overnight) | l1 ratios {0.1, 0.25, 0.5, 0.75, 0.9}, n_lambda 40, lambda_min_ratio 1e-3, tol 1e-7, max_iter 10,000 | identical (the grid is now anchored per inner fold, R-3) |
+| Set membership rules and names | safe/all classes, safe provenance; OLD, OLD_PLUS_ALL_NEW_ELIGIBLE, OLD_PLUS_NEW_SAFE | identical (membership may differ only through R-1, R-2 per fold and R-4, all reported in `PRE_POST_MEMBERSHIP.csv`) |
 | Bootstrap, stability, privacy, capacity arithmetic | 2,000; 100; min cell 10; 3% half-up, largest remainder, row-key ties | identical |
-| What differs (the combined repair) | — | no AUROC gate; per-fold coverage; inner lambda grid; CCI branch; `other` level for nominal codes (affects legacy ALL only, where the sub-codes live) |
+| What differs (the combined repair) | — | no AUROC gate; per-fold coverage; inner lambda grid; CCI quarantined (or declared); `other` level for learned-level codes (legacy ALL only) |
 
 PRE/POST reports the **combined** effect of these changes; no attribution to a single change is made.
 
-## 6. Primary endpoint
+## 6. Primary endpoint and primary comparison
 
-**Recall@Top3** on the development frame: N = usable labelled patients (identical to PRE); T = round-half-up(0.03 · N); T allocated across the five outer folds by largest remainder proportional to fold sizes (ties → lower fold); within each fold the k_f highest holdout risks of that fold's model are selected (ties in deterministic pseudonymous row-key order); Recall@Top3 = Σ_f TP_f / Σ_f events_f; PPV@Top3 = Σ_f TP_f / T. Computed per policy (A, B) and per arm (OLD, ADMISSIBLE, legacy ALL, ADMISSIBLE minus NEW_REGISTRY).
+**Primary comparison:** OLD and ADMISSIBLE (`OLD_PLUS_NEW_SAFE`), each under PRE 2.2.0 versus corrected Phase 5.1 (POST). Legacy ALL is audit/exploratory; NO_NEW_REGISTRY is a secondary diagnostic. Neither influences the headline or any verdict.
 
-**Comparative statistic**: Δ captured fallers per 10,000 patients = 10,000 · (TP_ADMISSIBLE − TP_OLD) / N, paired patient bootstrap with 2,000 replicates and identical multinomial weights for both models, capacity re-allocated from resampled fold sizes and top-k re-selected within fold in every replicate (existing `capacity.py` mechanics); also ΔPPV = ΔTP / T and ΔFP = −ΔTP. Discordance table: fallers captured by only one model; selected-set overlap.
+**Recall@Top3** on the development frame: N = usable labelled patients (identical to PRE); T = round-half-up(0.03 · N) (= 2,924 on the supplied cohort size); T allocated across the five outer folds by largest remainder proportional to fold sizes (ties → lower fold); within each fold the k_f highest holdout risks of that fold's model are selected (ties in deterministic pseudonymous row-key order); TP = Σ_f TP_f; Recall@Top3 = TP / Σ_f events_f; PPV@Top3 = TP / T; false interventions = T − TP.
 
-The operational-denominator variant (quota among all baseline-eligible patients including censored) is **deferred** from Experiment 1: it needs censored rows kept in the frame and scored by fold, which touches the sealed-read path; the censored/unlabelled count is reported from preflight check P5.
+**Headline statistic (absolute):** for OLD and for ADMISSIBLE, Δ captured falls = TP_POST − TP_PRE at the same T, on the same patients and folds, with a paired patient bootstrap 95% interval (2,000 replicates, identical multinomial weights for PRE and POST, capacity re-allocated from resampled fold sizes and top-k re-selected within fold in every replicate — existing `capacity.py` mechanics). Captured per 10,000 patients is reported **in addition**, never instead.
+
+The management question answered first: *with the same ≈ 2,924 interventions, how many falls did the corrected model capture compared with PRE?*
+
+The operational-denominator variant (quota among all baseline-eligible patients including censored) is **deferred** from Experiment 1; the censored/unlabelled count is reported from preflight check P5.
 
 ## 7. PRE vs POST comparison outputs (all aggregate, in `share\`)
 
 | File | Content |
 |---|---|
-| `PRE_POST_CORRECTION.csv` | per arm × policy A (PRE has only policy A) × {overall, fold 0–4}: Recall@Top3, PPV@Top3, TP, AUROC, AP, Brier, calibration slope / intercept, historical 70%-rule false-alert share; PRE value, POST value, POST − PRE |
-| `PRE_POST_PAIRED.csv` | PRE vs POST paired Δ captured per 10,000 with bootstrap interval, per arm (same patients, same folds); PRE vs POST top-3% selected-set overlap and discordant captured fallers |
-| `PRE_POST_CONTRAST.csv` | the ADMISSIBLE-vs-OLD paired contrast in PRE and in POST (Δ captured per 10,000, interval, folds improved), plus legacy ALL-vs-OLD |
+| `TOP3_PRE_POST_HEADLINE.csv` | **first table of both summaries.** Rows: OLD-PRE, OLD-POST, ADMISSIBLE-PRE, ADMISSIBLE-POST. Columns: patients N, falls (events), exact number selected T, falls captured TP, Recall@Top3, PPV@Top3, false interventions T − TP; then per arm: Δ captured falls POST − PRE, paired 95% CI, Δ Recall@Top3, Δ false interventions (= −Δ captured), Δ captured per 10,000 (additional) |
+| `PRE_POST_CORRECTION.csv` | per arm × {overall, fold 0–4}: T_f, TP, Recall@Top3, PPV@Top3, AUROC, AP, Brier, calibration slope / intercept, historical 70%-rule false-alert share; PRE, POST, POST − PRE |
+| `PRE_POST_PAIRED.csv` | PRE vs POST paired Δ captured falls with interval per arm; PRE vs POST top-3% selected-set overlap; discordant captured fallers (captured by PRE only / POST only) |
+| `PRE_POST_CONTRAST.csv` | the ADMISSIBLE-vs-OLD paired contrast in PRE and in POST (Δ captured falls, interval, per 10,000, folds improved); legacy ALL-vs-OLD (audit); NO_NEW_REGISTRY-vs-ADMISSIBLE in POST (secondary diagnostic) |
 | `PRE_POST_MEMBERSHIP.csv` | every feature: PRE class and sets, POST class and sets, reason for any difference (R-1 / R-2 per fold / R-4) |
-| `FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv` | feature × outer fold training-AUROC (POST), with the PRE cohort-level value where PRE recorded one |
-| `TOP3_*` family (existing dashboard tables) | now produced by the main report for every arm and policy |
+| `TOP3_*` family (existing dashboard tables) | produced by the main report for every arm |
 | `NEGATIVE_CONTROLS.csv` | section 8 |
-| `PRECISION_PLANNING.csv` | from the POST ADMISSIBLE-vs-OLD development predictions: bootstrap SE of Δ captured per 10,000, discordance counts, and the smallest MOD whose lower 95% limit would exceed 0 at this precision — planning information for D-4, not a result |
+| `PRECISION_PLANNING.csv` | from the POST ADMISSIBLE-vs-OLD development predictions: bootstrap SE of Δ captured falls, discordance counts, and the smallest MOD whose lower 95% limit would exceed 0 at this precision — planning information for the later MOD decision, not a result |
 | `HISTORICAL_VERDICT_2_2_0.json` | the five-criterion 70% verdict recomputed on POST, labelled historical audit |
-| `SCIENTIFIC_SUMMARY(.HE).md`, `MANAGEMENT_SUMMARY_HE.md` | open with the POST Top3 tables and the PRE/POST table; disclosure block; historical verdict last |
+| `SCIENTIFIC_SUMMARY(.HE).md`, `MANAGEMENT_SUMMARY_HE.md` | open with `TOP3_PRE_POST_HEADLINE`; then the ADMISSIBLE-vs-OLD contrast; disclosure block; secondary diagnostic, audit arm and historical verdict last |
+| `work\FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv` | local by default (R-6); the summaries carry only the flagged count |
 
 ## 8. Negative controls
 
 | # | Control | Where it runs | Expected | Failure |
 |---|---|---|---|---|
-| N-1 | **Boundary traps** through the real input boundary on synthetic V21 extracts (test suite + synthetic smoke): `unknown_column` → STOP; `future_column` → sealed; a schema-declared **forbidden-lineage** column present under a predictor-like name → sealed (new trap `forbidden_lineage`); `leaky_new` (AUROC ≈ 0.98, UNCERTAIN_TIMING, EXPERIMENTAL_COMPOSITE) → excluded from ADMISSIBLE by provenance, retained in legacy ALL, forensic WARN; a **weak outcome proxy** (AUROC ≈ 0.65) planted into an admissible column (new trap `weak_proxy`) → retained, forensic value reported below 0.80 (documents that no numeric gate exists); a **strong legitimate predictor** (planted AUROC > 0.80 in an admissible column, new trap `strong_legit`) → retained, forensic WARN, no exclusion | `tests/unit/test_phase5_contract.py`, `test_phase5_e2e.py`, `meuhedet-phase5-synthetic` | as listed | any deviation fails the test suite; the package is not built |
-| N-2 | **Full-pipeline label permutations on the real data**: `--negative-controls 10`, quick budget (n_lambda 8, ratios {0.2, 0.8, 1.0}), ENET ADMISSIBLE, both policies; for each of 10 fixed seeds the labels are permuted **within each outer fold** (frozen folds); the complete unit pipeline runs (coverage gate, design, inner grid, selection, refit, holdout prediction); outer-OOF AUROC and within-fold Recall@Top3 recorded | work PC, after preflight, before PRIMARY | mean AUROC ≈ 0.50, mean Recall@Top3 ≈ 3% | mean AUROC > 0.55 **or** mean Recall@Top3 > 5% → STOP `NEGATIVE_CONTROL_FAILED`; investigate before PRIMARY |
-| N-3 | **Holdout-label mutation with frozen split** (test): flipping every holdout label of a unit leaves its coverage drops, forensic values (training labels only), fitted design, inner grids, selected configurations (A and B), coefficients and holdout scores byte-identical | test suite (extends `test_unit_choices_do_not_depend_on_outer_labels`) | identical | test failure |
+| N-1 | **Boundary traps** through the real input boundary on synthetic V21 extracts (test suite + synthetic smoke): `unknown_column` → STOP; `future_column` → sealed; a schema-declared **forbidden-lineage** column under a predictor-like name → sealed (new trap `forbidden_lineage`); `leaky_new` (AUROC ≈ 0.98, UNCERTAIN_TIMING, EXPERIMENTAL_COMPOSITE) → excluded from ADMISSIBLE by provenance, retained in legacy ALL, forensic WARN; a **weak outcome proxy** (AUROC ≈ 0.65) planted into an admissible column (new trap `weak_proxy`) → retained, forensic value below 0.80 (documents that no numeric gate exists); a **strong legitimate predictor** (planted AUROC > 0.80 in an admissible column, new trap `strong_legit`) → retained, forensic WARN, no exclusion | `tests/unit/test_phase5_contract.py`, `test_phase5_e2e.py`, `meuhedet-phase5-synthetic` | as listed | any deviation fails the test suite; the package is not built |
+| N-2 | **Full-pipeline label permutations on the real data** (approved): `--negative-controls 10`, quick budget (n_lambda 8, ratios {0.2, 0.8}), ENET ADMISSIBLE, the 2.2.0 objective; for each of 10 fixed seeds the labels are permuted **within each outer fold** (frozen PRE folds); the complete unit pipeline runs (coverage gate, design, inner grid, selection, refit, holdout prediction); outer-OOF AUROC and within-fold Recall@Top3 recorded | work PC, after preflight, before PRIMARY | mean AUROC ≈ 0.50, mean Recall@Top3 ≈ 3% | mean AUROC > 0.55 **or** mean Recall@Top3 > 5% → STOP `NEGATIVE_CONTROL_FAILED`; investigate before PRIMARY |
+| N-3 | **Holdout-label mutation with frozen split** (test): flipping every holdout label of a unit leaves its coverage drops, forensic values (training labels only), fitted design, inner grids, selected configuration, coefficients and holdout scores byte-identical | test suite (extends `test_unit_choices_do_not_depend_on_outer_labels`) | identical | test failure |
 | N-4 | **Inner-validation boundary** (test): flipping the validation labels of one inner fold leaves that fold's fitted design, lambda grid and validation predictions unchanged; only the selection may change | test suite (new) | as stated | test failure |
 | N-5 | **PRE folder immutability**: digest of the PRE folder before and after the POST run | work PC | identical | STOP `PRE_RUN_MODIFIED` |
 
@@ -132,50 +137,59 @@ The operational-denominator variant (quota among all baseline-eligible patients 
 
 Unchanged hard stops: schema diff with undeclared columns; duplicate or NULL patient IDs; Leakage_Check_Ind non-zero; outcome contract O1–O7 incl. zero tolerance; x_guard; privacy scan; plan/config/schema/input/code mismatch on resume.
 
-New: `COHORT_MISMATCH` (POST usable cohort or labels differ from PRE); `FOLDS_MISMATCH` (PRE folds file hash differs from the PRE plan); `NEGATIVE_CONTROL_FAILED` (N-2); `PRE_RUN_MODIFIED` (N-5); `PHASE5_VERSION_MISMATCH` (plan of another major version).
+New: `PRE_VERIFICATION_FAILED` (any of R-10 a–f, including a PRE capacity table that the POST code cannot reproduce exactly); `NEGATIVE_CONTROL_FAILED` (N-2); `PRE_RUN_MODIFIED` (N-5); `PHASE5_VERSION_MISMATCH` (plan of another major version); a real-data run started without `--pre-run`.
 
-Warnings that require written adjudication before any claim (not stops): any forensic AUROC ≥ 0.80 on real data; more than 5% non-converged path fits in any unit; policy B selecting a configuration on the grid edge in ≥ 3 folds; the per-fold coverage gate dropping a feature in some folds but not others (reported per fold).
+Warnings that require written adjudication before any claim (not stops): any forensic AUROC ≥ 0.80 on real data; more than 5% non-converged path fits in any unit; the selected lambda on the grid edge in ≥ 3 folds (`lambda_on_grid_edge`, as in 2.2.0); the per-fold coverage gate dropping a feature in some folds but not others.
 
 Protocol stop: the run is executed **once** per registration. Any change after the POST preflight (branch, budget, universe) is a dated amendment and a new output folder; no re-selection of thresholds, seeds, capacities or encodings after reading results.
 
 ## 10. Expected runtime on the work PC
 
-Reference: the 2.2.0 overnight run on the same machine (its `RUN_TIMINGS.csv` gives the measured seconds per ENET unit; the runbook sized the full three-family plan at about 2–4 h for a 48k synthetic cohort on six cores). Experiment 1 removes all LASSO and XGB units, the DOMAIN stage and four of five ablation blocks, and adds one l1 ratio (+20% per inner path), one extra outer refit per unit and the negative controls.
+Reference: the 2.2.0 overnight run on the same machine (its `RUN_TIMINGS.csv` gives the measured seconds per ENET unit; the runbook sized the full three-family plan at about 2–4 h for a 48k synthetic cohort on six cores). Experiment 1 removes all LASSO and XGB units, the DOMAIN stage and four of five ablation blocks; the ENET work per unit is unchanged.
 
 | Stage | Units | Estimate (≈ 100k patients, default `--jobs`) |
 |---|---|---|
-| PREFLIGHT + PRE verification | — | minutes |
-| NEGATIVE_CONTROLS (N-2) | 10 seeds × 5 outer units, quick budget (3 ratios × 8 lambdas × 5 inner) | 0.5–1.5 h |
-| PRIMARY | 15 ENET units (3 sets × 5 folds), 6 ratios × 40 lambdas × 5 inner paths + 2 refits each | 1–2.5 h |
+| PREFLIGHT + PRE verification (R-10) | — | minutes |
+| NEGATIVE_CONTROLS (N-2) | 10 seeds × 5 outer units, quick budget (2 ratios × 8 lambdas × 5 inner) | 0.5–1 h |
+| PRIMARY | 15 ENET units (3 sets × 5 folds), 5 ratios × 40 lambdas × 5 inner paths + 1 refit each | 1–2 h |
 | FINAL | 3 ENET units on all rows | 10–30 min |
-| ABLATION | 5 ENET units (NO_NEW_REGISTRY on ADMISSIBLE) | 20–50 min |
+| ABLATION (secondary diagnostic) | 5 ENET units (NO_NEW_REGISTRY on ADMISSIBLE) | 20–50 min |
 | EXPLAIN + STABILITY | ENET permutation importance (10 repeats) + 100 stability refits | 30–60 min |
 | REPORT + PRE/POST + dashboard + privacy scan | — | minutes |
-| **Total** | | **≈ 3–6 h, one night**; confirmed by `--estimate` (updated for the v3 unit plan) before the real run |
+| **Total** | | **≈ 2.5–5 h, one night**; confirmed by `--estimate` (updated for the v3 unit plan) before the real run |
 
 Work-PC sequence: `--preflight-only --pre-run <PRE>` → `--negative-controls 10 --mode quick --pre-run <PRE>` → `--mode overnight --resume --pre-run <PRE>` → `meuhedet-phase5-dashboard` → send `share\` only.
 
 ## 11. Tests and deliverables
 
-Tests added or changed: R-1 (no numeric exclusion; registry column empty), R-2 (per-fold gate, label-free, FINAL equals cohort gate), R-3 (grid from inner training only; outer refit grid from outer training; index alignment), R-4 (three CCI branches; quarantine default; override hashed; Phase 2/3 files byte-identical), R-5 (`other` level in both paths), R-6 (forensic diagnostic never changes membership), R-7 (policy A reproduces the 2.2.0 choice on a 2.2.0-layout synthetic unit; policy B shortlist and near-tie rule), R-9/R-10 (plan with `families: [ENET]`, FINAL for three sets, single contrast), R-11 (PRE/POST from a synthetic 2.2.0-layout folder, read-only, digest identical), R-13 (permutation stage, thresholds), R-14 (version guards), N-1/N-3/N-4; existing planted-gain and null worlds still return the expected verdicts under both policies; protected-manifest tests unchanged.
+Tests added or changed: R-1 (no numeric exclusion; registry column empty), R-2 (per-fold gate, label-free, FINAL equals cohort gate), R-3 (grid from inner training only; outer refit grid from outer training; index alignment), R-4 (quarantine default; `ordinal`/`nominal` branches only via override; override hashed; Phase 2/3 files byte-identical), R-5 (`other` level, linear path), R-6 (forensic diagnostic never changes membership; local by default), R-7 (the selection on a 2.2.0-layout synthetic unit reproduces the 2.2.0 choice when the inner grid is held equal), R-8/R-9 (plan with `families: [ENET]`, FINAL for three sets, single secondary contrast never in the headline), R-10 (PRE verification a–f on a synthetic 2.2.0-layout folder incl. exact reproduction of its capacity table; read-only; digest identical; stop on each failure), R-12 (permutation stage, thresholds), R-13 (version guards), N-1/N-3/N-4; existing planted-gain and null worlds still return the expected historical verdicts; protected-manifest tests unchanged.
 
 Deliverables: package `falls_ml_phase5_0.13.0_mailsafe.zip` with checksums; updated `docs/meuhedet/PHASE5_WORK_PC_RUNBOOK.md` (Experiment 1 sequence); `docs/phase6/REGISTRATION_EXP1.md` (frozen settings, CCI branch, hashes) committed **before** the real preflight; `docs/phase6/AMENDMENTS.md` created empty.
 
 ---
 
-## 12. Decisions and inputs required from the PI, management and the DWH
+## 12. Decisions recorded and inputs still open
 
-| # | Needed | Blocks | Default if absent |
+### Recorded (PI, 2026-10-07)
+
+| Topic | Decision |
+|---|---|
+| Scope | Experiment 1 is repair-only; Policy B and every new selection strategy deferred to Experiment 2 |
+| Primary comparison | OLD and ADMISSIBLE under PRE 2.2.0 vs corrected 5.1; NO_NEW_REGISTRY secondary diagnostic only; legacy ALL audit only |
+| Headline | absolute Top 3% numbers first (selected, captured, Recall, PPV, false interventions, Δ captured with paired 95% CI); per 10,000 additional |
+| CCI_Group | quarantine without an authoritative DWH dictionary; no inferred spacing |
+| PRE provenance | required; input SHA, completed PRE folder, fold hashes and primary capacity table verified before fitting |
+| ADMISSIBLE | the existing `OLD_PLUS_NEW_SAFE` |
+| Forensic table | local in `work\` by default; shared only if privacy-safe (`--share-forensic`) |
+| Negative controls | 10 frozen-fold permutations; stop at mean AUROC > 0.55 or mean Recall@Top3 > 5% |
+| MOD | not a blocker; frozen before improvement/champion selection |
+| Death/censoring semantics | required before the temporal validation; not a blocker for the paired repair |
+
+### Still open (none blocks implementation; B-1 and B-2 must be settled before the real preflight)
+
+| # | Input | Needed for | Default if absent |
 |---|---|---|---|
-| B-1 | **CCI_Group dictionary** with level meanings and whether they are ordered | choice of the CCI branch (section 4) | `quarantine` |
-| B-2 | **Death / censoring semantics** of `Fall_Next_180D_Ind`: which of death before a fall, disenrolment and administrative censoring yield NULL, 0 or 1 | interpretation of the usable/censored counts and the Experiment 5 estimand; **not** Experiment 1's execution (labels are used unchanged) | reported as "semantics pending", counts shown |
-| B-3 | **MOD** (minimal operational difference) in captured fallers per 10,000 at 3% | interpretation of `PRECISION_PLANNING.csv` and Experiment 5; **not** Experiment 1's execution | planning placeholder 5 per 10,000, labelled as such |
-| B-4 | **PRE provenance**: confirmation that `100k_falling_db_phase5_v3` is the completed 2.2.0 run, intact, available read-only on the work PC next to the identical input file, and that the supplied 1,086 / 2,155 / 2,924 come from `TOP3_CAPACITY_PRIMARY.csv` | PRE/POST (R-11); the run proceeds without PRE/POST if the folder is unavailable, with the comparison deferred | POST runs standalone; PRE/POST deferred |
-| B-5 | **Admissible universe sign-off**: ADMISSIBLE = `OLD_PLUS_NEW_SAFE` (attested registries included under the Phase 3 standard), NO_NEW_REGISTRY as the single source-risk contrast, legacy ALL as audit only | R-9/R-10 | as stated |
-| B-6 | **Approval of policy B details**: one-SE shortlist, near-tie tolerance (< 1 captured patient per inner fold), l1 ratio 1.0 added for policy B only | R-7/R-8 | as stated |
-| B-7 | **Approval of the forensic diagnostic as a shareable aggregate** (feature name × fold × training AUROC) | R-6 output in `share\` | kept local in `work\` only |
-| B-8 | **Negative-control thresholds** (mean AUROC > 0.55 or mean Recall@Top3 > 5% → stop) and N = 10 seeds | R-13 | as stated |
-| B-9 | **Clinical lead** confirms Hebrew wording for the new tables (Top3, PRE/POST, forensic, negative controls) | report text | English labels with existing Hebrew glossary terms |
-| B-10 | **Data custodian** confirms the January 2026 extract on the work PC is byte-identical to the PRE input (sha256) and has not been re-exported | STOP otherwise | — |
-
-None of B-2, B-3 and B-9 blocks the implementation or the run; B-1, B-4, B-5, B-6, B-7, B-8 and B-10 must be settled before `REGISTRATION_EXP1.md` is frozen and the real preflight starts.
+| B-1 | **Data custodian**: the January 2026 extract on the work PC is byte-identical to the PRE input (sha256) and was not re-exported | R-10 (b); STOP otherwise | — |
+| B-2 | **PRE folder**: `100k_falling_db_phase5_v3` intact, complete, read-only, available next to the input | R-10; STOP otherwise | — |
+| B-3 | **CCI_Group dictionary** (optional): if an authoritative ordered or nominal dictionary arrives before registration, the corresponding branch is recorded in `REGISTRATION_EXP1.md` | R-4 | `quarantine` |
+| B-4 | **Clinical lead**: Hebrew wording for the new tables (Top 3% headline, PRE/POST, negative controls) | report text | English labels with existing Hebrew glossary terms |
