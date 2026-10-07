@@ -70,7 +70,7 @@ Not changed: `thresholds.py` (the 2.2.0 tuning objective), `capacity.py` (the To
 | Phase 5 slow end-to-end suite `test_phase5_e2e.py -m slow` (16 tests: planted run, folds, share scan, report-only, dashboard, status / estimate, tampered plan, interrupted resume, null scenario, deterministic rerun, outcome contract, duplicate ids, PRE / POST rehearsal with a synthetic PRE, control hard stop) | **16 passed** (18 min 23 s) |
 | Packaging tests on the built package (restore + manifest) | **399 of 399 files verified**; the Phase 5 fast subset run from the extracted package source: **56 passed** |
 
-The one failure in the repository fast suite, `tests/unit/test_packaging.py::test_no_machine_specific_paths_in_repository`, is **pre-existing**: it names `FINAL_RUN_READINESS.md` (a Phase 2 document from the 0.8.1 baseline that carries `C:\Users\...` paths), and it fails identically on the base commit `2398fb9` (verified in a worktree). That file is not part of the handoff package.
+The one failure in the repository fast suite, `tests/unit/test_packaging.py::test_no_machine_specific_paths_in_repository`, is **pre-existing**: it names `FINAL_RUN_READINESS.md` (a Phase 2 document from the 0.8.1 baseline that carries Windows user-profile paths), and it fails identically on the base commit `2398fb9` (verified in a worktree). That file is not part of the handoff package.
 
 ## 5. Synthetic rehearsals (no real data)
 
