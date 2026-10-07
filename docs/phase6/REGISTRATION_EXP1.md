@@ -54,7 +54,7 @@ The first table of both summaries is `TOP3_PRE_POST_HEADLINE.csv`: per arm (OLD,
 ## 6. Run order on the work PC (CMD)
 
 1. `--preflight-only --pre-run <PRE>` (nothing fitted; PRE verified; folds adopted)
-2. `--negative-controls --mode quick --pre-run <PRE>` (10 permutations; hard stop on failure)
+2. `--negative-controls --pre-run <PRE>` (10 permutations with their own registered quick budget; the folder keeps its mode; hard stop on failure)
 3. `--mode overnight --resume --pre-run <PRE>` (the run; resumable with the same command)
 4. `meuhedet-phase5-dashboard --out <OUT>` (reporting only)
 5. send back `<OUT>\share` only

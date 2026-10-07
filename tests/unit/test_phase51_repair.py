@@ -254,6 +254,7 @@ def make_pre_folder(pre: Path, *, keys: np.ndarray, y: np.ndarray, outer: np.nda
     t3.to_csv(share / "TOP3_CAPACITY_PRIMARY.csv", index=False)
     rows = [{"feature": f, "class": "SAFE_VERIFIED", "in_OLD": f in sets[SET_OLD], "in_OLD_PLUS_ALL_NEW_ELIGIBLE": f in sets[SET_ALL],
              "in_OLD_PLUS_NEW_SAFE": f in sets[SET_SAFE]} for f in sets[SET_ALL]]
+    rows = [r for r in rows if r["feature"] != "new_deficit_count_proxy"]                     # one row per feature, as a real 2.2.0 table has
     rows.append({"feature": "new_deficit_count_proxy", "class": "INELIGIBLE_LEAKAGE", "in_OLD": False, "in_OLD_PLUS_ALL_NEW_ELIGIBLE": False, "in_OLD_PLUS_NEW_SAFE": False})
     pd.DataFrame(rows).to_csv(share / "FEATURE_ELIGIBILITY.csv", index=False)
     return {"plan": plan, "preds": preds, "top3": t3}

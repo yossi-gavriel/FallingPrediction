@@ -200,7 +200,8 @@ def membership_table(pre: Path, post_registry: pd.DataFrame, post_units: list[di
     """Every feature: PRE class / sets vs POST class / sets, and the reason for any difference (R-1 / R-2 per fold / R-4)."""
     pf = Path(pre) / "share" / "FEATURE_ELIGIBILITY.csv"
     pre_t = pd.read_csv(pf) if pf.is_file() else pd.DataFrame(columns=["feature", "class", "in_OLD", "in_OLD_PLUS_ALL_NEW_ELIGIBLE", "in_OLD_PLUS_NEW_SAFE"])
-    pre_t = pre_t.set_index("feature") if "feature" in pre_t.columns else pre_t
+    if "feature" in pre_t.columns:
+        pre_t = pre_t.drop_duplicates("feature", keep="last").set_index("feature")   # one row per feature (the last row wins)
     tf = lambda v: str(v).strip().lower() in ("true", "1")  # noqa: E731
     dropped: dict[str, list[str]] = {}
     for u in post_units:
@@ -215,8 +216,10 @@ def membership_table(pre: Path, post_registry: pd.DataFrame, post_units: list[di
         why = []
         if pre_cls == "INELIGIBLE_LEAKAGE" and str(r["class"]) != "INELIGIBLE_LEAKAGE":
             why.append("R-1: the 2.2.0 outcome-dependent AUROC exclusion no longer applies (label-free gates only)")
-        if str(r.get("override", "")):
-            why.append(f"R-4: registered override '{r.get('override')}'")
+        ov = r.get("override", "")
+        ov = "" if ov is None or (isinstance(ov, float) and math.isnan(ov)) else str(ov).strip()
+        if ov and ov.lower() != "nan":
+            why.append(f"R-4: registered override '{ov}'")
         if f in dropped:
             why.append(f"R-2: dropped by the per-fold coverage gate in {len(dropped[f])} unit(s)")
         if pre_cls != str(r["class"]) and not why:

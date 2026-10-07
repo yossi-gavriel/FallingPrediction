@@ -709,8 +709,9 @@ def _add_phase5_parsers(sub: Any) -> None:
     p.add_argument("--pre-run", help="Phase 5.1: the COMPLETED Phase 5 2.2.0 output folder (PRE). REQUIRED on real data: verified before anything is "
                                      "fitted (input sha256, cohort / labels, fold hashes, ENET units, Top-3%% table reproduced); its outer folds are "
                                      "adopted; it is never written to")
-    p.add_argument("--negative-controls", action="store_true", help="Phase 5.1: run the frozen-fold label-permutation controls (quick budget, ENET, "
-                                                                   "ADMISSIBLE) after the preflight and before the overnight run; a failure is a hard stop")
+    p.add_argument("--negative-controls", action="store_true", help="Phase 5.1: run the frozen-fold label-permutation controls (ENET, ADMISSIBLE; their "
+                                                                   "own registered quick budget whatever --mode - keep the folder's --mode) after the preflight "
+                                                                   "and before the overnight run; a failure is a hard stop")
     p.add_argument("--share-forensic", action="store_true", help="also publish work/FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv to share/ (aggregate: feature x "
                                                                 "fold x training AUROC) after the privacy scan; local in work/ by default")
     p.set_defaults(func=_cmd_meuhedet_phase5)

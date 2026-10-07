@@ -62,10 +62,11 @@ Without `--pre-run` a real-data preflight stops with `PRE_RUN_REQUIRED`.
 ## 5. Negative controls (mandatory before the run; quick budget; about 0.5-1.5 h)
 
 ```bat
-.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --pre-run "%PRE%" --negative-controls --mode quick
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --pre-run "%PRE%" --negative-controls
 ```
 
-Ten frozen-fold label permutations through the complete unit pipeline. Expected last line `NEGATIVE CONTROLS PASSED` (mean AUROC <= 0.55 and mean
+No `--mode` here: the folder keeps the mode of its preflight (overnight by default) and the controls always use their own registered quick budget;
+a different `--mode` on the same folder stops with `PLAN_MISMATCH`. Ten frozen-fold label permutations through the complete unit pipeline. Expected last line `NEGATIVE CONTROLS PASSED` (mean AUROC <= 0.55 and mean
 Recall@Top3 <= 5%). `STOPPED [NEGATIVE_CONTROL_FAILED]` is a hard stop: nothing is fitted or reported until the cause is found and recorded in
 `docs/phase6/AMENDMENTS.md`. The overnight command refuses a folder without passed controls (`NEGATIVE_CONTROLS_REQUIRED`).
 
