@@ -114,8 +114,8 @@ def run_stability(ctx: Ctx, family: str, setname: str, *, replicates: int) -> No
     d = task_dir(ctx, name)
     d.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    feats = ctx.sets[setname]
     final = load_result(ctx, f"FINAL__{family}__{setname}__all")
+    feats = list(final.get("features_effective") or ctx.sets[setname])      # Phase 5.1: the FINAL model's features after the label-free coverage gate
     cfgm = final["config"]
     rng = np.random.default_rng(ctx.seed + 101)
     n = len(ctx.y)

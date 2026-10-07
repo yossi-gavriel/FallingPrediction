@@ -1,3 +1,7 @@
+# Phase 5.1 (Phase 5 3.0.0) - REPAIR-ONLY METHODOLOGICAL CORRECTION of the Phase 5 2.2.0 run (Experiment 1, docs/phase6/FINAL_CONSENSUS.md and
+# docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md): the same question, snapshot, cohort, labels, outer folds (ADOPTED from the completed 2.2.0
+# run, hash-verified), seeds, feature-set rules, ENET family, tuning objective, candidate space and budgets - with the methodological defects of
+# 2.2.0 corrected and nothing else changed. No Policy B, no new l1 ratio, no new family, no new selection strategy (those are Experiment 2).
 # Phase 5 - 2026 REDEVELOPMENT + INCREMENTAL VALUE OF THE NEW V21 INFORMATION (Index_Date 2026-01-01, prediction at the END of the index day).
 # INTERNAL NESTED CROSS-VALIDATION ON THE 2026 SNAPSHOT: development data, never called external validation. Phase 4 (temporal validation of the
 # frozen Phase 3 models) stays frozen and unused. Every rule below is declared BEFORE any 2026 outcome is analysed; the run records this file's sha256
@@ -6,7 +10,7 @@
 # PRIMARY QUESTION (management): at approximately the same >= 70% fall sensitivity, does adding the new V21 information reduce the number and the
 # percentage of false alerts?   PRIMARY comparison: ENET OLD vs ENET OLD_PLUS_ALL_NEW_ELIGIBLE (pre-declared; LASSO / XGBoost are secondary).
 phase5:
-  version: 2
+  version: 3                                          # Phase 5.1 repair-only settings; the loader refuses a version-2 file
   index_date: "2026-01-01"
   seed: 20261201
   design_label: "INTERNAL NESTED CROSS-VALIDATION ON 2026 SNAPSHOT"
@@ -50,8 +54,8 @@ phase5:
   eligibility:
     min_known_observed_rows: 100                      # = Phase 3 eligibility.min_observed_train_rows (KNOWN, non-NULL rows of the usable cohort)
     max_unreadable_share: 0.01                        # wrong-type / not-allowed cells: > 1% of the eligible rows -> INELIGIBLE_DATA (old) / _SEMANTICS (new)
-    leakage_univariate_auroc: 0.80                    # = Phase 3 gates.single_feature_univariate_auroc: a single predictor this strong is INELIGIBLE_LEAKAGE
-                                                      #   (an exclusion-only safety gate - it never selects or ranks predictors; reported for DWH review)
+    # Phase 5.1 R-1: the 2.2.0 single-feature AUROC >= 0.80 EXCLUSION is REMOVED (it read every label before the folds existed). Membership is
+    # decided by the label-free rules of this block only; see `repair` for the per-fold coverage gate and the report-only forensic diagnostic.
     safe_classes: [SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED]               # timing classes allowed in OLD and OLD_PLUS_NEW_SAFE (= Phase 3 PRIMARY_FULL)
     all_new_classes: [SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING]   # OLD_PLUS_ALL_NEW_ELIGIBLE also takes plausibly-at-index,
                                                                              #   non-future predictors whose timing is uncertain
@@ -62,19 +66,19 @@ phase5:
 
   # ------------------------------------------------------------------ the experiment
   cv: {outer_folds: 5, inner_folds: 5}                # one fixed stratified assignment shared by every model and feature set
-  families: [LASSO, ENET, XGB]                        # pre-declared; no other algorithm is added after results are seen
+  families: [ENET]                                    # Experiment 1 is ENET only (pre-declared); LASSO / XGB code is retained for Experiment 2, not fitted
   primary_family: ENET                                # the PRIMARY verdict comes from ENET only (pre-declared, never chosen after results)
   sets: [OLD, OLD_PLUS_ALL_NEW_ELIGIBLE, OLD_PLUS_NEW_SAFE]
   primary_comparison: [OLD, OLD_PLUS_ALL_NEW_ELIGIBLE]     # the business comparison
   secondary_comparison: [OLD, OLD_PLUS_NEW_SAFE]           # the stricter scientific sensitivity analysis
   domains: [NEW_DIAGNOSIS, NEW_VISION_HEARING, NEW_REGISTRY, NEW_FRAILTY_OR_RISK_PROXY]   # = V21 schema domains (OLD + domain)
-  domain_families: [LASSO, ENET, XGB]
-  ablations:                                          # removed from OLD_PLUS_ALL_NEW_ELIGIBLE, for the PRIMARY family only
+  domain_families: []                                 # Phase 5.1: no DOMAIN units (the 2.2.0 run produced the descriptive domain tables once)
+  ablations:                                          # ONE registered SECONDARY DIAGNOSTIC: ADMISSIBLE (OLD_PLUS_NEW_SAFE) minus the NEW_REGISTRY domain
     families: [ENET]
-    remove_each_domain: true                          # NO_<domain> for every domain with an eligible feature
+    base_set: OLD_PLUS_NEW_SAFE                       # the contrast is taken from the ADMISSIBLE set, never from the legacy ALL set
+    remove_each_domain: false
     blocks:
-      NO_FALL_RECENCY: {features: [falls_days_since_last, falls_count_30d, falls_count_90d]}
-      NO_TIMING_UNCERTAIN: {classes: [UNCERTAIN_TIMING]}
+      NO_NEW_REGISTRY: {domains: [NEW_REGISTRY]}      # secondary diagnostic only: it never enters the PRE / POST headline or any verdict
   # domain additions / ablations re-tune linear models in full; XGBoost re-uses the per-fold hyper-parameters of its reference model (OLD for domains)
   # with its own inner early stopping and inner thresholds: only the feature set changes
   derived_tuning: {LASSO: full, ENET: full, XGB: reuse_reference}
@@ -160,3 +164,28 @@ phase5:
     default_core_share: 0.6                            # default --jobs = 60% of the logical cores (never all), at least 1
     max_default_jobs: 12
     heartbeat_seconds: 30
+
+  # ------------------------------------------------------------------ Phase 5.1 repair (docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md, R-1 ... R-6)
+  repair:
+    label_free_eligibility_only: true                 # R-1: no outcome-dependent membership decision anywhere
+    per_fold_coverage_gate: true                      # R-2: min_known_observed_rows re-applied on each unit's outer-TRAINING rows (label-free)
+    inner_lambda_grid: true                           # R-3: lambda_max anchored inside each inner training fold; outer refit re-anchored on outer training
+    forensic_auroc_warn: 0.80                         # R-6: training-fold univariate AUROC >= this -> WARN + written adjudication; NEVER an exclusion
+    other_level_for_learned_codes: true               # R-5: rare / unseen nominal codes -> explicit `other` level (learned-level codes only)
+  feature_overrides:                                  # R-4: applied to an in-memory copy of the Phase 3 catalogue; protected Phase 2 / 3 files untouched
+    com_cci_group:
+      branch: quarantine                              # quarantine (default) | ordinal (documented ORDER + levels) | nominal (documented meanings + levels)
+      reason: "CCI_Group dictionary not supplied by the DWH before registration: raw population-record group code with undocumented order / spacing"
+  negative_controls:                                  # R-12: frozen-fold label permutations on the real data BEFORE PRIMARY (quick budget, ENET, ADMISSIBLE)
+    seeds: 10                                         # 10 fixed seeds (synthetic / test runs may override; a real run requires all 10)
+    capacity_permille: 30                             # Recall@Top3 is read at the 3% operating capacity (within-fold allocation, row-key ties)
+    max_mean_auroc: 0.55                              # registered sanity-stop thresholds (fixed; the loader refuses any other value):
+    max_mean_recall_top3: 0.05                        #   mean AUROC > 0.55 OR mean Recall@Top3 > 5% over the seeds -> STOP NEGATIVE_CONTROL_FAILED
+    set: OLD_PLUS_NEW_SAFE
+    family: ENET
+    mode: quick
+  pre_run:                                            # R-10: the completed 2.2.0 run is REQUIRED on real data and verified before anything is fitted
+    required: true
+    verify: [plan_complete, input_sha256, cohort_and_labels, fold_hashes_adopted, enet_units_complete, top3_capacity_table_reproduced]
+    comparator_set: OLD_PLUS_NEW_SAFE                 # ADMISSIBLE = the existing OLD_PLUS_NEW_SAFE (PI decision); the primary PRE / POST arms are OLD and ADMISSIBLE
+    audit_set: OLD_PLUS_ALL_NEW_ELIGIBLE              # legacy ALL: audit / exploratory only

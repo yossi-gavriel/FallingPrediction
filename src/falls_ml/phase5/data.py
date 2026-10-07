@@ -11,8 +11,10 @@ OLD    the Phase 3 universe (the 93-feature catalogue + BASELINE_15) rebuilt wit
        removed in V21 is not reproducible (INELIGIBLE_DATA); a removed VALIDATION-only input is bridged as the schema declares (Prior_Fall_Missing_Ind).
 NEW    every V21 column the schema diff classes NEW_CANDIDATE_PREDICTOR or RENAMED_OR_REPLACED - exact names from the authoritative schema, never a
        hand-written short list: timing from its declared basis (row-level record date / attestation / uncertain), semantics from its declared type,
-       coverage, the univariate leakage safety screen.
-Timing classes: SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING, INELIGIBLE_TIMING, INELIGIBLE_SEMANTICS, INELIGIBLE_DATA, INELIGIBLE_LEAKAGE.
+       coverage. Phase 5.1 (3.0.0): membership is decided by LABEL-FREE rules only - the 2.2.0 outcome-dependent single-feature AUROC
+       exclusion is removed (R-1); a per-fold label-free coverage gate and a report-only forensic AUROC live inside every unit (engine.py).
+Timing classes: SAFE_VERIFIED, SAFE_BOUNDED, SAFE_ATTESTED, UNCERTAIN_TIMING, INELIGIBLE_TIMING, INELIGIBLE_SEMANTICS, INELIGIBLE_DATA, INELIGIBLE_LEAKAGE
+(INELIGIBLE_LEAKAGE only through the label-free Phase 3 class NOT_RECOVERABLE_FORBIDDEN, never through a number).
 Sets: OLD = OLD features with a SAFE class; OLD_PLUS_ALL_NEW_ELIGIBLE adds every new predictor with a SAFE class or UNCERTAIN_TIMING (plausibly
 known at the index day, not future-derived); OLD_PLUS_NEW_SAFE adds only SAFE-class new predictors with a DEFENSIBLE provenance.
 A cell whose record is dated AFTER Index_Date (UNKNOWN at prediction time) or that cannot be read takes the feature's NO-RECORD state, so no
@@ -158,14 +160,23 @@ def _no_record_state(kind: str, missing: str, op: str = "copy") -> float:
     return 0.0 if kind in ("binary", "count") else np.nan
 
 
-def _univariate_auroc(x: np.ndarray, y: np.ndarray) -> float:
-    from sklearn.metrics import roc_auc_score
-
-    v = np.where(np.isfinite(x), x, (np.nanmin(x) - 1.0) if np.isfinite(x).any() else 0.0)
-    if len(np.unique(v)) < 2 or len(np.unique(y)) < 2:
-        return 0.5
-    a = float(roc_auc_score(y, v))
-    return max(a, 1.0 - a)
+def apply_catalogue_overrides(cat: Any, overrides: dict[str, Any] | None) -> Any:
+    """Phase 5.1 R-4: the registered ``feature_overrides`` applied to an IN-MEMORY copy of the Phase 3 catalogue (the protected Phase 2 / 3 files are
+    never edited). ``ordinal`` -> thermometer on the documented levels (order only, no spacing); ``nominal`` -> one-hot on the documented levels
+    (reference = the first documented level, rare / unseen codes -> ``other``); ``quarantine`` changes nothing here (the registry handles it)."""
+    if not overrides:
+        return cat
+    feats = []
+    for f in cat.features:
+        o = overrides.get(f.name)
+        br = str((o or {}).get("branch", ""))
+        if o and br in ("ordinal", "nominal"):
+            levels = tuple(float(v) for v in (o.get("levels") or ()))
+            feats.append(dataclasses.replace(f, kind="ordinal" if br == "ordinal" else "categorical", linear="thermometer" if br == "ordinal" else "onehot",
+                                             levels=levels, missing=str(o.get("missing") or f.missing)))
+        else:
+            feats.append(f)
+    return dataclasses.replace(cat, features=tuple(feats))
 
 
 def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any]) -> Prepared:
@@ -173,7 +184,9 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
     from falls_ml.phase4.evaluate import outcome_contract, read_outcomes
     from falls_ml.phase4.sealed import read_columns, read_header
 
-    contract, dictionary, cat = L["contract"], L["dictionary"], L["cat"]
+    cat = apply_catalogue_overrides(L["cat"], cfg.get("feature_overrides"))
+    L = {**L, "cat": cat}
+    contract, dictionary = L["contract"], L["dictionary"]
     schema = cfg.schema
     idx = pd.Timestamp(cfg["index_date"])
     header = read_header(src)
@@ -364,15 +377,23 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
         reg_rows.append(r)
         meta[r["feature"]] = m
     values = pd.concat([old_vals, new_vals], axis=1)
-    # ---- coverage + the leakage safety screen (usable cohort; the screen can only EXCLUDE)
+    # ---- Phase 5.1 R-4: registered feature overrides (CCI_Group quarantine unless an authoritative DWH dictionary was registered)
     el = cfg["eligibility"]
-    lim_auc = float(el["leakage_univariate_auroc"])
+    overrides = cfg.get("feature_overrides") or {}
+    for r in reg_rows:
+        o = overrides.get(r["feature"])
+        if o and str(o.get("branch")) == "quarantine" and r["class"] in (*SAFE, UNCERTAIN):
+            r["class"], r["reason"] = I_SEMANTICS, (f"QUARANTINED by the Phase 5.1 registration: {o.get('reason') or 'semantics not verified'} "
+                                                     "(no authoritative DWH dictionary; no ordinal spacing or order is inferred)")
+    # ---- label-free coverage QA (usable cohort). The 2.2.0 outcome-dependent single-feature AUROC exclusion is REMOVED (Phase 5.1 R-1):
+    #      no label is read here; the forensic univariate AUROC lives inside every unit (training rows only) and never decides membership.
     screened = set(el["all_new_classes"]) | set(el["safe_classes"])
     reg = pd.DataFrame(reg_rows)
-    reg["univariate_auroc"] = np.nan
+    reg["univariate_auroc"] = np.nan                   # kept for the 2.2.0 column layout; empty: see work/FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv
     reg["n_known_observed"] = 0
     reg["missing_pct"] = np.nan
     reg["prevalence_or_median"] = ""
+    reg["override"] = reg["feature"].map(lambda f: str((overrides.get(f) or {}).get("branch", "")))
     minobs = int(el["min_known_observed_rows"])
     for i, r in reg.iterrows():
         f = r["feature"]
@@ -384,17 +405,9 @@ def prepare(src: Path, cfg: Any, L: dict[str, Any], *, input_info: dict[str, Any
         nm = int((~obs).sum())
         reg.at[i, "missing_pct"] = round(100.0 * float((~obs).mean()), 2) if not (0 < nm < 10 or 0 < int(obs.sum()) < 10) else np.nan
         reg.at[i, "prevalence_or_median"] = _dist_text(x, meta[f]["kind"])
-        if r["class"] in screened:
-            if int(obs.sum()) < minobs or len(np.unique(x[obs])) <= 1:
-                reg.at[i, "class"] = I_DATA
-                reg.at[i, "reason"] = f"{int(obs.sum())} KNOWN non-NULL rows (< {minobs}) or constant"
-                continue
-            a = _univariate_auroc(x, y)
-            reg.at[i, "univariate_auroc"] = round(a, 4)
-            if a >= lim_auc:
-                reg.at[i, "class"] = I_LEAKAGE
-                reg.at[i, "reason"] = (f"single-feature AUROC {a:.3f} >= {lim_auc:g}: implausibly strong alone (future / outcome-derived information "
-                                       "suspected) - excluded, DWH review required")
+        if r["class"] in screened and (int(obs.sum()) < minobs or len(np.unique(x[obs])) <= 1):
+            reg.at[i, "class"] = I_DATA
+            reg.at[i, "reason"] = f"{int(obs.sum())} KNOWN non-NULL rows (< {minobs}) or constant (label-free cohort QA; re-checked per fold)"
     # ---- set membership with a reason for every inclusion / exclusion
     reg["in_OLD"], reg["in_OLD_PLUS_ALL_NEW_ELIGIBLE"], reg["in_OLD_PLUS_NEW_SAFE"], reg["set_reason"] = False, False, False, ""
     for i, r in reg.iterrows():

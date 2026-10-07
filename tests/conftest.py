@@ -34,7 +34,8 @@ def protected_source_matches():
         if actual == expected:
             return True
         return (rel in ORIGINAL_SHAS and expected == ORIGINAL_SHAS[rel]
-                and (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "0.12.3"
+                and (ROOT / "VERSION").read_text(encoding="utf-8").strip() in ("0.12.3", "0.13.0")   # the reviewed 0.12.3 lifecycle patch
+                                                                                                   # (identical hashes) carries forward to 0.13.0
                 and actual == patches[rel])
 
     return matches

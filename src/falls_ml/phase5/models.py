@@ -33,23 +33,34 @@ def _path(A: np.ndarray, y: np.ndarray, lambdas: np.ndarray, l1_ratio: float, sp
     return enet_logistic_path(A, y.astype(float), np.asarray(lambdas, dtype=float), float(l1_ratio), tol=float(spec["tol"]), max_iter=int(spec["max_iter"]))
 
 
+def ratio_grid(n: int, min_ratio: float) -> np.ndarray:
+    """The dimensionless lambda grid (1 ... min_ratio, logarithmic): a candidate is identified by its INDEX on this grid, never by an absolute
+    lambda, so every inner fold and the outer refit anchor the same recipe on their OWN training rows (Phase 5.1 R-3)."""
+    return np.logspace(0.0, math.log10(float(min_ratio)), int(n))
+
+
 def linear_path(Xtr: pd.DataFrame, ytr: np.ndarray, Xva: pd.DataFrame, features: list[str], meta: dict[str, Any], *, l1_ratio: float,
-                lambdas: np.ndarray, spec: dict[str, Any]) -> dict[str, Any]:
-    """One inner fold, one l1_ratio: predictions on the validation rows for every lambda of the (shared) grid, non-zero counts, convergence."""
+                n_lambda: int, lambda_min_ratio: float, spec: dict[str, Any]) -> dict[str, Any]:
+    """One inner fold, one l1_ratio: the design AND the lambda grid are fitted / anchored on the inner-TRAINING rows only (lambda_max of this
+    fold's own design, Phase 5.1 R-3); predictions on the validation rows for every grid index, non-zero counts, convergence."""
     from scipy.special import expit
 
     d = LinearDesign(features, meta).fit(Xtr)
     A, B = d.transform(Xtr), d.transform(Xva)
+    lambdas = lambda_grid(A, np.asarray(ytr, dtype=float), l1_ratio, int(n_lambda), float(lambda_min_ratio))
     path = _path(A, ytr, lambdas, l1_ratio, spec)
     eta = path.intercept[None, :] + B @ path.beta.T
-    return {"preds": expit(eta), "nnz": (path.beta != 0).sum(axis=1).astype(float), "not_converged": int((~path.converged).sum())}
+    return {"preds": expit(eta), "nnz": (path.beta != 0).sum(axis=1).astype(float), "not_converged": int((~path.converged).sum()),
+            "lambda_max": float(lambdas[0]), "lambdas": lambdas}
 
 
 def linear_path_task(Xarr: np.ndarray, cols: list[str], a: np.ndarray, v: np.ndarray, ytr: np.ndarray, meta: dict[str, Any], l1_ratio: float,
-                     lambdas: np.ndarray, spec: dict[str, Any]) -> dict[str, Any]:
-    """Process-pool entry point (the coordinate-descent loop holds the GIL): the training matrix arrives memory-mapped."""
+                     n_lambda: int, lambda_min_ratio: float, spec: dict[str, Any]) -> dict[str, Any]:
+    """Process-pool entry point (the coordinate-descent loop holds the GIL): the training matrix arrives memory-mapped. Only the inner-training
+    rows ``a`` reach the design fit and the grid anchor; the validation rows ``v`` are transformed and predicted only."""
     X = pd.DataFrame(np.asarray(Xarr), columns=cols)
-    return linear_path(X.iloc[a], np.asarray(ytr)[a], X.iloc[v], cols, meta, l1_ratio=l1_ratio, lambdas=lambdas, spec=spec)
+    return linear_path(X.iloc[a], np.asarray(ytr)[a], X.iloc[v], cols, meta, l1_ratio=l1_ratio, n_lambda=n_lambda, lambda_min_ratio=lambda_min_ratio,
+                       spec=spec)
 
 
 @dataclass

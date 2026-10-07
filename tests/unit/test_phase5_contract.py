@@ -312,10 +312,18 @@ def test_unknown_clinical_column_stops_the_preflight(tmp_path: Path) -> None:
 
 
 def test_post_index_records_and_a_leaky_new_feature_are_excluded(prepared: dict[str, Any], tmp_path: Path) -> None:
+    """Phase 5.1 (R-1): the leaky proxy is kept OUT of OLD and ADMISSIBLE by its PROVENANCE / TIMING (UNCERTAIN_TIMING, EXPERIMENTAL_COMPOSITE),
+    never by a number; it stays in the legacy ALL set (audit only) and is flagged by the forensic diagnostic inside the units."""
+    from falls_ml.phase5.engine import univariate_auroc
+
     P, S = prepared["P"], prepared["S"]
     reg = P.registry.set_index("feature")
-    assert reg.loc["new_deficit_count_proxy", "class"] == "INELIGIBLE_LEAKAGE"          # single-feature AUROC >= 0.80 (trap)
-    assert "new_deficit_count_proxy" not in {f for v in S["sets"].values() for f in v}
+    assert reg.loc["new_deficit_count_proxy", "class"] == "UNCERTAIN_TIMING"          # provenance / timing class, not a numeric exclusion
+    assert "INELIGIBLE_LEAKAGE" not in set(reg["class"])                               # no outcome-dependent exclusion exists any more
+    assert reg["univariate_auroc"].isna().all()                                        # the preflight reads no label for eligibility
+    assert "new_deficit_count_proxy" not in S["sets"]["OLD"] and "new_deficit_count_proxy" not in S["sets"]["OLD_PLUS_NEW_SAFE"]
+    assert "new_deficit_count_proxy" in S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"]
+    assert univariate_auroc(P.frame["new_deficit_count_proxy"].to_numpy(dtype=float), P.y) >= 0.80   # what the forensic diagnostic will report
     r = _prepare(tmp_path, traps=("post_index_dx",), n=2000)
     reg2 = r["P"].registry.set_index("feature")
     dx = [f for f in reg2.index if f.startswith("new_") and reg2.loc[f, "domain"] in ("NEW_DIAGNOSIS", "NEW_VISION_HEARING")]
@@ -331,7 +339,7 @@ def test_post_index_or_ineligible_feature_in_x_hard_stops(prepared: dict[str, An
 
     P, S, cfg = prepared["P"], prepared["S"], prepared["cfg"]
     x_guard(S["sets"], P.registry, S["kinds"], P.sealed, list(P.frame.columns), cfg)          # the real sets pass
-    for bad in ({**S["sets"], "OLD_PLUS_ALL_NEW_ELIGIBLE": [*S["sets"]["OLD_PLUS_ALL_NEW_ELIGIBLE"], "new_deficit_count_proxy"]},     # leaky
+    for bad in ({**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_deficit_count_proxy"]},                  # uncertain timing / composite
                 {**S["sets"], "OLD_PLUS_NEW_SAFE": [*S["sets"]["OLD_PLUS_NEW_SAFE"], "new_registry_smoking_subcode"]},                # not SAFE
                 {**S["sets"], "OLD": [*S["sets"]["OLD"], "new_dizziness_ind"]},                                                      # NEW in OLD
                 {**S["sets"], "OLD": [*S["sets"]["OLD"], "hypertension"]}):                                                          # removed in V21
@@ -499,6 +507,11 @@ def test_unit_choices_do_not_depend_on_outer_labels(prepared: dict[str, Any], tm
     assert js(r1["inner_objective"], sort_keys=True, default=str) == js(r2["inner_objective"], sort_keys=True, default=str)
     a1, a2 = load_result(c1, spec)["arrays"], load_result(c2, spec)["arrays"]
     assert np.array_equal(a1["inner_oof"], a2["inner_oof"]) and np.array_equal(a1["p_test"], a2["p_test"]) and np.array_equal(a1["test_idx"], a2["test_idx"])
+    # Phase 5.1: the per-fold coverage gate (R-2) and the forensic diagnostic (R-6) read the TRAINING rows only - flipped holdout labels change nothing
+    assert r1["features_effective"] == r2["features_effective"] and r1["dropped_coverage"] == r2["dropped_coverage"]
+    assert r1["forensic_auroc"] == r2["forensic_auroc"] and r1["forensic_flagged"] == r2["forensic_flagged"]
+    if family in ("LASSO", "ENET"):
+        assert r1["lambda_max_inner"] == r2["lambda_max_inner"] and r1["lambda_max_outer"] == r2["lambda_max_outer"]
     t = r1["thresholds"]["0.70"]
     assert t == pytest.approx(__import__("falls_ml.phase5.thresholds", fromlist=["x"]).operating_point(
         c1.y[a1["train_idx"]].astype(float), a1["inner_oof"], 0.70)["threshold"])                       # 70% threshold = inner OOF only
@@ -570,7 +583,7 @@ def test_config_is_validated_and_predeclared() -> None:
     from falls_ml.phase5.config import load_phase5_config
 
     cfg = load_phase5_config()
-    assert cfg["families"] == ["LASSO", "ENET", "XGB"] and cfg.primary_sensitivity == 0.70 and cfg.outer_folds == 5 and cfg.inner_folds == 5
+    assert cfg["families"] == ["ENET"] and cfg.primary_sensitivity == 0.70 and cfg.outer_folds == 5 and cfg.inner_folds == 5   # Phase 5.1: ENET only
     assert cfg["xgb"]["fixed"]["scale_pos_weight"] == 1.0
     assert cfg["sets"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"] and cfg["primary_comparison"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE"]
     b = cfg.budget

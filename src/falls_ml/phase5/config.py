@@ -16,9 +16,14 @@ from falls_ml.paths import resolve_path
 from falls_ml.phase5.schema import V21Schema, load_v21_schema
 
 DEFAULT_CONFIG = "configs/meuhedet/phase5.yaml"
-FAMILIES = ("LASSO", "ENET", "XGB")
+CONFIG_VERSION = 3                                   # Phase 5.1 repair-only settings (Phase 5 3.0.0); a 2.x file is refused
+FAMILIES = ("LASSO", "ENET", "XGB")                  # the families the code knows; the plan's `families` (a subset) decides what is fitted
 PRIMARY_FAMILY = "ENET"
 MODES = ("quick", "overnight")
+OVERRIDE_BRANCHES = ("quarantine", "ordinal", "nominal")
+REGISTERED_OVERNIGHT_ENET = {"n_lambda": 40, "l1_ratios": [0.1, 0.25, 0.5, 0.75, 0.9]}   # the 2.2.0 candidate space: fixed for the repair (no new l1 ratio)
+REGISTERED_ENET_SOLVER = {"lambda_min_ratio": 1.0e-3, "tol": 1.0e-7, "max_iter": 10000}
+NEGATIVE_CONTROL_LIMITS = {"max_mean_auroc": 0.55, "max_mean_recall_top3": 0.05}   # registered; the loader refuses any other value
 SET_OLD, SET_ALL, SET_SAFE = "OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"
 SETS = (SET_OLD, SET_ALL, SET_SAFE)
 SAFE_CLASSES = ("SAFE_VERIFIED", "SAFE_BOUNDED", "SAFE_ATTESTED")
@@ -98,10 +103,41 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
             re.compile(pat)
         except re.error as exc:
             problems.append(f"x_sealing.name_patterns: {pat!r} ({exc})")
-    if tuple(raw["families"]) != FAMILIES:
-        problems.append(f"families must be exactly {list(FAMILIES)} (pre-declared)")
-    if raw["primary_family"] != PRIMARY_FAMILY:
-        problems.append(f"primary_family must be {PRIMARY_FAMILY} (pre-declared)")
+    if int(raw.get("version", 0)) != CONFIG_VERSION:
+        problems.append(f"version must be {CONFIG_VERSION} (Phase 5.1 repair-only settings; a Phase 5 2.x settings file is refused)")
+    fams = list(raw["families"])
+    if not fams or any(f not in FAMILIES for f in fams) or len(set(fams)) != len(fams):
+        problems.append(f"families must be a non-empty subset of {list(FAMILIES)} without repeats (Experiment 1: [ENET])")
+    if raw["primary_family"] != PRIMARY_FAMILY or PRIMARY_FAMILY not in fams:
+        problems.append(f"primary_family must be {PRIMARY_FAMILY} and must be listed in families (pre-declared)")
+    for f, o in (raw.get("feature_overrides") or {}).items():
+        br = str((o or {}).get("branch", ""))
+        if br not in OVERRIDE_BRANCHES:
+            problems.append(f"feature_overrides.{f}.branch must be one of {OVERRIDE_BRANCHES}")
+        elif br in ("ordinal", "nominal") and len(list((o or {}).get("levels") or [])) < 2:
+            problems.append(f"feature_overrides.{f}: the {br} branch needs the documented levels (>= 2) from the authoritative DWH dictionary")
+        elif br == "quarantine" and not str((o or {}).get("reason", "")).strip():
+            problems.append(f"feature_overrides.{f}: the quarantine branch needs a reason")
+    nc = raw.get("negative_controls") or {}
+    for k in ("seeds", "max_mean_auroc", "max_mean_recall_top3", "capacity_permille"):
+        if k not in nc:
+            problems.append(f"negative_controls.{k} missing")
+    if nc:
+        if float(nc.get("max_mean_auroc", 1)) != NEGATIVE_CONTROL_LIMITS["max_mean_auroc"] or \
+                float(nc.get("max_mean_recall_top3", 1)) != NEGATIVE_CONTROL_LIMITS["max_mean_recall_top3"]:
+            problems.append(f"negative_controls thresholds are registered and fixed: {NEGATIVE_CONTROL_LIMITS} (they are never weakened or changed)")
+        if int(nc.get("seeds", 0)) < 1 or int(nc.get("capacity_permille", 0)) != 30:
+            problems.append("negative_controls.seeds must be >= 1 and capacity_permille must be 30 (the 3% operating capacity)")
+    ov = (raw.get("modes") or {}).get("overnight", {}).get("enet", {})
+    if int(ov.get("n_lambda", 0)) != REGISTERED_OVERNIGHT_ENET["n_lambda"] or [float(r) for r in ov.get("l1_ratios", [])] != REGISTERED_OVERNIGHT_ENET["l1_ratios"]:
+        problems.append(f"modes.overnight.enet must stay the registered 2.2.0 candidate space {REGISTERED_OVERNIGHT_ENET} (repair-only: no new l1 ratio, no new grid)")
+    if any(float(raw["enet"].get(k, -1)) != v for k, v in REGISTERED_ENET_SOLVER.items()):
+        problems.append(f"enet solver settings must stay the registered 2.2.0 values {REGISTERED_ENET_SOLVER}")
+    ab = raw["ablations"]
+    if ab.get("base_set", SET_ALL) not in SETS:
+        problems.append(f"ablations.base_set must be one of {list(SETS)}")
+    if ab.get("remove_each_domain"):
+        problems.append("ablations.remove_each_domain must be false in the repair-only settings (one registered secondary contrast only)")
     if tuple(raw["sets"]) != SETS:
         problems.append(f"sets must be exactly {list(SETS)}")
     if list(raw["primary_comparison"]) != [SET_OLD, SET_ALL]:
@@ -129,11 +165,11 @@ def load_phase5_config(path: str | Path = DEFAULT_CONFIG, *, mode: str = "overni
     for f in ("outer_folds", "inner_folds"):
         if int(raw["cv"][f]) < 2:
             problems.append(f"cv.{f} must be >= 2")
-    for fam in FAMILIES:
+    for fam in fams:
         if raw["derived_tuning"].get(fam) not in ("full", "reuse_reference"):
             problems.append(f"derived_tuning.{fam} must be full or reuse_reference")
-    if not set(raw["domain_families"]) <= set(FAMILIES) or not set(raw["ablations"].get("families") or []) <= set(FAMILIES):
-        problems.append("domain_families / ablations.families must be model families")
+    if not set(raw["domain_families"]) <= set(fams) or not set(raw["ablations"].get("families") or []) <= set(fams):
+        problems.append("domain_families / ablations.families must be listed model families")
     if PRIMARY_FAMILY not in raw["ablations"].get("families", []):
         problems.append("ablations.families must contain the primary family")
     if problems:

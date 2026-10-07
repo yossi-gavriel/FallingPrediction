@@ -1,3 +1,115 @@
+# Phase 5.1 on the work PC – REPAIR-ONLY correction of the completed Phase 5 2.2.0 run (falls_ml 0.13.0, Phase 5 3.0.0)
+
+**Do NOT start the real run before the PI's explicit approval of the implementation evidence.** This package implements Experiment 1 of
+`docs/phase6/FINAL_CONSENSUS.md` exactly as approved in `docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md` (registration:
+`docs/phase6/REGISTRATION_EXP1.md`). It answers one question: *what happens to the existing Phase 5 result when the methodological defects are
+corrected while changing as little else as possible?* It has no success verdict. The completed 2.2.0 folder (**PRE**, for example
+`%USERPROFILE%\Downloads\100k_falling_db_phase5_v3`) is verified before anything is fitted, its outer folds are adopted, and it is never written to.
+
+Identical to PRE by construction: the input file (sha256), the usable cohort and labels, the outer folds, the seeds, the ENET family, the tuning
+objective, the candidate space (40 lambdas x l1 ratios {0.1, 0.25, 0.5, 0.75, 0.9}) and budgets, the feature-set rules, the capacity arithmetic.
+The repair: no outcome-dependent eligibility screen (R-1); a per-fold label-free coverage gate (R-2); the lambda grid anchored inside each inner
+training fold (R-3); CCI_Group quarantined (R-4); an explicit `other` level for learned nominal codes (R-5); a local, report-only forensic AUROC (R-6).
+Units: ENET x {OLD, OLD_PLUS_ALL_NEW_ELIGIBLE (audit only), OLD_PLUS_NEW_SAFE (= ADMISSIBLE)} x 5 outer folds, FINAL for the three sets, one secondary
+diagnostic (ADMISSIBLE minus NEW_REGISTRY), explanation / stability on ENET. No LASSO, no XGBoost, no domain units, no Policy B.
+
+## 0. Prerequisites (confirm before step 4)
+
+- the January 2026 extract on this PC is byte-identical to the file the PRE run used (the preflight checks its sha256 against the PRE plan);
+- the PRE folder is complete (`RUN_STATUS.json` COMPLETE, `share\RUN_MANIFEST.json` FINAL) and holds `share\TOP3_CAPACITY_PRIMARY.csv`
+  (written by the 0.12.3 dashboard command; if it is missing, run `meuhedet-phase5-dashboard` from the 0.12.3 package on the PRE folder first);
+- `OUT51` is a NEW folder (never the PRE folder, never OneDrive).
+
+## 1. Restore and set up (once)
+
+```bat
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.0"
+py -3.11 RESTORE_FILES.py.txt
+setup_windows.cmd
+.venv\Scripts\python.exe -c "import falls_ml; from falls_ml.phase5 import PHASE5_VERSION; print(falls_ml.__version__, PHASE5_VERSION)"
+```
+
+Expected `PACKAGE VERIFIED`, `INSTALLATION SUCCESSFUL`, then `0.13.0 3.0.0`.
+
+## 2. The paths (every new CMD window)
+
+```bat
+cd /d "%USERPROFILE%\Downloads\falls_ml_phase5_0.13.0"
+set PYTHONUTF8=1
+set INPUT_2026=%USERPROFILE%\Downloads\100k_falling_db_2026.csv
+set PRE=%USERPROFILE%\Downloads\100k_falling_db_phase5_v3
+set OUT51=%USERPROFILE%\Downloads\100k_falling_db_phase51_v1
+```
+
+## 3. Synthetic rehearsal (optional, no real data; 10-20 minutes)
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5-synthetic --out "%USERPROFILE%\Downloads\phase51_synthetic_smoke" --rows 4000 --negative-controls
+```
+
+Ends with `"status": "COMPLETE"`.
+
+## 4. PRE verification + preflight (mandatory first; fits nothing; minutes)
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --pre-run "%PRE%" --preflight-only
+```
+
+Read `%OUT51%\preflight\PHASE5_PREFLIGHT.md`: check P10 (PRE verified: input sha256, cohort / labels, fold hash ADOPTED, ENET units, Top-3% table
+reproduced). The last line must be `SAFE TO MODEL`. A `STOPPED [PRE_VERIFICATION_FAILED]` names the failed check; nothing was fitted - do not continue.
+Without `--pre-run` a real-data preflight stops with `PRE_RUN_REQUIRED`.
+
+## 5. Negative controls (mandatory before the run; quick budget; about 0.5-1.5 h)
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --pre-run "%PRE%" --negative-controls --mode quick
+```
+
+Ten frozen-fold label permutations through the complete unit pipeline. Expected last line `NEGATIVE CONTROLS PASSED` (mean AUROC <= 0.55 and mean
+Recall@Top3 <= 5%). `STOPPED [NEGATIVE_CONTROL_FAILED]` is a hard stop: nothing is fitted or reported until the cause is found and recorded in
+`docs/phase6/AMENDMENTS.md`. The overnight command refuses a folder without passed controls (`NEGATIVE_CONTROLS_REQUIRED`).
+
+## 6. Runtime estimate (optional)
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --estimate --mode overnight
+```
+
+## 7. The run (one command; resumable; roughly 2.5-5 h)
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --input "%INPUT_2026%" --out "%OUT51%" --pre-run "%PRE%" --mode overnight --device cpu --resume
+```
+
+`--pre-run` must name the same PRE folder as the preflight (the plan records its name and digest; a changed PRE folder stops with `PRE_RUN_MODIFIED`).
+Progress: `OVERNIGHT_PROGRESS.log`, `RUN_STATUS.json`, `RUN_TIMINGS.csv`; status from a second window:
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5 --out "%OUT51%" --status
+```
+
+## 8. Resume after an interruption
+
+Exactly the same command as step 7 (it verifies the input, settings, mode, code and PRE folder and continues with the first unfinished unit).
+
+## 9. Dashboard (reporting only) and what to send back
+
+```bat
+.venv\Scripts\python.exe -m falls_ml meuhedet-phase5-dashboard --out "%OUT51%"
+```
+
+Send back ONLY `%OUT51%\share` (zipped). Its first table, in `TOP3_PRE_POST_HEADLINE.csv` and at the top of `MANAGEMENT_SUMMARY_HE.md` /
+`SCIENTIFIC_SUMMARY.md`: for OLD and ADMISSIBLE, PRE 2.2.0 vs POST 5.1 - N, falls, exact selected count at 3%, captured falls, Recall@Top3, PPV@Top3,
+false interventions, the PRE -> POST difference in captured falls with its paired 95% CI, the difference in Recall@Top3 and in false interventions
+(per 10,000 only in addition). Also `PRE_POST_PAIRED.csv`, `PRE_POST_CONTRAST.csv`, `PRE_POST_CORRECTION.csv`, `PRE_POST_MEMBERSHIP.csv`,
+`PRE_POST_HISTORICAL_70_RULE.csv`, `PRECISION_PLANNING.csv`, `NEGATIVE_CONTROLS.csv`, `HISTORICAL_VERDICT_2_2_0.json` (the 2.2.0 70% rule, audit only)
+and the 2.2.0 share set. `work\FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv` stays local unless `--share-forensic` was given. Never send the extract,
+`work\` or `logs\`.
+
+---
+
+## Phase 5 2.2.0 runbook (historical; the PRE run) – kept for reference
+
 # Phase 5 on the work PC – 2026 redevelopment + incremental value of the new V21 information (falls_ml 0.12.3, Phase 5 2.2.0)
 
 For an **already completed Phase 5 folder**, use only the dashboard command in step 10. This 0.12.3 patch fixes SQLite ownership in the shared Phase 2/3 tuning helper and audits the unchanged Phase 5 preprocessing. It does not require a new model run. See `docs/phase5/SQLITE_LIFECYCLE_PATCH_0.12.3.md` for the focused existing-output instructions and audit limitations.

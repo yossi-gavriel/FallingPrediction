@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "falls_ml"
-version = "0.12.3"
+version = "0.13.0"
 description = "Clinical fall-risk prediction: eFalls reproduction, evaluation and production pipeline"
 requires-python = ">=3.11"
 dependencies = [

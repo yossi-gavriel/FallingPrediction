@@ -36,6 +36,11 @@ class ModelRun:
     folds: list[dict[str, Any]] = field(default_factory=list)
 
 
+def plan_families(plan: dict[str, Any]) -> list[str]:
+    """The families the plan fits (Phase 5.1: [ENET]); a plan without the key (2.x) means all three."""
+    return [f for f in FAMILIES if f in plan.get("families", list(FAMILIES))]
+
+
 def collect(ctx: Ctx, plan: dict[str, Any], cfg: Any) -> dict[tuple[str, str], ModelRun]:
     K = int(plan["cv"]["outer_folds"])
     out: dict[tuple[str, str], ModelRun] = {}
@@ -43,7 +48,7 @@ def collect(ctx: Ctx, plan: dict[str, Any], cfg: Any) -> dict[tuple[str, str], M
     for s in plan["sets"]:
         c = plan["alias"][s]
         stage = STAGE_OF_KIND[plan["kinds"][c]]
-        for fam in FAMILIES:
+        for fam in plan_families(plan):
             specs = [UnitSpec(uid=f"{stage}|{fam}|{c}|outer{k}", stage=stage, family=fam, setname=c, outer=k) for k in range(K)]
             if not all(is_complete(ctx, u) for u in specs):
                 continue

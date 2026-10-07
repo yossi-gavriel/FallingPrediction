@@ -25,13 +25,15 @@ import pytest
 
 pytestmark = pytest.mark.slow
 ROOT = Path(__file__).resolve().parents[2]
-OV = {"cv": {"outer_folds": 3, "inner_folds": 3}, "eligibility": {"min_known_observed_rows": 20},
+OV = {"cv": {"outer_folds": 3, "inner_folds": 3}, "eligibility": {"min_known_observed_rows": 20}, "negative_controls": {"seeds": 2},
       "modes": {"quick": {"lasso": {"n_lambda": 8}, "enet": {"n_lambda": 6, "l1_ratios": [0.2, 0.8]}, "xgb": {"n_trials": 3, "n_startup_trials": 2},
                           "bootstrap_n": 300, "stability_linear": 3, "stability_xgb": 2, "permutation_repeats": 1, "shap_rows": 500}}}
 REQUIRED_SHARE = ["MANAGEMENT_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY.md", "PRIMARY_70_SENSITIVITY_COMPARISON.csv", "THRESHOLD_TRADEOFF.csv",
                   "MODEL_COMPARISON.csv", "DOMAIN_INCREMENTAL_VALUE.csv", "ABLATION_RESULTS.csv", "OOF_MODEL_COMPARISON.csv", "CALIBRATION.csv",
                   "SUBGROUP_SUMMARY.csv", "FEATURE_ELIGIBILITY.csv", "NEW_FEATURE_CATALOGUE.csv", "ALL_V21_COLUMN_CLASSIFICATION.csv", "SCHEMA_DIFF_V1_V21.csv",
-                  "FEATURE_STABILITY.csv", "PERMUTATION_IMPORTANCE.csv", "SHAP_SUMMARY.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
+                  "FEATURE_STABILITY.csv", "PERMUTATION_IMPORTANCE.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
+                  # Phase 5.1 (ENET only, no SHAP): the negative controls and the historical-audit verdict
+                  "NEGATIVE_CONTROLS.csv", "NEGATIVE_CONTROLS_RESULT.json", "HISTORICAL_VERDICT_2_2_0.json",
                   "RUN_MANIFEST.json", "RUN_TIMINGS.csv", "ENVIRONMENT.json", "PRIVACY_SCAN.json",     # brief section 24
                   "REMOVED_V1_COLUMNS.csv", "RENAMED_OR_CHANGED_COLUMNS.csv", "V21_UNDECLARED_COLUMNS.csv", "CAPACITY_CURVE.csv", "OOF_PREDICTION_SUMMARY.csv",
                   "OUTER_FOLD_RESULTS.csv",
@@ -41,10 +43,11 @@ REQUIRED_SHARE = ["MANAGEMENT_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY_HE.md", "SCIEN
 PRIMARY_CMP = "OLD vs OLD_PLUS_ALL_NEW_ELIGIBLE"
 
 
-def _run(src: Path, out: Path, **kw: Any) -> dict[str, Any]:
+def _run(src: Path, out: Path, controls: bool = False, **kw: Any) -> dict[str, Any]:
     from falls_ml.phase5.runner import run_phase5
 
-    return run_phase5(src, out, mode="quick", device="auto", jobs=2, resume=True, overrides=OV, synthetic=True, **kw)
+    return run_phase5(src, out, mode="quick", device="auto", jobs=2, resume=True, overrides=OV, synthetic=True, negative_controls=controls,
+                      negative_control_seeds=2, **kw)
 
 
 def _units(out: Path) -> dict[str, dict[str, Any]]:
@@ -80,7 +83,7 @@ def worlds(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
 @pytest.fixture(scope="module")
 def planted(worlds: dict[str, Any]) -> dict[str, Any]:
     out = worlds["base"] / "out planted"
-    r = _run(worlds["planted"], out)
+    r = _run(worlds["planted"], out, controls=True)
     return {"out": out, "res": r}
 
 
@@ -100,13 +103,24 @@ def test_planted_run_completes_with_every_output(planted: dict[str, Any]) -> Non
     man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
     assert man["design"] == "INTERNAL NESTED CROSS-VALIDATION ON 2026 SNAPSHOT" and man["report_kind"] == "FINAL"
     assert (out / "preflight" / "PHASE5_PREFLIGHT.md").read_text(encoding="utf-8").rstrip().endswith("SAFE TO MODEL")
-    assert man["primary_family"] == "ENET" and man["primary_comparison"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE"]
+    assert man["primary_family"] == "ENET" and man["families"] == ["ENET"] and man["primary_prepost_arms"] == ["OLD", "OLD_PLUS_NEW_SAFE"]
+    assert man["historical_primary_comparison_2_2_0"] == ["OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE"] and man["negative_controls"]["passed"] is True
+    assert man["experiment"].startswith("PHASE 5.1") and man["folds_source"].startswith("generated")
     cl = pd.read_csv(share / "ALL_V21_COLUMN_CLASSIFICATION.csv")
     assert len(cl) == 224 and cl["x_use"].astype(str).str.len().gt(3).all() and not (cl["class"] == "REQUIRES_SEMANTIC_REVIEW").any()
     sets = json.loads((share / "FEATURE_SETS.json").read_text(encoding="utf-8"))
     assert {"OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"} <= set(sets["sets"])
     ab = pd.read_csv(share / "ABLATION_RESULTS.csv")
-    assert set(ab["family"]) == {"ENET"} and "NO_TIMING_UNCERTAIN" in set(ab["ablation"]) and "NO_FALL_RECENCY" in set(ab["ablation"])
+    assert set(ab["family"]) == {"ENET"} and set(ab["ablation"]) == {"NO_NEW_REGISTRY"} and set(ab["role"]) == {"SECONDARY_DIAGNOSTIC"}
+    assert set(ab["base_set"]) == {"OLD_PLUS_NEW_SAFE"}
+    u = _units(out)
+    assert {r["result"]["family"] for r in u.values()} == {"ENET"}                                   # ENET only: no LASSO / XGB unit exists
+    assert all(r["result"].get("features_effective") for r in u.values())
+    nc = pd.read_csv(share / "NEGATIVE_CONTROLS.csv")
+    assert len(nc) == 2 and (nc["auroc"] < 0.62).all() and (nc["recall_top3"] < 0.12).all()         # permuted labels: chance-level (small synthetic folds)
+    assert (out / "work" / "FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv").is_file() and not (share / "FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv").exists()
+    hv = json.loads((share / "HISTORICAL_VERDICT_2_2_0.json").read_text(encoding="utf-8"))
+    assert "HISTORICAL AUDIT" in hv["note"] and "ENET" in hv["decisions"]
     mg = (share / "MANAGEMENT_SUMMARY_HE.md").read_text(encoding="utf-8")
     for needle in ("מטופלים שנותחו", "נפילות", "פיצ'רים חדשים אמיתיים", "ALL_NEW", "התראות שווא שנחסכו", "PPV", "האם הפיצ'רים הנוספים של V21"):
         assert needle in mg, needle
@@ -116,7 +130,7 @@ def test_planted_new_feature_lowers_the_false_alert_burden(planted: dict[str, An
     t = pd.read_csv(planted["out"] / "share" / "PRIMARY_70_SENSITIVITY_COMPARISON.csv")
     t = t[t["comparison"] == PRIMARY_CMP]
     d = t[t["row"] == "DELTA_NEW_MINUS_OLD"].set_index("family")
-    for fam in ("LASSO", "ENET", "XGB"):
+    for fam in ("ENET",):
         assert float(d.loc[fam, "false_alert_share"]) < 0, fam
         assert float(d.loc[fam, "delta_false_alert_share_ci_high"]) < 0, fam          # paired interval below 0
         assert float(d.loc[fam, "false_alerts_avoided_per_10000"]) > 0, fam
@@ -124,10 +138,11 @@ def test_planted_new_feature_lowers_the_false_alert_burden(planted: dict[str, An
     v = t[t["row"] == "VERDICT"].set_index("family")
     assert v.loc["ENET", "verdict"] == "NEW_FEATURES_OPERATIONALLY_USEFUL" and v.loc["ENET", "role"] == "PRIMARY"
     man = json.loads((planted["out"] / "share" / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
-    assert man["overall_answer"] == "YES" and man["overall_answer_basis"].startswith("the ENET verdict")
+    assert man["historical_overall_answer_2_2_0_rule"] == "YES" and "overall_answer" not in man       # historical audit only, no 5.1 verdict
     dom = pd.read_csv(planted["out"] / "share" / "DOMAIN_INCREMENTAL_VALUE.csv")
-    dd = dom[(dom["domain"] == "NEW_DIAGNOSIS") & (dom["status"] == "COMPLETE")]
-    assert len(dd) == 3 and (dd["delta_false_alert_share"] < 0).all()
+    assert len(dom) == 0                                                                               # Phase 5.1: no DOMAIN units
+    p3 = pd.read_csv(planted["out"] / "share" / "TOP3_CAPACITY_PRIMARY.csv")
+    assert set(p3["family"]) == {"ENET"} and set(p3["feature_set"]) == {"OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE"}
 
 
 def test_same_outer_folds_for_every_family_and_set(planted: dict[str, Any]) -> None:
@@ -138,7 +153,7 @@ def test_same_outer_folds_for_every_family_and_set(planted: dict[str, Any]) -> N
             by_fold.setdefault(str(r["result"]["outer"]), []).append(r["test_idx"])
     assert set(by_fold) == {"0", "1", "2"}
     for k, arrs in by_fold.items():
-        assert len(arrs) > 20
+        assert len(arrs) >= 4                                   # ENET x 3 primary sets + the secondary contrast
         for a in arrs[1:]:
             assert np.array_equal(a, arrs[0]), f"fold {k} differs between units"
     allt = np.concatenate([by_fold[k][0] for k in sorted(by_fold)])
@@ -211,7 +226,7 @@ def test_operating_dashboard_in_the_final_report(planted: dict[str, Any]) -> Non
     e = c[(c["family"] == "ENET") & (c["comparison"] == "OLD_PLUS_ALL_NEW_ELIGIBLE minus OLD")].iloc[0]
     assert e["role"] == "PRIMARY" and float(e["delta_falls_captured"]) > 0 and float(e["delta_false_interventions"]) == -float(e["delta_falls_captured"])
     p3 = pd.read_csv(share / "TOP3_CAPACITY_PRIMARY.csv")
-    assert set(p3["capacity_pct"]) == {3.0} and len(p3) == 9 and (p3["method"] == "OUTER_FOLD_CAPACITY_PRIMARY").all()
+    assert set(p3["capacity_pct"]) == {3.0} and len(p3) == 3 and (p3["method"] == "OUTER_FOLD_CAPACITY_PRIMARY").all()
     fine = pd.read_csv(share / "CAPACITY_CURVE_FINE.csv")
     assert fine["capacity_pct"].max() <= 20.0 and 3.0 in set(fine["capacity_pct"]) and len(fine) <= 2000
     man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
@@ -398,3 +413,89 @@ def test_duplicate_patient_rows_stop(worlds: dict[str, Any]) -> None:
     src = write_v21_csv(df, d / "v21 dup.csv")
     r = _run(src, worlds["base"] / "out dup")
     assert r["status"] == "STOPPED_PREFLIGHT"
+
+
+# ============================================================================ Phase 5.1: PRE / POST on a synthetic 2.2.0 PRE, and the control gate
+def test_prepost_rehearsal_with_a_synthetic_pre_run(worlds: dict[str, Any]) -> None:
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase5.engine import outer_folds
+    from falls_ml.phase5.prerun import pre_digest
+    from falls_ml.phase5.runner import run_phase5
+    from tests.unit.test_phase51_repair import make_pre_folder
+
+    pf = worlds["base"] / "out pf for pre"
+    r = run_phase5(worlds["planted"], pf, mode="quick", preflight_only=True, overrides=OV, synthetic=True, jobs=2)
+    assert r["status"] == "PREFLIGHT_COMPLETE"
+    frame = pd.read_parquet(pf / "work" / "ANALYSIS_FRAME.parquet", columns=["row_key"])
+    z = np.load(pf / "work" / "Y_FOLDS.npz")
+    plan0 = json.loads((pf / "work" / "PLAN.json").read_text(encoding="utf-8"))
+    keys, y = frame["row_key"].to_numpy(), z["y"].astype(int)
+    outer = outer_folds(y, 3, 2468)                                                   # other folds than the seed gives: adoption must show
+    assert not np.array_equal(outer, z["outer"])
+    pre = worlds["base"] / "pre 2.2.0 synthetic"
+    sets = {k: plan0["sets"][k] for k in ("OLD", "OLD_PLUS_ALL_NEW_ELIGIBLE", "OLD_PLUS_NEW_SAFE")}
+    info = make_pre_folder(pre, keys=keys, y=y, outer=outer, input_sha=hashlib.sha256(worlds["planted"].read_bytes()).hexdigest(),
+                           input_name=worlds["planted"].name, sets=sets)
+    digest = pre_digest(pre)
+    out = worlds["base"] / "out post with pre"
+    r = _run(worlds["planted"], out, controls=True, pre_run=pre)
+    assert r["status"] == "COMPLETE" and r["report"]["prepost"] if "report" in r else r["status"] == "COMPLETE"
+    plan = json.loads((out / "work" / "PLAN.json").read_text(encoding="utf-8"))
+    assert plan["folds_source"].startswith("PRE") and np.array_equal(np.load(out / "work" / "Y_FOLDS.npz")["outer"], outer)
+    assert pre_digest(pre) == digest                                                   # the PRE folder was never written to
+    share = out / "share"
+    for n in ("TOP3_PRE_POST_HEADLINE.csv", "PRE_POST_PAIRED.csv", "PRE_POST_CONTRAST.csv", "PRE_POST_CORRECTION.csv", "PRE_POST_MEMBERSHIP.csv",
+              "PRE_POST_HISTORICAL_70_RULE.csv", "PRECISION_PLANNING.csv"):
+        assert (share / n).is_file(), n
+    H = pd.read_csv(share / "TOP3_PRE_POST_HEADLINE.csv")
+    prim = H[H["role"] == "PRIMARY"]
+    assert set(prim["arm"]) == {"OLD", "ADMISSIBLE"} and set(prim["version"]) == {"PRE 2.2.0", "POST 5.1", "DELTA POST minus PRE"}
+    T = int(prim[prim["version"] == "POST 5.1"]["selected_total"].iloc[0])
+    assert T == round(0.03 * plan["n"] + 1e-9) and (prim["selected_total"].astype(int) == T).all()
+    t3 = info["top3"].set_index("feature_set")
+    for arm, s_ in (("OLD", "OLD"), ("ADMISSIBLE", "OLD_PLUS_NEW_SAFE")):
+        row = prim[(prim["arm"] == arm) & (prim["version"] == "PRE 2.2.0")].iloc[0]
+        assert int(row["captured_falls"]) == int(t3.loc[s_, "tp"])                   # the PRE row IS the verified PRE Top-3% result
+        d = prim[(prim["arm"] == arm) & (prim["version"] == "DELTA POST minus PRE")].iloc[0]
+        post = prim[(prim["arm"] == arm) & (prim["version"] == "POST 5.1")].iloc[0]
+        assert int(d["captured_falls"]) == int(post["captured_falls"]) - int(row["captured_falls"])
+        assert float(d["delta_captured_falls_ci_low"]) <= float(d["captured_falls"]) <= float(d["delta_captured_falls_ci_high"])
+        assert int(d["false_interventions"]) == -int(d["captured_falls"])
+    for name in ("MANAGEMENT_SUMMARY_HE.md", "SCIENTIFIC_SUMMARY.md"):
+        txt = (share / name).read_text(encoding="utf-8")
+        assert txt.index("Top 3%") < txt.index("## ")                                  # the headline comes before every other section
+        assert "QUARANTINED" in txt or "בהסגר" in txt                                  # the CCI quarantine is stated
+    mem = pd.read_csv(share / "PRE_POST_MEMBERSHIP.csv")
+    assert (mem[mem["feature"] == "new_deficit_count_proxy"]["reason"].astype(str).str.contains("R-1")).all()
+    assert (mem[mem["feature"] == "com_cci_group"]["reason"].astype(str).str.contains("R-4")).all()
+    c = pd.read_csv(share / "PRE_POST_CONTRAST.csv")
+    assert set(c["role"]) >= {"PRIMARY_CONTRAST", "AUDIT_ONLY", "SECONDARY_DIAGNOSTIC"}
+    man = json.loads((share / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
+    assert man["pre_run"]["verified"] and man["pre_run"]["folder_name"] == pre.name and str(pre) not in json.dumps(man)
+    # a PRE folder changed after the preflight stops the report
+    (pre / "share" / "TOP3_CAPACITY_PRIMARY.csv").write_text("tampered\n", encoding="utf-8")
+    with pytest.raises(Phase2Stop) as e:
+        run_phase5(worlds["planted"], out, mode="quick", report_only=True, overrides=OV, synthetic=True, pre_run=pre, jobs=2)
+    assert e.value.gate == "PRE_RUN_MODIFIED"
+
+
+def test_negative_control_failure_is_a_hard_stop(worlds: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    import falls_ml.phase5.controls as C
+    from falls_ml.phase2.state import Phase2Stop
+    from falls_ml.phase5.runner import run_phase5
+
+    monkeypatch.setattr(C, "permute_within_folds", lambda y, outer, seed: np.asarray(y).astype(int).copy())   # a broken permutation = information leaks
+    out = worlds["base"] / "out control failure"
+    with pytest.raises(Phase2Stop) as e:
+        _run(worlds["planted"], out, controls=True)
+    assert e.value.gate == "NEGATIVE_CONTROL_FAILED"
+    res = json.loads((out / "work" / "NEGATIVE_CONTROLS_RESULT.json").read_text(encoding="utf-8"))
+    assert res["passed"] is False and res["mean_auroc"] > 0.55
+    assert not any(d.name.startswith("PRIMARY__") for d in (out / "work" / "units").iterdir()) if (out / "work" / "units").is_dir() else True
+    monkeypatch.undo()
+    with pytest.raises(Phase2Stop) as e:                                                # the failed folder can neither fit nor report
+        run_phase5(worlds["planted"], out, mode="quick", resume=True, overrides=OV, synthetic=True, jobs=2)
+    assert e.value.gate == "NEGATIVE_CONTROL_FAILED"
+    with pytest.raises(Phase2Stop) as e:
+        run_phase5(worlds["planted"], out, mode="quick", report_only=True, overrides=OV, synthetic=True, jobs=2)
+    assert e.value.gate == "NEGATIVE_CONTROL_FAILED"

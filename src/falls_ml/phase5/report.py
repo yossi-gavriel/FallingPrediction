@@ -19,9 +19,9 @@ import pandas as pd
 from falls_ml.artifacts import utc_now
 from falls_ml.phase2 import durable as D
 from falls_ml.phase2.state import Phase2Stop
-from falls_ml.phase5 import DESIGN_LABEL, PHASE5_VERSION, SYNTHETIC_WATERMARK, WATERMARK, WATERMARK_HE
+from falls_ml.phase5 import DESIGN_LABEL, EXPERIMENT_LABEL, PHASE5_VERSION, SYNTHETIC_WATERMARK, WATERMARK, WATERMARK_HE
 from falls_ml.phase5.analysis import (PRIMARY_SETS, ModelRun, calibration_rows, capacity_rows, collect, compare, decide, model_row, nested_by_target,
-                                      outer_fold_rows, overall, prediction_summary, subgroup_rows, threshold_tables)
+                                      outer_fold_rows, overall, plan_families, prediction_summary, subgroup_rows, threshold_tables)
 from falls_ml.phase5.config import FAMILIES, PRIMARY_FAMILY, SET_ALL, SET_OLD, SET_SAFE
 
 MIN_CELL = 10
@@ -128,7 +128,8 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
     nb = int(cfg.budget["bootstrap_n"])
     seed = int(plan["seed"])
     alias = plan["alias"]
-    A: dict[str, Any] = {"runs": runs, "interim": interim, "primary_family": PRIMARY_FAMILY}
+    fams = plan_families(plan)
+    A: dict[str, Any] = {"runs": runs, "interim": interim, "primary_family": PRIMARY_FAMILY, "families": fams}
     rows = []
     for (fam, s), run in runs.items():
         prim = s in PRIMARY_SETS
@@ -148,7 +149,7 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
     safe_same = alias[SET_SAFE] == alias[SET_ALL]
     safe_none = alias[SET_SAFE] == alias[SET_OLD]
     cmps, dec = {}, {}
-    for fam in FAMILIES:
+    for fam in fams:
         o, al, sf = runs.get((fam, SET_OLD)), runs.get((fam, SET_ALL)), runs.get((fam, SET_SAFE))
         c_all = compare(y, o, al, target=T, n_boot=nb, seed=seed + 11) if o and al and not no_new else None
         c_safe = c_all if safe_same else (compare(y, o, sf, target=T, n_boot=nb, seed=seed + 12) if o and sf and not safe_none else None)
@@ -158,12 +159,12 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
     A["overall"] = overall({f: d["verdict"] for f, d in dec.items()})
     A["safe_same"], A["safe_none"], A["no_new"] = safe_same, safe_none, no_new
     # exploratory only: the family with the lowest nested false-alert share of OLD_PLUS_ALL_NEW_ELIGIBLE (never the basis of the answer)
-    cand = [(runs[(f, SET_ALL)], f) for f in FAMILIES if (f, SET_ALL) in runs]
-    A["best_family_exploratory"] = min(cand, key=lambda t: (np.nan_to_num(_op(y, t[0], T)["false_alert_share"], nan=9.0), FAMILIES.index(t[1])))[1] if cand else None
+    cand = [(runs[(f, SET_ALL)], f) for f in fams if (f, SET_ALL) in runs]
+    A["best_family_exploratory"] = min(cand, key=lambda t: (np.nan_to_num(_op(y, t[0], T)["false_alert_share"], nan=9.0), FAMILIES.index(t[1])))[1] if len(cand) > 1 else None
     A["lead_family"] = PRIMARY_FAMILY
     # domains (OLD + domain vs OLD) and ablations (ALL_NEW minus a block vs ALL_NEW), paired
     drows, arows = [], []
-    for fam in [f for f in FAMILIES if f in plan.get("domain_families", FAMILIES)]:
+    for fam in [f for f in fams if f in plan.get("domain_families", fams)]:
         o = runs.get((fam, SET_OLD))
         for dom, info in plan["domains"].items():
             s = info["name"]
@@ -177,8 +178,8 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
             drows.append({"family": fam, "role": "PRIMARY" if fam == PRIMARY_FAMILY else "SECONDARY", "domain": dom, "n_new_features": len(info["added"]),
                           "new_features": "; ".join(info["added"]), "status": "COMPLETE", **_delta_cols(c), "delta_false_alerts": c["delta_op_fp"],
                           "folds_improved": c["folds_improved"], "n_folds": len(c["fold_delta_false_alert_share"])})
-    for fam in [f for f in FAMILIES if f in plan.get("ablation_families", [PRIMARY_FAMILY])]:
-        al = runs.get((fam, SET_ALL))
+    for fam in [f for f in fams if f in plan.get("ablation_families", [PRIMARY_FAMILY])]:
+        al = runs.get((fam, plan.get("ablation_base_set", SET_ALL)))
         for ab, info in plan["ablations"].items():
             s = info["name"]
             if not info["removed"]:
@@ -189,10 +190,12 @@ def analyse(ctx: Any, plan: dict[str, Any], cfg: Any, *, interim: bool) -> dict[
                 continue
             c = compare(y, al, runs[(fam, s)], target=T, n_boot=nb, seed=seed + 31)
             b = c["b"]
-            arows.append({"family": fam, "ablation": ab, "n_removed": len(info["removed"]), "removed": "; ".join(info["removed"]), "status": "COMPLETE",
-                          "ap": b["ap"], "auroc": b["auroc"], "brier": b["brier"], "ppv_at_70": b["op_ppv"], "false_alert_share_at_70": b["op_false_alert_share"],
+            arows.append({"family": fam, "ablation": ab, "role": "SECONDARY_DIAGNOSTIC", "base_set": plan.get("ablation_base_set", SET_ALL),
+                          "n_removed": len(info["removed"]), "removed": "; ".join(info["removed"]), "status": "COMPLETE", "ap": b["ap"], "auroc": b["auroc"], "brier": b["brier"], "ppv_at_70": b["op_ppv"], "false_alert_share_at_70": b["op_false_alert_share"],
                           "flagged_share_at_70": b["op_flagged_share"], **_delta_cols(c), "delta_false_alerts": c["delta_op_fp"],
-                          "folds_worse_without_block": c["folds_improved"], "note": "delta = (all new minus the block) - (all new): > 0 means the block helped"})
+                          "folds_worse_without_block": c["folds_improved"],
+                          "note": f"delta = ({plan.get('ablation_base_set', SET_ALL)} minus the block) - ({plan.get('ablation_base_set', SET_ALL)}): > 0 means the "
+                                  "block helped; SECONDARY DIAGNOSTIC only - never part of the headline or a verdict"})
     A["domains"], A["ablations"] = pd.DataFrame(drows), pd.DataFrame(arows)
     A["subgroups"] = subgroup_rows(ctx, runs, cfg)
     A["calibration"] = calibration_rows(y, runs, 10)
@@ -248,7 +251,8 @@ def _delta_row(c: dict[str, Any]) -> dict[str, Any]:
 
 def primary_table(A: dict[str, Any]) -> pd.DataFrame:
     rows = []
-    for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY]):
+    fams = A.get("families", list(FAMILIES))
+    for fam in (PRIMARY_FAMILY, *[f for f in fams if f != PRIMARY_FAMILY]):
         role = "PRIMARY" if fam == PRIMARY_FAMILY else "SECONDARY"
         c, cs, d = A["comparisons"][fam]["all"], A["comparisons"][fam]["safe"], A["decisions"][fam]
         if c is None:
@@ -500,14 +504,16 @@ def management_he(A: dict[str, Any], plan: dict[str, Any], synthetic: bool, inte
            "3_every_outer_fold_improves": f"שיפור בכל {plan['cv']['outer_folds']} הקפלים החיצוניים",
            "4_not_dependent_on_timing_or_provenance_questionable_predictors": "השיפור נשמר גם בלי פיצ'רים עם תזמון / מקור מפוקפק (NEW_SAFE)",
            "5_calibration_not_materially_worse": "הכיול לא נפגע מהותית"}
-    L += ["### האם הפיצ'רים הנוספים של V21 הוסיפו מידע שימושי?", "", f"## **{ans}**", "",
-          f"התשובה נקבעת מראש לפי Elastic Net בלבד (OLD מול OLD + כל החדשים הכשירים), לפי כלל החלטה שנקבע לפני שנראו תוצאות: "
+    L += ["### ביקורת היסטורית בלבד – כלל ההחלטה של 2.2.0 (70% רגישות): האם הפיצ'רים הנוספים של V21 הוסיפו מידע שימושי?", "",
+          f"**{ans}** (ביקורת היסטורית; אינו התוצאה של שלב 5.1 – התוצאה הראשית היא טבלת Top 3% בראש המסמך)", "",
+          f"הכלל ההיסטורי של 2.2.0 (Elastic Net, OLD מול OLD + כל החדשים הכשירים): "
           f"{VERDICT_HE.get(d.get('verdict', ''), d.get('verdict', ''))}."]
     if crit:
         L += [f"- {'✔' if v else '✘'} {why.get(k, k)}" for k, v in crit.items()]
-    sec = [f"{FAM_HE[f]} – {VERDICT_HE.get(A['decisions'][f]['verdict'], A['decisions'][f]['verdict'])}" for f in FAMILIES if f != fam]
-    L += ["", f"ניתוחים משניים (לא קובעים את התשובה): {'; '.join(sec)}. "
-          + (f"המשפחה עם הכי מעט התראות שווא (חקרני בלבד): {FAM_HE.get(A.get('best_family_exploratory'), A.get('best_family_exploratory'))}." if A.get("best_family_exploratory") else "")]
+    sec = [f"{FAM_HE[f]} – {VERDICT_HE.get(A['decisions'][f]['verdict'], A['decisions'][f]['verdict'])}" for f in A.get("families", list(FAMILIES)) if f != fam and f in A["decisions"]]
+    if sec:
+        L += ["", f"ניתוחים משניים (לא קובעים את התשובה): {'; '.join(sec)}. "
+              + (f"המשפחה עם הכי מעט התראות שווא (חקרני בלבד): {FAM_HE.get(A.get('best_family_exploratory'), A.get('best_family_exploratory'))}." if A.get("best_family_exploratory") else "")]
     cs = A["comparisons"].get(fam, {}).get("safe")
     if cs is not None and not A.get("safe_same"):
         L += [f"בדיקה מחמירה (OLD + חדשים בטוחים בלבד, {FAM_HE[fam]}): שינוי בשיעור התראות השווא {pp(cs['delta_op_false_alert_share'])} "
@@ -564,8 +570,8 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
     for r in t[t["feature_set"].isin(list(PRIMARY_SETS))].itertuples():
         L.append(f"| {r.family} | {r.role} | {r.feature_set} | {pct(r.op_sensitivity)} | {pct(r.op_ppv)} | {pct(r.op_false_alert_share)} | {pct(r.op_flagged_share)} | "
                  f"{r.ap:.3f} | {r.auroc:.3f} | {r.brier:.4f} | {r.brier_skill:.3f} | {r.calibration_slope:.2f} | {r.calibration_intercept:+.2f} |")
-    L += ["", ("## השוואה מזווגת" if he else f"## Paired comparisons ({SET_OLD} vs {SET_ALL}; secondary {SET_OLD} vs {SET_SAFE})"), ""]
-    for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY]):
+    L += ["", ("## השוואה מזווגת – ביקורת היסטורית (כלל 70% של 2.2.0)" if he else f"## Paired comparisons - HISTORICAL AUDIT (the 2.2.0 70%-sensitivity rule; {SET_OLD} vs {SET_ALL}; {SET_OLD} vs {SET_SAFE})"), ""]
+    for fam in (PRIMARY_FAMILY, *[f for f in A.get("families", list(FAMILIES)) if f != PRIMARY_FAMILY]):
         c, d = A["comparisons"][fam]["all"], A["decisions"][fam]
         tag = "PRIMARY" if fam == PRIMARY_FAMILY else "secondary"
         if c is None:
@@ -582,9 +588,9 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
         if cs is not None and not A.get("safe_same"):
             L.append(f"  - {fam} NEW_SAFE: Δ false-alert share {pp(cs['delta_op_false_alert_share'])} {ci(cs['delta_op_false_alert_share_ci_low'], cs['delta_op_false_alert_share_ci_high'], pp)}; "
                      f"false alerts avoided / 10,000 {num(-cs['delta_op_false_alerts_per_10000'])}; folds improved {cs['folds_improved']}/{len(cs['fold_delta_false_alert_share'])}")
-    L += ["", f"**Answer (pre-declared: the {PRIMARY_FAMILY} verdict): {A['overall']}**"
+    L += ["", f"**Historical 2.2.0 verdict (audit only, NOT the Phase 5.1 result; the {PRIMARY_FAMILY} verdict): {A['overall']}**"
           + (f"; best family (exploratory only): {A['best_family_exploratory']}" if A.get("best_family_exploratory") else ""), "",
-          f"Decision rule: {cfg['decision']['rule']}", ""]
+          f"Historical decision rule (2.2.0): {cfg['decision']['rule']}", ""]
     if len(A["domains"]) and "delta_false_alert_share" in A["domains"]:
         L += ["## Domain additions (OLD + domain vs OLD)", ""]
         for r in A["domains"].itertuples():
@@ -617,7 +623,8 @@ def scientific(A: dict[str, Any], plan: dict[str, Any], cfg: Any, synthetic: boo
           "- Three removed V1 registry flags (hypertension, chronic renal failure, transplant) were compared with the V21 COVID-19 (116 / 118), dialysis "
           "(101 / 1) and immunosuppression (130 / 131) registries: the V1 SQL / registry IDs are not available and V21 contradicts the V1 labels, so lineage "
           "is NOT proven (OLD_REMOVED_NEW_ADDED): the V1 features are removed from OLD and the V21 fields are genuinely new predictors.",
-          "- The leakage screen (single-feature AUROC >= 0.80) uses every label but can only exclude, never select, a predictor.",
+          "- Phase 5.1: NO outcome-dependent eligibility decision exists any more (the 2.2.0 single-feature AUROC exclusion is removed); the "
+          "training-fold forensic AUROC is a report-only diagnostic.",
           "- Importance, coefficients and SHAP are descriptive, never causal.",
           f"- Historical 2025 reference (context only): threshold 0.02, sensitivity {pct(HISTORICAL['sensitivity'])}, PPV {pct(HISTORICAL['ppv'])}, "
           f"false-alert share {pct(HISTORICAL['false_alert_share'])}; never used as evidence of incremental value.", ""]
@@ -673,14 +680,110 @@ def publish(out: Path, tmp: Path, src: Path, frame: pd.DataFrame) -> dict[str, A
     return res
 
 
-def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None, interim: bool, mon: Any = None) -> dict[str, Any]:
+def _insert_after_watermark(text: str, lines: list[str]) -> str:
+    """Put a block right after the title + watermark of a summary (the headline must be the first thing a reader sees)."""
+    parts = text.split("\n")
+    for j, ln in enumerate(parts):
+        if j > 0 and ln.startswith("**") and ln.endswith("**"):      # the watermark line
+            k = j + 1
+            while k < len(parts) and parts[k].strip() == "":
+                k += 1
+            return "\n".join([*parts[:k], *lines, *parts[k:]])
+    return "\n".join([*lines, *parts])
+
+
+def _insert_before(text: str, marker: str, lines: list[str]) -> str:
+    j = text.find(marker)
+    return text if j < 0 else text[:j] + "\n".join(lines) + "\n" + text[j:]
+
+
+def forensic_table(ctx: Any, plan: dict[str, Any]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """feature x outer fold training-AUROC from every committed unit (R-6; aggregate, local by default) + the units' coverage drops (R-2)."""
+    from falls_ml.phase5.engine import load_result
+
+    rows, units = [], []
+    seen = set()
+    for d in sorted(ctx.units_dir.iterdir()) if ctx.units_dir.is_dir() else []:
+        if not (d / "COMPLETE.json").is_file():
+            continue
+        try:
+            r = load_result(ctx, d.name)
+        except Exception:  # noqa: BLE001
+            continue
+        units.append({"uid": r.get("uid"), "stage": r.get("stage"), "family": r.get("family"), "set": r.get("set"), "outer": r.get("outer"),
+                      "dropped_coverage": r.get("dropped_coverage") or {}, "forensic_flagged": r.get("forensic_flagged") or [],
+                      "n_features": r.get("n_features"), "n_features_effective": r.get("n_features_effective")})
+        for f, a in (r.get("forensic_auroc") or {}).items():
+            key = (f, int(r.get("outer", -1)))
+            if key in seen:
+                continue                                   # the same training rows for every set / stage of a fold: one value per (feature, fold)
+            seen.add(key)
+            rows.append({"feature": f, "outer_fold": int(r.get("outer", -1)), "training_auroc": float(a),
+                         "flagged": bool(float(a) >= float(r.get("forensic_warn_at", 0.80))), "scope": "FINAL (all rows)" if int(r.get("outer", -1)) < 0 else "outer-training rows"})
+    t = pd.DataFrame(rows)
+    if len(t):
+        t = t.sort_values(["training_auroc", "feature", "outer_fold"], ascending=[False, True, True]).reset_index(drop=True)
+    return t, units
+
+
+def disclosure_lines(plan: dict[str, Any], cfg: Any, *, forensic: pd.DataFrame, controls: dict[str, Any] | None, he: bool) -> list[str]:
+    fo = plan.get("feature_overrides") or {}
+    cci = fo.get("com_cci_group") or {}
+    n_flag = int(forensic["flagged"].sum()) if len(forensic) else 0
+    n_feat_flag = int(forensic.loc[forensic["flagged"], "feature"].nunique()) if len(forensic) else 0
+    pre = plan.get("pre_run") or {}
+    if he:
+        L = ["## שלב 5.1 – גבולות התיקון וגילוי נאות", "",
+             "| פעולה | לפני הקפלים (קוהורט, ללא תוויות) | בכל אימון פנימי | באימון החיצוני |", "|---|---|---|---|",
+             "| קבילות מנבאים | חתימה (sealing), מחלקות סכמה, תזמון, מקור, אישור V3, כיסוי/קבוע/לא-קריא – **ללא תוויות** (R-1) | – | שער כיסוי לכל קפל, ללא תוויות (R-2) |",
+             "| חציונים, רמות, אינדיקטורים, קבועים/כפילויות, תקנון | – | נלמדים באימון הפנימי בלבד | נלמדים מחדש באימון החיצוני |",
+             "| רשת למבדה | – | lambda_max של כל אימון פנימי (R-3) | lambda_max של האימון החיצוני |",
+             "| AUROC חד-משתני | **הוסר** כמנגנון הדרה | אבחון פורנזי בלבד (R-6) | – |", "",
+             f"- **CCI_Group:** {'בהסגר (quarantine) – ' + str(cci.get('reason', 'הסמנטיקה לא אומתה')) if str(cci.get('branch', '')) == 'quarantine' else 'ענף ' + str(cci.get('branch', '')) + ' לפי מילון DWH רשום'}. לא הוסק סדר או מרווח.",
+             f"- **אבחון פורנזי:** {n_feat_flag} פיצ'רים ב-{n_flag} (פיצ'ר × קפל) עם AUROC אימון ≥ {float((plan.get('repair') or {}).get('forensic_auroc_warn', 0.80)):g} – דווח בלבד, לא הודר; נדרשת הכרעה בכתב של ה-DWH לפני כל טענה.",
+             (f"- **בקרות שליליות:** {controls.get('n_seeds')} ערבובי תוויות בתוך קפלים קפואים: AUROC ממוצע {controls.get('mean_auroc')} (גבול {controls.get('max_mean_auroc')}), Recall@Top3 ממוצע {controls.get('mean_recall_top3')} (גבול {controls.get('max_mean_recall_top3')}) – **{'עברו' if controls.get('passed') else 'נכשלו'}**." if controls else "- **בקרות שליליות:** לא הורצו (הרצה סינתטית)."),
+             (f"- **PRE:** {pre.get('folder_name')} (Phase 5 {pre.get('phase5_version')}), קפלים אומצו (sha256 {str(pre.get('folds_sha256', ''))[:16]}…), טבלת Top 3% שוחזרה במדויק; ההפרש PRE→POST הוא ההשפעה המשולבת של כל התיקונים." if pre else "- **PRE:** אין (הרצה סינתטית ללא --pre-run)."),
+             "- שלושה מנבאי V1 (יתר לחץ דם, אי-ספיקת כליות כרונית, השתלה) אינם ב-OLD (שושלת לא מוכחת); התוצא הוא רשומת אבחנה (נפילה/שבר); אין שינוי בתוויות.", ""]
+    else:
+        L = ["## Phase 5.1 repair: boundaries and disclosure", "",
+             "| operation | before the folds (cohort, label-free) | each inner training fit | outer-training refit |", "|---|---|---|---|",
+             "| predictor membership | sealing, schema classes, timing classes, provenance, V3 attestation, coverage / constant / unreadable QA - **no label is read** (R-1) | - | per-fold coverage gate, label-free (R-2) |",
+             "| medians, learned levels, NA indicators, constants / duplicates, means / SDs | - | learned on inner training only | relearned on outer training |",
+             "| lambda grid | - | lambda_max of each inner-training design (R-3) | lambda_max of the outer-training design |",
+             "| univariate AUROC | **removed** as a membership mechanism | forensic diagnostic only (R-6) | - |", "",
+             f"- **CCI_Group:** {'QUARANTINED - ' + str(cci.get('reason', 'semantics not verified')) if str(cci.get('branch', '')) == 'quarantine' else 'branch ' + str(cci.get('branch', '')) + ' from a registered DWH dictionary'}. No order or spacing was inferred.",
+             f"- **Forensic diagnostic:** {n_feat_flag} feature(s) in {n_flag} (feature x fold) cells with a training-fold AUROC >= {float((plan.get('repair') or {}).get('forensic_auroc_warn', 0.80)):g} - reported only, never excluded; a written availability adjudication by the DWH is required before any claim.",
+             (f"- **Negative controls:** {controls.get('n_seeds')} frozen-fold label permutations: mean AUROC {controls.get('mean_auroc')} (limit {controls.get('max_mean_auroc')}), mean Recall@Top3 {controls.get('mean_recall_top3')} (limit {controls.get('max_mean_recall_top3')}) - **{'PASSED' if controls.get('passed') else 'FAILED'}**." if controls else "- **Negative controls:** not run (synthetic run)."),
+             (f"- **PRE:** {pre.get('folder_name')} (Phase 5 {pre.get('phase5_version')}); outer folds ADOPTED (sha256 {str(pre.get('folds_sha256', ''))[:16]}…); its Top-3% table reproduced exactly; the PRE -> POST difference is the COMBINED effect of R-1 ... R-6 (no single-change attribution)." if pre else "- **PRE:** none (synthetic run without --pre-run)."),
+             "- The lambda grid of 2.2.0 was anchored on the whole outer-training design (inner validation labels included): a `cv.glmnet` convention, not outer-holdout leakage; it is re-anchored per inner fold here for strict inner isolation.",
+             "- Three V1 predictors (hypertension, chronic renal failure, transplant) are not in OLD (lineage not proven); the outcome is a recorded diagnosis (fall / fracture) proxy; labels are unchanged; the operational-denominator variant (censored patients in the quota) is deferred.",
+             "- Policy B, new l1 ratios, new families and every other improvement are Experiment 2: none of them is reachable from this version.", ""]
+    return L
+
+
+def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None, interim: bool, mon: Any = None, pre_run: str | Path | None = None) -> dict[str, Any]:
+    from falls_ml.phase5.controls import load_result_file, require_passed
     from falls_ml.phase5.explain import importance_tables, stability_table
 
+    log = mon.log if mon is not None else print
     if src is None:
         raise Phase2Stop("PRIVACY_SCAN_NEEDS_INPUT", "the share folder is published only after the identifier scan against the input file: pass --input")
     out = ctx.out
+    synthetic = bool(plan.get("synthetic"))
+    # Phase 5.1 R-12: no scientific report of a real run without PASSED negative controls (a failed control is a hard stop here too)
+    controls = require_passed(out, synthetic=synthetic, n_required=int(cfg["negative_controls"]["seeds"]))
+    controls = controls if controls and controls.get("passed") is not None else load_result_file(out)
+    pre_block = plan.get("pre_run")
+    if pre_block and not interim:
+        if pre_run is None:
+            raise Phase2Stop("PRE_RUN_REQUIRED", "the final Phase 5.1 report compares with the verified PRE run: pass --pre-run <the same completed 2.2.0 folder>")
+        from falls_ml.phase5.prerun import check_unmodified
+
+        check_unmodified(Path(pre_run), str(pre_block.get("digest_sha256")))
     y = ctx.y.astype(float)
     A = analyse(ctx, plan, cfg, interim=interim)
+    fams = A["families"]
+    comp = plan["alias"][plan.get("comparator_set", SET_SAFE)]
     aw = out / "work" / "analysis"
     aw.mkdir(parents=True, exist_ok=True)
     oof = pd.DataFrame({"row_key": ctx.frame["row_key"], "y": ctx.y, "outer_fold": ctx.outer})
@@ -691,16 +794,56 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
     D.write_parquet(aw / "OOF_PREDICTIONS_LOCAL.parquet", oof)
     if len(A["full_thresholds"]):
         D.write_csv(aw / "THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", A["full_thresholds"])
-    perm, shap = importance_tables(ctx, list(FAMILIES), list(dict.fromkeys([plan["alias"][SET_OLD], plan["alias"][SET_ALL]])))
-    stab = stability_table(ctx, list(FAMILIES), plan["alias"][SET_ALL], perm)
+    perm, shap = importance_tables(ctx, fams, list(dict.fromkeys([plan["alias"][SET_OLD], comp])))
+    stab = stability_table(ctx, fams, comp, perm)
+    forensic, unit_info = forensic_table(ctx, plan)
+    D.write_csv(out / "work" / "FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv", forensic if len(forensic) else pd.DataFrame(columns=["feature", "outer_fold", "training_auroc", "flagged"]))
     tmp = out / ".tmp-share"
     if tmp.exists():
         shutil.rmtree(tmp)
     (tmp / "figures").mkdir(parents=True)
-    synthetic = bool(plan.get("synthetic"))
-    D.write_str(tmp / "MANAGEMENT_SUMMARY_HE.md", management_he(A, plan, synthetic, interim))
-    D.write_str(tmp / "SCIENTIFIC_SUMMARY_HE.md", scientific(A, plan, cfg, synthetic, interim, he=True))
-    D.write_str(tmp / "SCIENTIFIC_SUMMARY.md", scientific(A, plan, cfg, synthetic, interim, he=False))
+    # ---- PRE vs POST (final report only): the headline tables
+    PP: dict[str, Any] | None = None
+    if pre_block and not interim:
+        from falls_ml.phase5.prepost import analyse_prepost, membership_table, pre_model_runs
+
+        pre_runs = pre_model_runs(Path(pre_run), plan, keys_post=ctx.frame["row_key"].to_numpy(), outer_post=ctx.outer, targets=cfg.targets)
+        post_runs = {s: A["runs"][(PRIMARY_FAMILY, s)] for s in PRIMARY_SETS if (PRIMARY_FAMILY, s) in A["runs"]}
+        abl = {ab: A["runs"][(PRIMARY_FAMILY, info["name"])] for ab, info in plan["ablations"].items()
+               if info.get("removed") and (PRIMARY_FAMILY, info["name"]) in A["runs"]}
+        PP = analyse_prepost(ctx.y, ctx.outer, post_runs, pre_runs, n_boot=int(cfg.budget["bootstrap_n"]), seed=int(plan["seed"]) + 53, ablation_runs=abl,
+                             target=cfg.primary_sensitivity, log=log)
+        H = PP["headline"]
+        if len(H):
+            delta = H["version"].astype(str).str.startswith("DELTA")
+            H = pd.concat([suppress(H[~delta]), H[delta].astype(object)]).sort_index()
+        D.write_csv(tmp / "TOP3_PRE_POST_HEADLINE.csv", H)
+        D.write_csv(tmp / "PRE_POST_PAIRED.csv", PP["paired"])
+        D.write_csv(tmp / "PRE_POST_CONTRAST.csv", PP["contrast"])
+        D.write_csv(tmp / "PRE_POST_CORRECTION.csv", suppress(PP["correction"]) if len(PP["correction"]) else PP["correction"])
+        D.write_csv(tmp / "PRE_POST_HISTORICAL_70_RULE.csv", PP["historical"])
+        D.write_csv(tmp / "PRECISION_PLANNING.csv", PP["precision"])
+        D.write_csv(tmp / "PRE_POST_MEMBERSHIP.csv", membership_table(Path(pre_run), pd.read_csv(out / "work" / "REGISTRY.csv"), unit_info))
+    # ---- summaries: the Top-3% PRE / POST headline FIRST, then the 2.2.0 content as a historical audit, then the disclosure block
+    from falls_ml.phase5.prepost import headline_lines
+
+    mg = management_he(A, plan, synthetic, interim)
+    sh_he = scientific(A, plan, cfg, synthetic, interim, he=True)
+    sh_en = scientific(A, plan, cfg, synthetic, interim, he=False)
+    if PP is not None:
+        mg = _insert_after_watermark(mg, headline_lines(PP, he=True, synthetic=synthetic))
+        sh_he = _insert_after_watermark(sh_he, headline_lines(PP, he=True, synthetic=synthetic))
+        sh_en = _insert_after_watermark(sh_en, headline_lines(PP, he=False, synthetic=synthetic))
+    else:
+        note_he = ["## תוצאה ראשית – Top 3%", "", "> אין השוואת PRE/POST בדוח זה (" + ("דוח ביניים" if interim else "הרצה סינתטית ללא --pre-run") + "); ראו TOP3_CAPACITY_PRIMARY.csv.", ""]
+        note_en = ["## Headline - Top 3%", "", "> No PRE / POST comparison in this report (" + ("interim report" if interim else "synthetic run without --pre-run") + "); see TOP3_CAPACITY_PRIMARY.csv.", ""]
+        mg, sh_he, sh_en = _insert_after_watermark(mg, note_he), _insert_after_watermark(sh_he, note_he), _insert_after_watermark(sh_en, note_en)
+    sh_he = _insert_before(sh_he, "## Limitations", disclosure_lines(plan, cfg, forensic=forensic, controls=controls, he=True))
+    sh_en = _insert_before(sh_en, "## Limitations", disclosure_lines(plan, cfg, forensic=forensic, controls=controls, he=False))
+    mg = mg.rstrip("\n") + "\n\n" + "\n".join(disclosure_lines(plan, cfg, forensic=forensic, controls=controls, he=True)) + "\n"
+    D.write_str(tmp / "MANAGEMENT_SUMMARY_HE.md", mg)
+    D.write_str(tmp / "SCIENTIFIC_SUMMARY_HE.md", sh_he)
+    D.write_str(tmp / "SCIENTIFIC_SUMMARY.md", sh_en)
     pt = primary_table(A)
     if len(pt):
         keep = pt["row"].isin(["DELTA_NEW_MINUS_OLD", "VERDICT"])          # net differences between two models on the same patients: not cells
@@ -725,6 +868,16 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
     D.write_csv(tmp / "FEATURE_STABILITY.csv", stab)
     if len(shap):
         D.write_csv(tmp / "SHAP_SUMMARY.csv", shap)
+    if controls and controls.get("passed") is not None:
+        D.write_csv(tmp / "NEGATIVE_CONTROLS.csv", pd.DataFrame(controls.get("seeds") or []))
+        D.write_json(tmp / "NEGATIVE_CONTROLS_RESULT.json", {k: v for k, v in controls.items() if k != "seeds"})
+    if ctx.stats.get("share_forensic") and len(forensic):
+        D.write_csv(tmp / "FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv", forensic)
+    D.write_json(tmp / "HISTORICAL_VERDICT_2_2_0.json", {
+        "note": "the Phase 5 2.2.0 five-criterion rule at ~70% sensitivity, recomputed on the POST run as a HISTORICAL AUDIT output only; it is NOT the "
+                "Phase 5.1 result (the headline is TOP3_PRE_POST_HEADLINE.csv) and Experiment 1 has no success verdict",
+        "decisions": {f: {"verdict": d["verdict"], "criteria": d["criteria"], "reason": d["reason"]} for f, d in A["decisions"].items()},
+        "overall_answer_2_2_0_rule": A["overall"], "rule": cfg["decision"]["rule"]})
     pf = out / "preflight"
     for name in ("FEATURE_ELIGIBILITY.csv", "NEW_FEATURE_CATALOGUE.csv", "V21_UNDECLARED_COLUMNS.csv", "COHORT_FACTS_2026.json", "OUTCOME_CONTRACT_2026.json",
                  "PHASE5_PREFLIGHT.md", "FEATURE_SETS.json", "SCHEMA_DIFF_V1_V21.csv", "ALL_V21_COLUMN_CLASSIFICATION.csv", "REMOVED_V1_COLUMNS.csv",
@@ -737,26 +890,43 @@ def build_reports(ctx: Any, plan: dict[str, Any], cfg: Any, *, src: Path | None,
     D.write_json(tmp / "HISTORICAL_BENCHMARK_2025.json", HISTORICAL)
     figs = figures(tmp / "figures", A, y, perm, stab)
     status = json.loads((out / "RUN_STATUS.json").read_text(encoding="utf-8")) if (out / "RUN_STATUS.json").is_file() else {}
+    headline_numbers = None
+    if PP is not None and len(PP["headline"]):
+        hh = PP["headline"]
+        headline_numbers = {f"{r.arm}|{r.version}": {"selected_total": r.selected_total, "captured_falls": r.captured_falls, "recall_top3": r.recall_top3,
+                                                    "ppv_top3": r.ppv_top3, "false_interventions": r.false_interventions}
+                            for r in hh[hh["role"] == "PRIMARY"].itertuples()}
     D.write_json(tmp / "RUN_MANIFEST.json", {
-        "watermark": WATERMARK, "synthetic": synthetic, "design": DESIGN_LABEL, "phase5_version": PHASE5_VERSION, "falls_ml_version": __import__("falls_ml").__version__,
+        "watermark": WATERMARK, "experiment": EXPERIMENT_LABEL, "synthetic": synthetic, "design": DESIGN_LABEL, "phase5_version": PHASE5_VERSION,
+        "falls_ml_version": __import__("falls_ml").__version__,
         "report_kind": "INTERIM" if interim else "FINAL", "created_at": utc_now(), "mode": plan["mode"], "input": plan["input"], "config_sha256": plan["config_sha256"],
         "v21_schema_sha256": plan["v21_schema_sha256"], "v21_definition_sha256": plan["v21_definition_sha256"], "code_sha256_plan": plan["code_sha256"],
-        "frame_sha256": plan["frame_sha256"], "schema_counts": plan.get("schema_counts"), "primary_family": PRIMARY_FAMILY,
-        "primary_comparison": [SET_OLD, SET_ALL], "secondary_comparison": [SET_OLD, SET_SAFE],
-        "folds_sha256": plan["folds_sha256"], "seed": plan["seed"], "cv": plan["cv"], "n": plan["n"], "events": plan["events"],
+        "frame_sha256": plan["frame_sha256"], "schema_counts": plan.get("schema_counts"), "primary_family": PRIMARY_FAMILY, "families": fams,
+        "primary_prepost_arms": [SET_OLD, plan.get("comparator_set", SET_SAFE)], "audit_set": plan.get("audit_set", SET_ALL),
+        "secondary_diagnostic": list(plan.get("ablations", {})), "historical_primary_comparison_2_2_0": [SET_OLD, SET_ALL],
+        "folds_sha256": plan["folds_sha256"], "folds_source": plan.get("folds_source"), "seed": plan["seed"], "cv": plan["cv"], "n": plan["n"], "events": plan["events"],
         "fold_sizes": plan["fold_sizes"], "fold_events": {k: ("<10" if 0 < int(v) < MIN_CELL else v) for k, v in plan["fold_events"].items()},
         "feature_sets": {k: {"n_features": len(v), "kind": plan["kinds"].get(plan["alias"][k]), "identical_to": plan["alias"][k] if plan["alias"][k] != k else None}
                          for k, v in plan["sets"].items()},
-        "decisions": {f: {"verdict": d["verdict"], "criteria": d["criteria"], "role": "PRIMARY" if f == PRIMARY_FAMILY else "SECONDARY"}
-                      for f, d in A["decisions"].items()}, "overall_answer": A["overall"], "overall_answer_basis": f"the {PRIMARY_FAMILY} verdict (pre-declared)",
+        "repair": plan.get("repair"), "feature_overrides": plan.get("feature_overrides"),
+        "pre_run": {k: v for k, v in (pre_block or {}).items() if k not in ("sets", "alias")} if pre_block else None,
+        "negative_controls": {k: v for k, v in (controls or {}).items() if k != "seeds"} if controls else None,
+        "forensic": {"cells_flagged": int(forensic["flagged"].sum()) if len(forensic) else 0,
+                     "features_flagged": int(forensic.loc[forensic["flagged"], "feature"].nunique()) if len(forensic) else 0,
+                     "shared": bool(ctx.stats.get("share_forensic"))},
+        "top3_headline": headline_numbers,
+        "historical_decisions_2_2_0_rule": {f: {"verdict": d["verdict"], "criteria": d["criteria"], "role": "HISTORICAL_AUDIT"} for f, d in A["decisions"].items()},
+        "historical_overall_answer_2_2_0_rule": A["overall"],
         "best_family_exploratory": A["best_family_exploratory"], "jobs": status.get("jobs"), "device": status.get("device"), "sessions": status.get("sessions"),
         "failures": [{"item": f.get("item"), "error": f.get("error")} for f in status.get("failures", [])], "figures": figs,
-        "row_level_outputs_kept_locally": ["work/analysis/OOF_PREDICTIONS_LOCAL.parquet", "work/analysis/THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", "work/units/*"]})
+        "row_level_outputs_kept_locally": ["work/analysis/OOF_PREDICTIONS_LOCAL.parquet", "work/analysis/THRESHOLD_TABLE_EXHAUSTIVE_LOCAL.csv", "work/units/*",
+                                          "work/negative_controls/*", "work/FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv"]})
     if not interim:
         from falls_ml.phase5.dashboard import add_to_report
 
-        add_to_report(tmp, ctx, plan, n_boot=int(cfg.budget["bootstrap_n"]), synthetic=synthetic, log=(mon.log if mon is not None else print))
+        add_to_report(tmp, ctx, plan, n_boot=int(cfg.budget["bootstrap_n"]), synthetic=synthetic, log=log)
     res = publish(out, tmp, src, ctx.frame)
     n_files = sum(1 for p in (out / "share").rglob("*") if p.is_file())
     return {"files": n_files, "privacy_passed": bool(res["passed"]), "overall": A["overall"], "interim": interim,
-            "decisions": {f: d["verdict"] for f, d in A["decisions"].items()}, "primary_family": PRIMARY_FAMILY}
+            "decisions": {f: d["verdict"] for f, d in A["decisions"].items()}, "primary_family": PRIMARY_FAMILY,
+            "prepost": bool(PP is not None), "top3_headline": headline_numbers}

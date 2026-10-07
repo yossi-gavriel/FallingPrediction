@@ -43,8 +43,16 @@ def _encode(f: str, m: dict[str, Any], x: np.ndarray, levels: list[float] | None
             mat = np.column_stack([((xx > lo) & (xx <= hi)).astype(float) for lo, hi in zip(edges[:-1], edges[1:])])
         return [f"{f}__{lab}" for lab in labels], mat, False
     if lin == "onehot":
-        lv = [float(v) for v in (levels if levels is not None else (m.get("levels") or []))][1:]
-        return [f"{f}__eq{v:g}" for v in lv], np.column_stack([np.where(obs, (x == v).astype(float), 0.0) for v in lv]) if lv else np.empty((len(x), 0)), False
+        all_lv = [float(v) for v in (levels if levels is not None else (m.get("levels") or []))]
+        lv = all_lv[1:]
+        cols = [f"{f}__eq{v:g}" for v in lv]
+        parts = [np.where(obs, (x == v).astype(float), 0.0) for v in lv]
+        if levels is not None:
+            # LEARNED levels (raw codes without a declared dictionary): rare and unseen finite codes get their own explicit ``other`` level
+            # (Phase 5.1 R-5) instead of silently falling into the reference level; a missing code stays all-zero (+ the NA indicator)
+            cols.append(f"{f}__other")
+            parts.append(np.where(obs, (~np.isin(x, np.asarray(all_lv, dtype=float))).astype(float), 0.0))
+        return cols, (np.column_stack(parts) if parts else np.empty((len(x), 0))), False
     if kind == "binary":
         return [f], np.where(obs, (x == 1.0).astype(float), 0.0)[:, None], False
     v = np.log1p(np.clip(x, 0.0, None)) if lin == "log1p" else x.astype(float)

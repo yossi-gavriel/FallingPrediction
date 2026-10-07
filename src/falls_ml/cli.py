@@ -630,15 +630,18 @@ def _cmd_meuhedet_phase5(a: argparse.Namespace) -> int:
     try:
         r = run_phase5(a.input, a.out, mode=a.mode, device=a.device, jobs=a.jobs, resume=a.resume, preflight_only=a.preflight_only,
                        report_only=a.report_only, accept_code_change=a.accept_code_change, allow_synced_folder=a.allow_synced_folder,
-                       config_path=a.config, v21_schema=a.v21_schema)
+                       config_path=a.config, v21_schema=a.v21_schema, pre_run=a.pre_run, negative_controls=a.negative_controls,
+                       share_forensic=a.share_forensic)
     except FallsMLError as exc:
         return _phase5_stop(exc)
-    print(json.dumps({k: v for k, v in r.items() if k != "report"}, indent=2, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in r.items() if k not in ("report", "negative_controls")}, indent=2, ensure_ascii=False))
     if r["status"].startswith(("COMPLETE", "REPORT_COMPLETE")):
         print(f"SEND BACK ONLY: {Path(a.out) / 'share'}")
     elif r["status"] == "PREFLIGHT_COMPLETE":
         print(f"preflight aggregate outputs (read PHASE5_PREFLIGHT.md; send back this folder if anything is unclear): {Path(a.out) / 'preflight'}")
-        print("nothing was fitted. Next: the --estimate command, then the overnight command (same --input / --out).")
+        print("nothing was fitted. Next: the --negative-controls command (quick), then the overnight command (same --input / --out / --pre-run).")
+    elif r["status"] == "NEGATIVE_CONTROLS_PASSED":
+        print("nothing scientific was fitted. Next: the overnight command (same --input / --out / --pre-run).")
     return int(r["exit_code"])
 
 
@@ -650,14 +653,16 @@ def _cmd_meuhedet_phase5_synthetic(a: argparse.Namespace) -> int:
     out = Path(a.out)
     src_dir = out.parent / (out.name + "_synthetic_input")
     src_dir.mkdir(parents=True, exist_ok=True)
-    src = src_dir / f"synthetic_v21_{a.scenario}.csv"
+    traps = tuple(t for t in (a.traps or "").split(",") if t)
+    src = src_dir / f"synthetic_v21_{a.scenario}{'_' + '_'.join(traps) if traps else ''}.csv"
     if not src.is_file():
-        df, _ = make_v21(int(a.rows), scenario=a.scenario, seed=int(a.seed))
+        df, _ = make_v21(int(a.rows), scenario=a.scenario, seed=int(a.seed), traps=traps)
         write_v21_csv(df, src)
-    ov = {"eligibility": {"min_known_observed_rows": 20}}
+    ov = {"eligibility": {"min_known_observed_rows": 20}, "negative_controls": {"seeds": int(a.negative_control_seeds)}}
     try:
         r = run_phase5(src, out, mode=a.mode, device=a.device, jobs=a.jobs, resume=True, overrides=ov, synthetic=True,
-                       accept_code_change=a.accept_code_change)
+                       accept_code_change=a.accept_code_change, pre_run=a.pre_run, negative_controls=bool(a.negative_controls),
+                       negative_control_seeds=int(a.negative_control_seeds), share_forensic=bool(a.share_forensic))
     except FallsMLError as exc:
         return _phase5_stop(exc)
     print(json.dumps({k: v for k, v in r.items() if k != "report"}, indent=2, ensure_ascii=False))
@@ -701,6 +706,13 @@ def _add_phase5_parsers(sub: Any) -> None:
     p.add_argument("--allow-synced-folder", action="store_true", help="allow --out inside OneDrive / a synced folder (not recommended)")
     p.add_argument("--config", default="configs/meuhedet/phase5.yaml", help="Phase 5 settings (pre-declared; hashed into the plan)")
     p.add_argument("--v21-schema", help="the authoritative V21 schema (default: the one named in the settings)")
+    p.add_argument("--pre-run", help="Phase 5.1: the COMPLETED Phase 5 2.2.0 output folder (PRE). REQUIRED on real data: verified before anything is "
+                                     "fitted (input sha256, cohort / labels, fold hashes, ENET units, Top-3%% table reproduced); its outer folds are "
+                                     "adopted; it is never written to")
+    p.add_argument("--negative-controls", action="store_true", help="Phase 5.1: run the frozen-fold label-permutation controls (quick budget, ENET, "
+                                                                   "ADMISSIBLE) after the preflight and before the overnight run; a failure is a hard stop")
+    p.add_argument("--share-forensic", action="store_true", help="also publish work/FORENSIC_UNIVARIATE_AUROC_BY_FOLD.csv to share/ (aggregate: feature x "
+                                                                "fold x training AUROC) after the privacy scan; local in work/ by default")
     p.set_defaults(func=_cmd_meuhedet_phase5)
     p = sub.add_parser("meuhedet-phase5-synthetic", help="Phase 5 SMOKE RUN on a generated SYNTHETIC V21 extract (software test only, no real data)")
     p.add_argument("--out", required=True, help="output folder for the synthetic run (the synthetic input is written next to it)")
@@ -711,6 +723,12 @@ def _add_phase5_parsers(sub: Any) -> None:
     p.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto")
     p.add_argument("--jobs", type=int)
     p.add_argument("--accept-code-change", help=argparse.SUPPRESS)
+    p.add_argument("--traps", help="comma-separated synthetic traps (unknown_column, future_column, leaky_new, post_index_dx, missing_column, "
+                                   "positive_after_followup, forbidden_lineage, weak_proxy, strong_legit)")
+    p.add_argument("--pre-run", help="a completed Phase 5 2.x folder made from the SAME synthetic extract (rehearsal of the PRE / POST comparison)")
+    p.add_argument("--negative-controls", action="store_true", help="also run the frozen-fold permutation controls (synthetic rehearsal)")
+    p.add_argument("--negative-control-seeds", type=int, default=3, help="seeds for the synthetic rehearsal of the controls (real runs: the registered 10)")
+    p.add_argument("--share-forensic", action="store_true")
     p.set_defaults(func=_cmd_meuhedet_phase5_synthetic)
     p = sub.add_parser("meuhedet-phase5-dashboard", help="OPERATING DASHBOARD of a COMPLETED Phase 5 run (analysis / reporting only - no model is "
                                                          "fitted): outer-fold capacity curves 0.5-20%%, the exact 3%% capacity report with a paired "

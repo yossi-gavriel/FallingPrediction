@@ -16,6 +16,12 @@ Optional traps (``traps``):
     "post_index_dx"    Last_Dx_Date after the index day on many diagnosed fallers                -> diagnosis features UNKNOWN / INELIGIBLE_TIMING
     "missing_column"   one authoritative V21 column (Tremor_Ind) absent from the extract         -> WARN; the feature is not available
     "positive_after_followup"  a few positives whose event lies after their personal Followup_End_Date -> O4 zero tolerance -> STOP
+    Phase 5.1 boundary traps (docs/phase6/EXPERIMENT1_IMPLEMENTATION_CONTRACT.md N-1):
+    "forbidden_lineage"  an UNDECLARED predictor-looking column (Fall_Risk_Flag_Ind) that is in fact outcome-derived -> REQUIRES_SEMANTIC_REVIEW
+                         -> STOP (fails closed; it never enters X) - unknown fields are never admitted on the strength of a name
+    "weak_proxy"         Osteoporosis_Ind replaced by a NOISY outcome proxy (univariate AUROC ~0.65): an admissible-looking column that no numeric
+                         gate catches -> RETAINED (documents that provenance, not a number, is the defence; the forensic value is reported < 0.80)
+    "strong_legit"       Gait_Abnormality_Ind planted as a STRONG legitimate predictor (AUROC ~0.86) -> RETAINED, forensic WARN, no exclusion
 """
 
 from __future__ import annotations
@@ -27,7 +33,8 @@ import numpy as np
 import pandas as pd
 
 SCENARIOS = ("planted", "null")
-TRAPS = ("unknown_column", "future_column", "leaky_new", "post_index_dx", "missing_column", "positive_after_followup")
+TRAPS = ("unknown_column", "future_column", "leaky_new", "post_index_dx", "missing_column", "positive_after_followup", "forbidden_lineage", "weak_proxy",
+         "strong_legit")
 DX_PREV = {"Dizziness_Ind": None, "Gait_Abnormality_Ind": 0.04, "Syncope_Ind": 0.03, "Tremor_Ind": 0.03, "Cataract_Ind": 0.15, "Hearing_Loss_Dx_Ind": 0.08,
            "Vision_Impairment_Dx_Ind": 0.06, "Osteoporosis_Ind": 0.10, "Parkinsonism_Ind": 0.02, "Stroke_Dx_Ind": 0.05}
 REG_PREV = {"Registry_Smoking_Ind": 0.08, "Registry_Obesity_Ind": 0.15, "Registry_Oncology_Ind": 0.06, "Registry_IBD_Ind": 0.02, "Registry_Opiate_Ind": 0.04,
@@ -74,6 +81,12 @@ def make_v21(n_rows: int = 4000, *, seed: int = 26, scenario: str = "planted", i
     if "leaky_new" in traps:
         df["Deficit_Count_Proxy"] = np.where(rng.random(n) < 0.03, 1 - y, y).astype(int)
         facts["leaky_feature"] = "Deficit_Count_Proxy"
+    if "weak_proxy" in traps:                       # P(x=1|y=1)=0.45, P(x=1|y=0)=0.15 -> univariate AUROC ~0.65 (below any numeric gate)
+        df["Osteoporosis_Ind"] = ((rng.random(n) < np.where(y == 1, 0.45, 0.15)) & has_dx).astype(int)
+        facts["weak_proxy_feature"] = "Osteoporosis_Ind"
+    if "strong_legit" in traps:                     # P(x=1|y=1)=0.80, P(x=1|y=0)=0.08 -> univariate AUROC ~0.86 (legitimate, admissible, strong)
+        df["Gait_Abnormality_Ind"] = ((rng.random(n) < np.where(y == 1, 0.80, 0.08)) & has_dx).astype(int)
+        facts["strong_legit_feature"] = "Gait_Abnormality_Ind"
     if "post_index_dx" in traps:
         ld = pd.to_datetime(df["Last_Dx_Date"], errors="coerce")
         late = has_dx & (rng.random(n) < 0.10 + 0.6 * y)
@@ -100,6 +113,9 @@ def make_v21(n_rows: int = 4000, *, seed: int = 26, scenario: str = "planted", i
     if "future_column" in traps:
         out["Fall_Next_365D_Ind"] = df["Fall_Next_180D_Ind"]
         facts["future_column"] = "Fall_Next_365D_Ind"
+    if "forbidden_lineage" in traps:                # outcome-derived under a predictor-like, undeclared name: must fail closed (semantic review STOP)
+        out["Fall_Risk_Flag_Ind"] = np.where(rng.random(n) < 0.02, 1 - y, y).astype(int)
+        facts["forbidden_lineage_column"] = "Fall_Risk_Flag_Ind"
     return out, facts
 
 

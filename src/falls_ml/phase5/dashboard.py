@@ -103,9 +103,11 @@ def build_operating(ctx: Any, plan: dict[str, Any], *, n_boot: int, seed: int, s
         cmp3["folds_new_more_falls"] = [w[0] for w in wins]
         cmp3["folds_new_fewer_falls"] = [w[1] for w in wins]
         cmp3["n_folds"] = [w[2] for w in wins]
-    s_all = plan["alias"][SET_ALL]
-    perm, shap = importance_tables(ctx, list(FAMILIES), [s_all])
-    stab = stability_table(ctx, list(FAMILIES), s_all, perm)
+    # Phase 5.1 (3.x plans): "what drives the model" describes the ADMISSIBLE comparator (OLD_PLUS_NEW_SAFE); a 2.x plan keeps its ALL set
+    s_all = plan["alias"][plan.get("comparator_set", SET_ALL)] if str(plan.get("phase5_major", "2")) == "3" else plan["alias"][SET_ALL]
+    fams = [f for f in FAMILIES if f in plan.get("families", list(FAMILIES))]
+    perm, shap = importance_tables(ctx, fams, [s_all])
+    stab = stability_table(ctx, fams, s_all, perm)
     reg = pd.read_csv(ctx.out / "work" / "REGISTRY.csv")
     drivers = feature_drivers(perm, shap, stab, reg, s_all, schema)
     capture = _capture_rows(fine[fine.capacity_permille.isin(safe)], ext[ext.capacity_permille.isin(ext_safe)], ranked)
@@ -406,8 +408,8 @@ def run_dashboard(out_dir: str | Path, *, input_path: str | Path | None = None, 
     if not (w / "PLAN.json").is_file():
         raise Phase2Stop("NO_RUN", f"{out.name} holds no Phase 5 run (work/PLAN.json missing)")
     plan = json.loads((w / "PLAN.json").read_text(encoding="utf-8"))
-    if not str(plan.get("phase5_version", "")).startswith("2."):
-        raise Phase2Stop("PLAN_VERSION", f"this folder was made by Phase 5 {plan.get('phase5_version')}; the dashboard needs a Phase 5 2.x run")
+    if str(plan.get("phase5_version", "")).split(".")[0] not in ("2", "3"):
+        raise Phase2Stop("PLAN_VERSION", f"this folder was made by Phase 5 {plan.get('phase5_version')}; the dashboard needs a Phase 5 2.x or 3.x run")
     probs = [f"{name} differs from the plan" for name, key in (("ANALYSIS_FRAME.parquet", "frame_sha256"), ("FOLDS.parquet", "folds_sha256"))
              if D.sha256_file(w / name) != plan[key]]
     if probs:

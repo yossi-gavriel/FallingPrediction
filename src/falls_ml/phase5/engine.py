@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from falls_ml.phase2 import durable as D
-from falls_ml.phase5.models import DeviceState, fit_linear, fit_xgb, lambda_grid, linear_path_task, xgb_inner_fold
+from falls_ml.phase5.models import DeviceState, fit_linear, fit_xgb, lambda_grid, linear_path_task, ratio_grid, xgb_inner_fold
 from falls_ml.phase5.thresholds import objective, operating_point, thresholds_for
 
 COMPLETE = "COMPLETE.json"
@@ -61,10 +61,41 @@ class Ctx:
     log: Callable[[str], None] = print
     progress: Callable[..., None] = lambda **kw: None
     stats: dict[str, Any] = field(default_factory=dict)
+    units_subdir: str = "units"                       # "negative_controls/seed<k>/units" for the frozen-fold permutation controls (R-12)
 
     @property
     def units_dir(self) -> Path:
-        return self.out / "work" / "units"
+        return self.out / "work" / self.units_subdir
+
+
+def univariate_auroc(x: np.ndarray, y: np.ndarray) -> float:
+    """FORENSIC diagnostic only (Phase 5.1 R-6): max(AUROC, 1 - AUROC) of one raw feature against the labels it is given (a unit passes its
+    outer-TRAINING labels only). Missing values rank below every observed value. It is reported and never decides membership."""
+    from sklearn.metrics import roc_auc_score
+
+    x = np.asarray(x, dtype=float)
+    v = np.where(np.isfinite(x), x, (np.nanmin(x) - 1.0) if np.isfinite(x).any() else 0.0)
+    if len(np.unique(v)) < 2 or len(np.unique(y)) < 2:
+        return 0.5
+    a = float(roc_auc_score(y, v))
+    return max(a, 1.0 - a)
+
+
+def coverage_gate(X_tr: pd.DataFrame, feats: list[str], min_known: int) -> tuple[list[str], dict[str, str]]:
+    """The per-fold LABEL-FREE coverage gate (Phase 5.1 R-2): a feature with fewer than ``min_known`` finite values on the unit's outer-TRAINING
+    rows, or constant on them, leaves this unit's X. It reads predictor values only - never a label."""
+    keep, dropped = [], {}
+    for f in feats:
+        x = X_tr[f].to_numpy(dtype=float)
+        obs = np.isfinite(x)
+        k = int(obs.sum())
+        if k < int(min_known):
+            dropped[f] = f"{k} known non-NULL rows (< {int(min_known)}) on this unit's training rows"
+        elif k and len(np.unique(x[obs])) <= 1:
+            dropped[f] = "constant on this unit's training rows"
+        else:
+            keep.append(f)
+    return keep, dropped
 
 
 def unit_seed(plan_seed: int, family: str, outer: int) -> int:
@@ -163,15 +194,31 @@ def run_unit(ctx: Ctx, spec: UnitSpec) -> dict[str, Any]:
 
 
 def tune_and_fit(ctx: Ctx, spec: UnitSpec, X_tr: pd.DataFrame, y_tr: np.ndarray, X_te: pd.DataFrame, feats: list[str], seed: int, d: Path) -> dict[str, Any]:
-    """Everything below sees the outer-TRAINING rows (X_tr, y_tr) and the holdout PREDICTORS (X_te) only."""
+    """Everything below sees the outer-TRAINING rows (X_tr, y_tr) and the holdout PREDICTORS (X_te) only.
+
+    Phase 5.1: (R-2) the label-free per-fold coverage gate decides this unit's X from the training predictors alone; (R-6) the forensic
+    univariate AUROC of every retained feature against the TRAINING labels is recorded for the report and never changes membership."""
     cfg = ctx.cfg
     k = cfg.inner_folds
+    feats_eff, dropped = coverage_gate(X_tr, feats, int(cfg["eligibility"]["min_known_observed_rows"]))
+    if not feats_eff:
+        raise RuntimeError(f"{spec.uid}: no feature passes the per-fold coverage gate")
+    warn = float(cfg.get("repair", {}).get("forensic_auroc_warn", 0.80))
+    forensic = {f: round(univariate_auroc(X_tr[f].to_numpy(dtype=float), y_tr), 4) for f in feats_eff}
+    flagged = sorted(f for f, a in forensic.items() if a >= warn)
+    if flagged:
+        ctx.log(f"FORENSIC WARN {spec.uid}: {len(flagged)} feature(s) with training-fold univariate AUROC >= {warn:g} (reported, NOT excluded; "
+                "availability must be adjudicated in writing before any claim)")
     splits = inner_splits(y_tr.astype(int), k, seed + 1)
     target = cfg.primary_sensitivity
     tie = float(cfg["operating"]["tie_resolution"])
     if spec.family in ("LASSO", "ENET"):
-        return _tune_linear(ctx, spec, X_tr, y_tr, X_te, feats, seed, splits, target, tie, d)
-    return _tune_xgb(ctx, spec, X_tr, y_tr, X_te, feats, seed, splits, target, tie, d)
+        res = _tune_linear(ctx, spec, X_tr, y_tr, X_te, feats_eff, seed, splits, target, tie, d)
+    else:
+        res = _tune_xgb(ctx, spec, X_tr, y_tr, X_te, feats_eff, seed, splits, target, tie, d)
+    res.update({"features_effective": list(feats_eff), "n_features_effective": len(feats_eff), "dropped_coverage": dropped,
+                "forensic_auroc": forensic, "forensic_flagged": flagged, "forensic_warn_at": warn})
+    return res
 
 
 def _parallel(n_jobs: int, tasks: list[Callable[[], Any]]) -> list[Any]:
@@ -205,37 +252,46 @@ def _tune_linear(ctx: Ctx, spec: UnitSpec, X_tr: pd.DataFrame, y_tr: np.ndarray,
     b = cfg.budget["lasso" if fam == "LASSO" else "enet"]
     fspec = cfg["lasso" if fam == "LASSO" else "enet"]
     l1s = [1.0] if fam == "LASSO" else [float(r) for r in b["l1_ratios"]]
-    A_full = LinearDesign(feats, ctx.meta).fit(X_tr).transform(X_tr)
-    grids = {r: lambda_grid(A_full, y_tr, r, int(b["n_lambda"]), float(fspec["lambda_min_ratio"])) for r in l1s}   # outer-training rows only
-    del A_full
+    nl, min_ratio = int(b["n_lambda"]), float(fspec["lambda_min_ratio"])
+    ratios = ratio_grid(nl, min_ratio)
+    # Phase 5.1 R-3: NO shared grid from the whole outer-training design. Every inner fold fits its own design AND anchors its own lambda_max on
+    # its inner-TRAINING rows; candidates are aligned by their index on the dimensionless ratio grid (the candidate space is unchanged).
     Xarr = X_tr[feats].to_numpy(dtype=np.float64)
     keys = [(j, r) for j in range(len(splits)) for r in l1s]
-    res_list = _processes(ctx.jobs, linear_path_task, [(Xarr, feats, splits[j][0], splits[j][1], y_tr, ctx.meta, r, grids[r], fspec) for j, r in keys])
+    res_list = _processes(ctx.jobs, linear_path_task, [(Xarr, feats, splits[j][0], splits[j][1], y_tr, ctx.meta, r, nl, min_ratio, fspec) for j, r in keys])
     out = [(j, r, res) for (j, r), res in zip(keys, res_list)]
     n = len(y_tr)
-    nl = int(b["n_lambda"])
     oof = {(r, c): np.full(n, np.nan) for r in l1s for c in range(nl)}
     nnz: dict[tuple[float, int], list[float]] = {(r, c): [] for r in l1s for c in range(nl)}
+    lmax_inner: dict[float, list[float]] = {r: [None] * len(splits) for r in l1s}    # type: ignore[list-item]
     nconv = 0
     for j, r, res in out:
         v = splits[j][1]
         for c in range(nl):
             oof[(r, c)][v] = res["preds"][:, c]
             nnz[(r, c)].append(res["nnz"][c])
+        lmax_inner[r][j] = float(res["lambda_max"])
         nconv += res["not_converged"]
     rows = []
     for (r, c), p in oof.items():
         o = objective(y_tr, p, target=target, complexity=float(np.mean(nnz[(r, c)])), tie=tie)
-        rows.append({"l1_ratio": r, "lambda": float(grids[r][c]), "lambda_index": c, **o})
+        rows.append({"l1_ratio": r, "lambda_ratio": float(ratios[c]), "lambda_index": c, **o})
     best = _choose(rows)
     br = rows[best]
     p_best = oof[(br["l1_ratio"], br["lambda_index"])]
-    model = fit_linear(X_tr, y_tr, feats, ctx.meta, l1_ratio=br["l1_ratio"], lambdas=grids[br["l1_ratio"]], k=int(br["lambda_index"]), spec=fspec, family=fam)
+    # the outer refit re-anchors the SAME ratio grid on the outer-training design (its own lambda_max) and walks down to the chosen index
+    A_outer = LinearDesign(feats, ctx.meta).fit(X_tr).transform(X_tr)
+    grid_outer = lambda_grid(A_outer, y_tr, float(br["l1_ratio"]), nl, min_ratio)
+    del A_outer
+    model = fit_linear(X_tr, y_tr, feats, ctx.meta, l1_ratio=br["l1_ratio"], lambdas=grid_outer, k=int(br["lambda_index"]), spec=fspec, family=fam)
     p_te = model.predict(X_te) if len(X_te) else np.array([])
     trials = pd.DataFrame([{k: v for k, v in r_.items() if k != "key"} for r_ in rows])
     D.write_csv(d / "trials.csv", trials)
-    return {"config": {"lambda": br["lambda"], "l1_ratio": br["l1_ratio"], "lambda_index": int(br["lambda_index"])}, "complexity": br["complexity"],
-            "n_configs": len(rows), "lambda_on_grid_edge": int(br["lambda_index"]) in (0, nl - 1),
+    return {"config": {"lambda": float(grid_outer[int(br["lambda_index"])]), "l1_ratio": br["l1_ratio"], "lambda_index": int(br["lambda_index"]),
+                       "lambda_ratio": float(br["lambda_ratio"])},
+            "lambda_max_outer": float(grid_outer[0]), "lambda_max_inner": {str(r): v for r, v in lmax_inner.items()},
+            "grid_anchoring": "inner: lambda_max of each inner-training design; outer refit: lambda_max of the outer-training design (R-3)",
+            "complexity": br["complexity"], "n_configs": len(rows), "lambda_on_grid_edge": int(br["lambda_index"]) in (0, nl - 1),
             "inner_objective": {k: v for k, v in br.items() if k not in ("key",)}, "thresholds": thresholds_for(y_tr, p_best, ctx.cfg.targets),
             "inner_op": operating_point(y_tr, p_best, target), "not_converged_fits": int(nconv) + int(model.info["not_converged"]),
             "nnz_final": model.info["nnz"], "_model": model, "_oof": p_best, "_p_test": p_te}

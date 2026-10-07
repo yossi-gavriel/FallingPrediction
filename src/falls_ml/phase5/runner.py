@@ -32,7 +32,7 @@ import pandas as pd
 from falls_ml.artifacts import utc_now
 from falls_ml.phase2 import durable as D
 from falls_ml.phase2.state import Phase2Stop
-from falls_ml.phase5 import DESIGN_LABEL, PHASE5_VERSION
+from falls_ml.phase5 import DESIGN_LABEL, EXPERIMENT_LABEL, PHASE5_MAJOR, PHASE5_VERSION
 from falls_ml.phase5.config import FAMILIES, PRIMARY_FAMILY, SET_ALL, SET_OLD, SET_SAFE, load_phase5_config
 from falls_ml.phase5.engine import Ctx, UnitSpec, is_complete, outer_folds, run_unit
 from falls_ml.phase5.models import DeviceState
@@ -40,7 +40,17 @@ from falls_ml.phase5.models import DeviceState
 PLAN = "PLAN.json"
 SAFE_LINE = "SAFE TO MODEL"
 STOP_LINE = "STOP - REVIEW REQUIRED"
-STAGE_ORDER = ("PREFLIGHT", "PRIMARY", "INTERIM_REPORT", "FINAL", "DOMAIN", "ABLATION", "EXPLAIN", "STABILITY", "REPORT")
+STAGE_ORDER = ("PREFLIGHT", "NEGATIVE_CONTROLS", "PRIMARY", "INTERIM_REPORT", "FINAL", "DOMAIN", "ABLATION", "EXPLAIN", "STABILITY", "REPORT")
+
+
+def plan_families(plan: dict[str, Any]) -> list[str]:
+    """The families the plan fits (Phase 5.1: [ENET]); a 2.x plan without the key means all three."""
+    return [f for f in FAMILIES if f in plan.get("families", list(FAMILIES))]
+
+
+def comparator_set(plan: dict[str, Any]) -> str:
+    """The canonical name of the ADMISSIBLE set (OLD_PLUS_NEW_SAFE by the PI decision) - the corrected comparator and the stability / drivers set."""
+    return plan["alias"][plan.get("comparator_set", SET_SAFE)]
 EARLIER_PHASE_MARKERS = ("PHASE2_PLAN.json", "PHASE3_PLAN.json", "PHASE4_PLAN.json")
 
 
@@ -205,21 +215,24 @@ def build_sets(reg: pd.DataFrame, meta: dict[str, Any], cfg: Any) -> dict[str, A
             sets[f"OLD_PLUS_{dom}"] = old + add
             kinds[f"OLD_PLUS_{dom}"] = "DOMAIN"
     ab = cfg["ablations"]
+    base = str(ab.get("base_set", SET_ALL))             # Phase 5.1: the single secondary contrast is taken from the ADMISSIBLE set (OLD_PLUS_NEW_SAFE)
+    base_new = [f for f in sets[base] if f not in old]
     specs: dict[str, set[str]] = {}
     if ab.get("remove_each_domain"):
         for dom in cfg["domains"]:
-            specs[f"NO_{dom}"] = {f for f in all_new if meta[f]["domain"] == dom}
+            specs[f"NO_{dom}"] = {f for f in base_new if meta[f]["domain"] == dom}
     klass = dict(zip(r["feature"], r["class"]))
     for name, spec in (ab.get("blocks") or {}).items():
         drop = set(spec.get("features") or [])
-        drop |= {f for f in all_new if klass.get(f) in set(spec.get("classes") or [])}
+        drop |= {f for f in base_new if klass.get(f) in set(spec.get("classes") or [])}
+        drop |= {f for f in base_new if meta[f]["domain"] in set(spec.get("domains") or [])}
         specs[name] = drop
     for name, drop in specs.items():
-        removed = [f for f in sets[SET_ALL] if f in drop]
-        ablations[name] = {"name": f"{SET_ALL}__{name}", "removed": removed}
+        removed = [f for f in sets[base] if f in drop]
+        ablations[name] = {"name": f"{base}__{name}", "removed": removed, "base_set": base, "role": "SECONDARY_DIAGNOSTIC"}
         if removed:
-            sets[f"{SET_ALL}__{name}"] = [f for f in sets[SET_ALL] if f not in drop]
-            kinds[f"{SET_ALL}__{name}"] = "ABLATION"
+            sets[f"{base}__{name}"] = [f for f in sets[base] if f not in drop]
+            kinds[f"{base}__{name}"] = "ABLATION"
     canon: dict[tuple[str, ...], str] = {}
     alias: dict[str, str] = {}
     for name, feats in sets.items():
@@ -229,9 +242,11 @@ def build_sets(reg: pd.DataFrame, meta: dict[str, Any], cfg: Any) -> dict[str, A
         else:
             canon[key] = name
             alias[name] = name
+    pr = cfg.get("pre_run") or {}
     return {"sets": sets, "kinds": kinds, "alias": alias, "domains": domains, "ablations": ablations, "n_old": len(old), "n_all_new": len(all_new),
             "n_new_safe": len(safe_new), "primary_family": cfg["primary_family"], "domain_families": list(cfg["domain_families"]),
-            "ablation_families": list(ab.get("families") or [])}
+            "ablation_families": list(ab.get("families") or []), "ablation_base_set": base, "families": list(cfg["families"]),
+            "comparator_set": str(pr.get("comparator_set", SET_SAFE)), "audit_set": str(pr.get("audit_set", SET_ALL))}
 
 
 def x_guard(sets: dict[str, list[str]], reg: pd.DataFrame, kinds: dict[str, str], sealed: dict[str, str], frame_cols: list[str], cfg: Any) -> None:
@@ -272,7 +287,8 @@ def _sup(v: Any, k: int = 10) -> Any:
     return "<10" if isinstance(v, (int, np.integer)) and 0 < int(v) < k else v
 
 
-def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monitor, *, synthetic: bool = False) -> dict[str, Any]:
+def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monitor, *, synthetic: bool = False,
+                  pre_run: str | Path | None = None) -> dict[str, Any]:
     from falls_ml.phase4.common import input_identity
     from falls_ml.phase5.data import prepare
 
@@ -298,27 +314,66 @@ def run_preflight(src: Path, out: Path, cfg: Any, L: dict[str, Any], mon: Monito
             P.add("P9", "eligible new V21 predictors", "WARN", [f"no new V21 predictor is eligible: {SET_ALL} = OLD; the run reports NO ELIGIBLE NEW "
                                                                 "FEATURES (see NEW_FEATURE_CATALOGUE.csv / FEATURE_ELIGIBILITY.csv)"])
     res["safe"], res["checks"] = P.safe, P.checks
+    pre_block: dict[str, Any] | None = None
+    order = np.argsort(P.frame["row_key"].to_numpy(), kind="mergesort") if P.safe else np.array([], dtype=int)
+    folds: np.ndarray | None = None
+    if P.safe and pre_run is not None:
+        # Phase 5.1 R-10: the completed 2.2.0 run is verified BEFORE anything is fitted; its outer folds are ADOPTED, never regenerated
+        from falls_ml.phase5.prerun import verify_pre_run
+
+        mon.log(f"PRE VERIFICATION: {Path(pre_run).name} (completed 2.x run, input sha256, cohort / labels, fold hashes, ENET units, Top-3% table)")
+        keys_sorted = P.frame["row_key"].to_numpy()[order]
+        try:
+            V = verify_pre_run(Path(pre_run), post_input_sha256=res["input"]["sha256"], post_row_keys=keys_sorted, post_y=P.y[order].astype(int), log=mon.log)
+        except Phase2Stop as exc:
+            P.add("P10", "PRE run verification (completed Phase 5 2.x run: plan, input sha256, cohort / labels, fold hashes, ENET units, Top-3% "
+                         "table reproduced)", "STOP", [exc.message, *exc.details[:8]])
+            res["safe"], res["checks"] = P.safe, P.checks
+            _write_preflight(out, P, res, sets_info, cfg)
+            mon.update(status="STOPPED_PREFLIGHT", stage="PREFLIGHT", stop_gate=exc.gate, stop_message=exc.message)
+            raise
+        pre_block, folds = V["pre"], V["outer"]
+        P.add("P10", "PRE run verification (completed Phase 5 2.x run: plan, input sha256, cohort / labels, fold hashes, ENET units, Top-3% "
+                     "table reproduced)", "OK",
+              [f"PRE {pre_block['folder_name']}: Phase 5 {pre_block['phase5_version']}, {pre_block['n']} patients, {pre_block['events']} events; "
+               f"outer folds ADOPTED (sha256 {pre_block['folds_sha256'][:16]}…)",
+               f"PRE Top-3% table reproduced exactly for {len(pre_block['top3_reproduced'])} ENET arm(s) (selected / captured / false interventions)",
+               f"PRE digest {pre_block['digest_sha256'][:16]}… recorded (re-checked at report time; the PRE folder is never written to)"])
+        res["checks"] = P.checks
+    elif P.safe and not synthetic and bool((cfg.get("pre_run") or {}).get("required", True)):
+        # real data without the completed 2.2.0 run: the label-free checks above are reported, but no fold, plan or fit may follow
+        P.add("P10", "PRE run verification (completed Phase 5 2.x run)", "STOP",
+              ["PRE_RUN_REQUIRED: Phase 5.1 compares the repair with the completed Phase 5 2.2.0 run - re-run the preflight with --pre-run <that completed "
+               "folder> (it is verified before anything is fitted and never written to); no folds or plan were written by this call"])
+        res["safe"], res["checks"] = P.safe, P.checks
+    elif P.safe:
+        P.add("P10", "PRE run verification", "WARN", ["SYNTHETIC run without --pre-run: folds generated from the seed; no PRE / POST comparison"])
+        res["checks"] = P.checks
     _write_preflight(out, P, res, sets_info, cfg)
     if not P.safe:
         return res
-    order = np.argsort(P.frame["row_key"].to_numpy(), kind="mergesort")
     frame = P.frame.iloc[order].reset_index(drop=True)
     y = P.y[order].astype(int)
-    folds = outer_folds(y, cfg.outer_folds, int(cfg["seed"]))
+    if folds is None:
+        folds = outer_folds(y, cfg.outer_folds, int(cfg["seed"]))
     D.write_parquet(d["work"] / "ANALYSIS_FRAME.parquet", frame)
     D.write_npz(d["work"] / "Y_FOLDS.npz", y=y, outer=folds)
     D.write_parquet(d["work"] / "FOLDS.parquet", pd.DataFrame({"row_key": frame["row_key"], "outer_fold": folds}))
     D.write_json(d["work"] / "META.json", P.meta)
     D.write_csv(d["work"] / "REGISTRY.csv", P.registry)
     D.write_json(d["work"] / "SEALED.json", P.sealed)
-    plan = {"phase5_version": PHASE5_VERSION, "synthetic": bool(synthetic), "falls_ml_version": __import__("falls_ml").__version__, "design": DESIGN_LABEL, "mode": cfg.mode,
+    plan = {"phase5_version": PHASE5_VERSION, "phase5_major": PHASE5_MAJOR, "experiment": EXPERIMENT_LABEL, "synthetic": bool(synthetic),
+            "falls_ml_version": __import__("falls_ml").__version__, "design": DESIGN_LABEL, "mode": cfg.mode,
             "config_sha256": cfg.sha256, "config_path": Path(cfg.path).name, "v21_schema_sha256": cfg.schema.sha256,
             "v21_definition_sha256": cfg.schema.definition_sha256, "overrides": cfg.overrides,
             "phase3_definitions": {"catalogue_sha256": L["cat"].sha256, "contract_sha256": L["contract"].content_sha256, "mapping_sha256": L["mapping"].content_sha256},
+            "feature_overrides": cfg.get("feature_overrides") or {}, "repair": cfg.get("repair") or {},
             "input": res["input"], "code_sha256": code_sha(), "seed": int(cfg["seed"]), "created_at": utc_now(), "n": int(len(y)), "events": int(y.sum()),
-            "cv": {"outer_folds": cfg.outer_folds, "inner_folds": cfg.inner_folds}, "families": list(FAMILIES),
+            "cv": {"outer_folds": cfg.outer_folds, "inner_folds": cfg.inner_folds},
             "schema_counts": P.facts.get("schema", {}), "new_predictors": P.facts.get("new_predictors", {}),
             "frame_sha256": D.sha256_file(d["work"] / "ANALYSIS_FRAME.parquet"), "folds_sha256": D.sha256_file(d["work"] / "FOLDS.parquet"),
+            "folds_source": "PRE (adopted from the verified completed 2.x run)" if pre_block else "generated (synthetic run without --pre-run)",
+            "pre_run": pre_block,
             "fold_sizes": {str(k): int((folds == k).sum()) for k in range(cfg.outer_folds)},
             "fold_events": {str(k): int(y[folds == k].sum()) for k in range(cfg.outer_folds)}, **{k: v for k, v in sets_info.items()}}
     D.write_json(d["work"] / PLAN, plan)
@@ -438,18 +493,19 @@ def plan_units(plan: dict[str, Any], cfg: Any) -> dict[str, list[UnitSpec]]:
     alias, kinds = plan["alias"], plan["kinds"]
     canon = [s for s in plan["sets"] if alias[s] == s]
     tun = cfg["derived_tuning"]
+    fams_plan = plan_families(plan)
     out: dict[str, list[UnitSpec]] = {"PRIMARY": [], "FINAL": [], "DOMAIN": [], "ABLATION": []}
     for s in [s for s in canon if kinds.get(s) == "PRIMARY"]:
-        for fam in FAMILIES:
+        for fam in fams_plan:
             for k in range(K):
                 out["PRIMARY"].append(UnitSpec(uid=f"PRIMARY|{fam}|{s}|outer{k}", stage="PRIMARY", family=fam, setname=s, outer=k))
-    for fam in FAMILIES:
-        for s in dict.fromkeys([alias[SET_OLD], alias[SET_ALL]]):
+    for fam in fams_plan:
+        for s in [s for s in canon if kinds.get(s) == "PRIMARY"]:          # Phase 5.1: FINAL development models for all three primary sets
             out["FINAL"].append(UnitSpec(uid=f"FINAL|{fam}|{s}|all", stage="FINAL", family=fam, setname=s, outer=-1))
-    for stage, ref_set, fams in (("DOMAIN", alias[SET_OLD], plan.get("domain_families", list(FAMILIES))),
-                                 ("ABLATION", alias[SET_ALL], plan.get("ablation_families", [PRIMARY_FAMILY]))):
+    for stage, ref_set, fams in (("DOMAIN", alias[SET_OLD], plan.get("domain_families", fams_plan)),
+                                 ("ABLATION", alias[plan.get("ablation_base_set", SET_ALL)], plan.get("ablation_families", [PRIMARY_FAMILY]))):
         for s in [s for s in canon if kinds.get(s) == stage]:
-            for fam in [f for f in FAMILIES if f in fams]:
+            for fam in [f for f in fams_plan if f in fams]:
                 for k in range(K):
                     t = tun[fam]
                     out[stage].append(UnitSpec(uid=f"{stage}|{fam}|{s}|outer{k}", stage=stage, family=fam, setname=s, outer=k, tuning=t,
@@ -460,11 +516,14 @@ def plan_units(plan: dict[str, Any], cfg: Any) -> dict[str, list[UnitSpec]]:
 def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str = "overnight", device: str = "auto", jobs: int | None = None,
                resume: bool = False, preflight_only: bool = False, report_only: bool = False, accept_code_change: str | None = None,
                allow_synced_folder: bool = False, config_path: str | Path | None = None, overrides: dict[str, Any] | None = None,
-               v21_schema: str | Path | None = None, max_items: int | None = None, synthetic: bool = False) -> dict[str, Any]:
+               v21_schema: str | Path | None = None, max_items: int | None = None, synthetic: bool = False, pre_run: str | Path | None = None,
+               negative_controls: bool = False, negative_control_seeds: int | None = None, share_forensic: bool = False) -> dict[str, Any]:
     """Returns {"status": ..., "exit_code": ...}. ``max_items`` (tests only) stops after that many newly computed units / tasks.
 
-    Real data: the first call on a folder must be ``preflight_only`` (nothing is fitted); a modelling call on a folder without a SAFE preflight plan
-    stops with PREFLIGHT_REQUIRED. A synthetic run (software test) may do both in one call."""
+    Real data (Phase 5.1): (1) ``preflight_only`` with ``pre_run`` = the completed 2.2.0 folder (verified, folds adopted; nothing is fitted);
+    (2) ``negative_controls`` (frozen-fold permutations, quick budget; a failure is a hard stop); (3) the overnight run with ``resume``.
+    A modelling call on a folder without a SAFE preflight plan stops with PREFLIGHT_REQUIRED; without passed controls it stops with
+    NEGATIVE_CONTROLS_REQUIRED. A synthetic run (software test) may do everything in one call."""
     from falls_ml.phase3.runner import load_all
     from falls_ml.phase5.resources import default_jobs, environment, limit_threads, resolve_device
 
@@ -472,6 +531,8 @@ def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str 
     src = Path(input_path) if input_path else None
     cfg = load_phase5_config(config_path or "configs/meuhedet/phase5.yaml", mode=mode, v21_schema=v21_schema, overrides=overrides)
     guard_out(out, src, allow_synced_folder)
+    if pre_run is not None and Path(pre_run).resolve() == out.resolve():
+        raise Phase2Stop("PRE_RUN_IS_OUT", "--pre-run must be the completed 2.2.0 folder, never the new --out folder")
     out.mkdir(parents=True, exist_ok=True)
     d = dirs(out)
     mon = Monitor(out, float(cfg["resources"]["heartbeat_seconds"]))
@@ -485,10 +546,10 @@ def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str 
             if src is None:
                 raise Phase2Stop("NO_INPUT", "this folder has no Phase 5 plan yet: --input <2026 extract> is required")
             if not (preflight_only or synthetic):
-                raise Phase2Stop("PREFLIGHT_REQUIRED", "the first action on real data is the preflight ALONE: run the same command with --preflight-only, "
-                                 "review preflight/PHASE5_PREFLIGHT.md (it must end with SAFE TO MODEL), then start the overnight run",
-                                 ["nothing was read or fitted by this call"])
-            res = run_preflight(src, out, cfg, L, mon, synthetic=synthetic)
+                raise Phase2Stop("PREFLIGHT_REQUIRED", "the first action on real data is the preflight ALONE: run the same command with --preflight-only "
+                                 "--pre-run <completed 2.2.0 folder>, review preflight/PHASE5_PREFLIGHT.md (it must end with SAFE TO MODEL), run the "
+                                 "negative controls, then start the overnight run", ["nothing was read or fitted by this call"])
+            res = run_preflight(src, out, cfg, L, mon, synthetic=synthetic, pre_run=pre_run)
             line = SAFE_LINE if res["safe"] else STOP_LINE
             mon.log(f"PREFLIGHT finished: {line}")
             if not res["safe"]:
@@ -498,32 +559,51 @@ def run_phase5(input_path: str | Path | None, out_dir: str | Path, *, mode: str 
                 return {"status": "STOPPED_PREFLIGHT", "exit_code": 2}
             mon.update(verdict=SAFE_LINE)
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        _verify_plan(plan, cfg, src, accept_code_change, mon, report_only=report_only)
+        _verify_plan(plan, cfg, src, accept_code_change, mon, report_only=report_only, pre_run=pre_run)
         if preflight_only:
             mon.update(status="PREFLIGHT_COMPLETE", stage="PREFLIGHT", verdict=SAFE_LINE)
             print(SAFE_LINE)
             return {"status": "PREFLIGHT_COMPLETE", "exit_code": 0}
-        units = plan_units(plan, cfg)
-        started = any(is_complete(_ctx_stub(out), u) for us in units.values() for u in us) if not report_only else True
-        if started and not resume and not report_only:
-            raise Phase2Stop("RUN_EXISTS", "this folder already holds finished Phase 5 units: pass --resume to continue it (nothing finished is recomputed)")
+        is_synth = bool(plan.get("synthetic"))
         dev = resolve_device(device) if not report_only else {"requested": device, "device": "cpu", "reason": "report only"}
         env = environment(cfg, jobs, dev)
         D.write_json(d["work"] / f"ENVIRONMENT_session{mon.state['sessions']}.json", env)
         D.write_json(out / "ENVIRONMENT.json", env)
         state = DeviceState(dev["device"], log=mon.log)
         ctx = _load_ctx(out, cfg, plan, jobs, state, mon)
+        ctx.stats["share_forensic"] = bool(share_forensic)
         x_guard(ctx.sets, pd.read_csv(d["work"] / "REGISTRY.csv"), plan["kinds"], json.loads((d["work"] / "SEALED.json").read_text(encoding="utf-8")),
                 list(ctx.frame.columns), cfg)
+        if negative_controls:
+            from falls_ml.phase5.controls import run_negative_controls
+
+            n_seeds = negative_control_seeds if (negative_control_seeds is not None and is_synth) else None
+            mon.update(status="RUNNING", stage="NEGATIVE_CONTROLS", mode=cfg.mode, jobs=jobs)
+            mon.log(f"NEGATIVE CONTROLS: {n_seeds or cfg['negative_controls']['seeds']} frozen-fold label permutations (ENET, ADMISSIBLE, quick budget)")
+            r = run_negative_controls(ctx, plan, cfg, mon=mon, seeds=n_seeds)
+            mon.update(status="NEGATIVE_CONTROLS_PASSED", stage="NEGATIVE_CONTROLS", negative_controls=r)
+            mon.log(f"NEGATIVE CONTROLS PASSED: mean AUROC {r['mean_auroc']:.3f} (limit {r['max_mean_auroc']:g}), mean Recall@Top3 "
+                    f"{r['mean_recall_top3']:.3f} (limit {r['max_mean_recall_top3']:g})")
+            if not synthetic:
+                print("NEGATIVE CONTROLS PASSED")
+                return {"status": "NEGATIVE_CONTROLS_PASSED", "exit_code": 0, "negative_controls": r}
+        from falls_ml.phase5.controls import require_passed
+
+        require_passed(out, synthetic=is_synth, n_required=int(cfg["negative_controls"]["seeds"]))
+        units = plan_units(plan, cfg)
+        started = any(is_complete(_ctx_stub(out), u) for us in units.values() for u in us) if not report_only else True
+        if started and not resume and not report_only:
+            raise Phase2Stop("RUN_EXISTS", "this folder already holds finished Phase 5 units: pass --resume to continue it (nothing finished is recomputed)")
         mon.update(status="RUNNING", mode=cfg.mode, jobs=jobs, device=dev, design=DESIGN_LABEL, run_started_at=mon.state.get("run_started_at") or utc_now())
-        mon.log(f"Phase 5 {cfg.mode} run: {plan['n']} patients, {plan['events']} events; jobs {jobs}; XGBoost device {dev['device']} ({dev['reason']})")
+        mon.log(f"Phase 5.1 {cfg.mode} run: {plan['n']} patients, {plan['events']} events; families {plan_families(plan)}; jobs {jobs}; "
+                f"folds {plan.get('folds_source')}")
         if report_only:
             from falls_ml.phase5.report import build_reports
 
-            r = build_reports(ctx, plan, cfg, src=src, interim=False, mon=mon)
+            r = build_reports(ctx, plan, cfg, src=src, interim=False, mon=mon, pre_run=pre_run)
             mon.update(status="REPORT_COMPLETE", stage="REPORT", report=r)
             return {"status": "REPORT_COMPLETE", "exit_code": 0, "report": r}
-        status = _execute(ctx, plan, cfg, units, mon, src, max_items=max_items)
+        status = _execute(ctx, plan, cfg, units, mon, src, max_items=max_items, pre_run=pre_run)
         return {"status": status, "exit_code": 0 if status.startswith("COMPLETE") else 3}
     except KeyboardInterrupt:
         mon.log("INTERRUPTED (Ctrl+C): every committed unit is kept; continue with the same command and --resume")
@@ -546,8 +626,20 @@ def _ctx_stub(out: Path) -> Any:
     return _Stub(out)
 
 
-def _verify_plan(plan: dict[str, Any], cfg: Any, src: Path | None, accept_code_change: str | None, mon: Monitor, *, report_only: bool) -> None:
+def _verify_plan(plan: dict[str, Any], cfg: Any, src: Path | None, accept_code_change: str | None, mon: Monitor, *, report_only: bool,
+                 pre_run: str | Path | None = None) -> None:
     probs = []
+    if str(plan.get("phase5_major", str(plan.get("phase5_version", "")).split(".")[0])) != PHASE5_MAJOR:
+        raise Phase2Stop("PHASE5_VERSION_MISMATCH", f"this folder was made by Phase 5 {plan.get('phase5_version')}; this package is Phase 5 {PHASE5_VERSION} "
+                         "(a 2.x folder can only be the --pre-run of a NEW 3.x folder, never resumed or reported by this package)")
+    pb = plan.get("pre_run")
+    if pb and pre_run is not None:
+        if Path(pre_run).name != pb.get("folder_name"):
+            probs.append(f"--pre-run names {Path(pre_run).name!r} but the plan was verified against {pb.get('folder_name')!r}")
+        else:
+            from falls_ml.phase5.prerun import check_unmodified
+
+            check_unmodified(Path(pre_run), str(pb.get("digest_sha256")))
     if plan["config_sha256"] != cfg.sha256:
         probs.append("configs/meuhedet/phase5.yaml (or the test overrides) differs from the settings frozen in the plan")
     if plan.get("v21_schema_sha256") != cfg.schema.sha256 or plan.get("v21_definition_sha256") != cfg.schema.definition_sha256:
@@ -571,7 +663,7 @@ def _verify_plan(plan: dict[str, Any], cfg: Any, src: Path | None, accept_code_c
 
 
 def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[UnitSpec]], mon: Monitor, src: Path | None, *,
-             max_items: int | None) -> str:
+             max_items: int | None, pre_run: str | Path | None = None) -> str:
     from falls_ml.phase5.explain import run_fold_explain, run_stability, task_done
     from falls_ml.phase5.report import build_reports
 
@@ -579,8 +671,11 @@ def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[Uni
     K = int(plan["cv"]["outer_folds"])
     computed = [0]
     alias = plan["alias"]
-    explain_tasks = [(fam, s) for fam in FAMILIES for s in dict.fromkeys([alias[SET_OLD], alias[SET_ALL]])]
-    stab_tasks = [(fam, alias[SET_ALL]) for fam in (PRIMARY_FAMILY, *[f for f in FAMILIES if f != PRIMARY_FAMILY])]
+    fams = plan_families(plan)
+    comp = comparator_set(plan)
+    # Phase 5.1: explanation on OLD and the ADMISSIBLE comparator; stability refits of the ADMISSIBLE development model (the corrected comparator)
+    explain_tasks = [(fam, s) for fam in fams for s in dict.fromkeys([alias[SET_OLD], comp])]
+    stab_tasks = [(fam, comp) for fam in (PRIMARY_FAMILY, *[f for f in fams if f != PRIMARY_FAMILY]) if fam in fams]
 
     def remaining() -> list[tuple[str, str]]:
         rem = [(u.stage, u.family) for st in ("PRIMARY", "FINAL", "DOMAIN", "ABLATION") for u in units[st] if not is_complete(ctx, u)]
@@ -651,7 +746,7 @@ def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[Uni
     if all(is_complete(ctx, u) for u in units["PRIMARY"]) and not (dirs(ctx.out)["work"] / "INTERIM_DONE").exists():
         mon.log(f"INTERIM REPORT: the primary {SET_OLD} vs {SET_ALL} comparison ({PRIMARY_FAMILY} primary) is complete - writing share/ now (updated at the end)")
         refresh(stage="INTERIM_REPORT")
-        build_reports(ctx, plan, cfg, src=src, interim=True, mon=mon)
+        build_reports(ctx, plan, cfg, src=src, interim=True, mon=mon, pre_run=pre_run)
         D.write_str(dirs(ctx.out)["work"] / "INTERIM_DONE", utc_now())
     for st in ("FINAL", "DOMAIN", "ABLATION"):
         for u in units[st]:
@@ -678,7 +773,7 @@ def _execute(ctx: Ctx, plan: dict[str, Any], cfg: Any, units: dict[str, list[Uni
         return "PAUSED_TEST_LIMIT"
     refresh(stage="REPORT", current={"stage": "REPORT"})
     mon.log("REPORT: aggregate tables, management / scientific summaries, figures, privacy scan")
-    r = build_reports(ctx, plan, cfg, src=src, interim=False, mon=mon)
+    r = build_reports(ctx, plan, cfg, src=src, interim=False, mon=mon, pre_run=pre_run)
     rem = remaining()
     failures = mon.state.get("failures", []) if rem else []          # every item finished: earlier failures were all recovered
     mon.update(failures=failures)

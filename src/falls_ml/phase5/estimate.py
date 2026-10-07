@@ -119,7 +119,9 @@ def estimate(src: Path | None, out: Path, cfg: Any, jobs: int) -> dict[str, Any]
     pfeat = sh["p_old"] + sh["p_new"]
     per_item = {}
     stages = {}
-    for f in ("LASSO", "ENET", "XGB"):
+    fams = [f for f in ("LASSO", "ENET", "XGB") if f in list(cfg["families"])]     # Phase 5.1: the registered families only (ENET)
+    unit = {f: unit[f] for f in fams}
+    for f in fams:
         per_item[f"PRIMARY|{f}"] = unit[f]
         per_item[f"FINAL|{f}"] = unit[f] * K / max(1, K - 1)
         per_item[f"DOMAIN|{f}"] = derived[f]
@@ -128,12 +130,19 @@ def estimate(src: Path | None, out: Path, cfg: Any, jobs: int) -> dict[str, Any]
         per_item[f"STABILITY|{f}"] = (int(b["stability_linear"]) * bm[f"{'LASSO' if f == 'LASSO' else 'ENET'}_path"] * 0.6 if f != "XGB" else
                                       int(b["stability_xgb"]) * (bm["XGB_fit"] * 1.5 + pfeat * bm["predict"] * 3))
     stages["PRIMARY"] = sum(per_item[f"PRIMARY|{f}"] for f in unit) * K * sh["n_primary_sets"]
-    stages["FINAL"] = sum(per_item[f"FINAL|{f}"] for f in unit) * (2 if sh["p_new"] else 1)
+    stages["FINAL"] = sum(per_item[f"FINAL|{f}"] for f in unit) * sh["n_primary_sets"]        # Phase 5.1: FINAL for every primary set
     stages["DOMAIN"] = sum(per_item[f"DOMAIN|{f}"] for f in unit if f in sh["domain_families"]) * K * sh["n_domain_sets"]
     stages["ABLATION"] = sum(per_item[f"ABLATION|{f}"] for f in unit if f in sh["ablation_families"]) * K * sh["n_ablation_sets"]
     stages["EXPLAIN"] = sum(per_item[f"EXPLAIN|{f}"] for f in unit) * (2 if sh["p_new"] else 1)
     stages["STABILITY"] = sum(per_item[f"STABILITY|{f}"] for f in unit)
-    stages["REPORT"] = 60.0 + int(b["bootstrap_n"]) * sh["n"] * 2.5e-7 * (8 + sh["n_domain_sets"] * 3 + sh["n_ablation_sets"] * 3)
+    nc = cfg.get("negative_controls") or {}
+    bq = cfg.with_mode(str(nc.get("mode", "quick"))).budget
+    l1q = len(bq["enet"]["l1_ratios"])
+    nlq = int(bq["enet"]["n_lambda"])
+    # the frozen-fold permutation controls: ENET, one set, the quick budget (paths scale ~linearly with the number of lambdas)
+    stages["NEGATIVE_CONTROLS"] = int(nc.get("seeds", 0)) * K * (math.ceil(k * l1q / jobs) * bm["ENET_path"] * 1.2 + bm["ENET_path"] * 1.25) * nlq / max(1, int(b["enet"]["n_lambda"])) \
+        if "ENET" in fams else 0.0
+    stages["REPORT"] = 60.0 + int(b["bootstrap_n"]) * sh["n"] * 2.5e-7 * (8 + sh["n_domain_sets"] * 3 + sh["n_ablation_sets"] * 3 + 6)
     total = sum(stages.values())
     res = {"mode": cfg.mode, "jobs": jobs, "shape": sh, "inner_training_rows": n_in, "design_columns_assumed": p, "benchmark_seconds": bm,
            "per_item_seconds": per_item, "stage_hours": {k_: round(v / 3600, 2) for k_, v in stages.items()}, "total_hours": round(total / 3600, 2),
